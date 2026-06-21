@@ -201,13 +201,18 @@ notification system); P2P channels handle **live** chat + **large** transfers.
 
 ---
 
-## 11. Open decisions (before Phase 0)
+## 11. Decisions (locked)
 
-1. **Subdomain** for the backend — `remote.ifleon.com`? (Recommend yes.)
-2. **Default consent mode** — Accept-only (+ code shown)? (Recommend.)
-3. **Backend language** — Rust `axum` (matches stack, single binary) or Node?
-4. **Backend DB** — its own small Postgres on the VPS, or SQLite to start?
-5. **Where files land on the store PC** — fixed `ArnaRemote/Incoming` folder + notice?
+1. **Domains** — website `arna.ifleon.com`, backend `api.arna.ifleon.com`,
+   coturn `turn.arna.ifleon.com`; fronted by Caddy (automatic HTTPS).
+2. **Default consent mode** — Accept-only, with the 6-digit code shown as a bonus.
+3. **Backend** — **Rust `axum`** (single small binary, matches the stack).
+4. **Backend DB** — **SQLite** to start (added with identity/messaging); Phase 0
+   needs no DB. Migrate to Postgres later if scale demands.
+5. **Incoming files** — fixed `ArnaRemote/Incoming` folder on the store PC + notice.
+6. **Packaging** — everything **Dockerized** (`infra/docker-compose.yml`); desktop
+   apps built/published via **GitHub Actions** (`.github/workflows/tauri.yml`).
+7. **Website** — Next.js, dark UI, standalone Docker image.
 
 ---
 

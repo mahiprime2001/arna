@@ -1,0 +1,35 @@
+name: tauri
+
+# Builds the Agent and Console desktop apps.
+#
+# Manual for now (workflow_dispatch) because the Tauri apps are scaffolded in a
+# later phase. Once `agent/` and `console/` contain a Tauri project, uncomment
+# the tag trigger to publish installers on every release tag.
+on:
+  workflow_dispatch:
+  # push:
+  #   tags: ["v*"]
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        app: [agent, console]
+        os: [windows-latest] # add macos-latest / ubuntu-latest later
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ${{ matrix.app }}/src-tauri
+      - name: Install frontend deps
+        working-directory: ${{ matrix.app }}
+        run: npm install
+      - uses: tauri-apps/tauri-action@v0
+        with:
+          projectPath: ${{ matrix.app }}

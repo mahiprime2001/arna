@@ -1,0 +1,12 @@
+# Automatic HTTPS via Let's Encrypt. Point these A records at the VPS first.
+
+arna.ifleon.com {
+	encode gzip zstd
+	reverse_proxy website:3000
+}
+
+api.arna.ifleon.com {
+	encode gzip
+	# WebSocket upgrades are proxied transparently by Caddy.
+	reverse_proxy backend:8081
+}

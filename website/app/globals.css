@@ -1,0 +1,26 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+}
+
+html,
+body {
+  background-color: #08080a;
+  color: #e7e7ea;
+}
+
+/* Subtle grid + glow backdrop for the hero. */
+.backdrop-grid {
+  background-image:
+    radial-gradient(60rem 40rem at 50% -10%, rgba(109, 94, 252, 0.18), transparent 70%),
+    linear-gradient(to right, rgba(255, 255, 255, 0.04) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(255, 255, 255, 0.04) 1px, transparent 1px);
+  background-size: 100% 100%, 44px 44px, 44px 44px;
+}
+
+.glow-border {
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}

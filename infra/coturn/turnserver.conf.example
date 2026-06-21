@@ -1,0 +1,28 @@
+# coturn config for Arna. Copy to turnserver.conf (git-ignored) and edit.
+# The backend mints short-lived credentials using static-auth-secret.
+
+realm=arna.ifleon.com
+server-name=turn.arna.ifleon.com
+
+listening-port=3478
+tls-listening-port=5349
+
+# Use time-limited HMAC credentials (no static username/password to leak).
+use-auth-secret
+static-auth-secret=change-me-to-a-long-random-secret
+
+# Relay port range (open these UDP ports on the VPS firewall + provider panel).
+min-port=49152
+max-port=65535
+
+fingerprint
+no-cli
+stale-nonce=600
+
+# TLS (recommended). Point these at your certs (e.g. from Caddy/Let's Encrypt):
+# cert=/etc/coturn/cert.pem
+# pkey=/etc/coturn/privkey.pem
+
+# Logging to stdout so `docker compose logs coturn` works.
+log-file=stdout
+verbose

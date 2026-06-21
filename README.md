@@ -25,13 +25,35 @@ and fully owned.
 | `core/`    | Shared Rust crate — protocol, WebRTC wiring, data channels, file/chat |
 | `agent/`   | Tauri app installed on **store PCs** (capture, input injection, consent popup) |
 | `console/` | Tauri app for **admins** (control, files, chat, meet) |
-| `backend/` | Signaling + device registry + messaging + SSO verification |
-| `infra/`   | coturn relay + deployment |
+| `backend/` | Signaling + device registry + messaging + SSO verification (Rust / axum) |
+| `website/` | Public site at `arna.ifleon.com` (Next.js) |
+| `infra/`   | Dockerized stack — Caddy (auto-HTTPS) + coturn + `docker-compose` |
+| `.github/` | CI — backend, website, and Tauri build workflows |
 | `docs/`    | `PLAN.md` (source of truth), `PROTOCOL.md` |
 
 ## Tech
 
-Tauri · Rust (`webrtc-rs`, `windows-capture`, `vpx-encode`, `enigo`) · coturn · WebRTC (DTLS-SRTP, end-to-end encrypted)
+Tauri · Rust (`axum` backend; `webrtc-rs`, `windows-capture`, `vpx-encode`, `enigo` apps) · Next.js (website) · coturn · WebRTC (DTLS-SRTP, end-to-end encrypted)
+
+## Domains
+
+| Subdomain | Service |
+|---|---|
+| `arna.ifleon.com` | Website (Next.js) |
+| `api.arna.ifleon.com` | Backend signaling (WSS + REST) |
+| `turn.arna.ifleon.com` | coturn TURN/STUN relay |
+
+## Run the stack (on the VPS)
+
+```bash
+cd infra
+cp .env.example .env                                   # set a real TURN secret
+cp coturn/turnserver.conf.example coturn/turnserver.conf
+docker compose up -d --build
+```
+
+Caddy obtains HTTPS certificates automatically once the A records point at the VPS.
+Open the coturn UDP ports (3478, 5349, 49152–65535) on the firewall + provider panel.
 
 ## How it's built
 
