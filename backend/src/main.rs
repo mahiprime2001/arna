@@ -55,10 +55,19 @@ enum Incoming {
 #[derive(Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum Outgoing {
-    Registered { id: String },
-    Signal { from: String, data: serde_json::Value },
-    PeerOffline { to: String },
-    Error { message: String },
+    Registered {
+        id: String,
+    },
+    Signal {
+        from: String,
+        data: serde_json::Value,
+    },
+    PeerOffline {
+        to: String,
+    },
+    Error {
+        message: String,
+    },
     Pong,
 }
 
@@ -159,7 +168,8 @@ async fn handle_socket(socket: WebSocket, hub: Arc<Hub>) {
     if let Some(id) = my_id {
         // Only remove if this socket still owns the slot (avoid evicting a
         // reconnect that re-registered the same id).
-        hub.peers.remove_if(&id, |_, existing| existing.same_channel(&tx));
+        hub.peers
+            .remove_if(&id, |_, existing| existing.same_channel(&tx));
         warn!(id = %id, "peer disconnected");
     }
     send_task.abort();
