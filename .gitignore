@@ -1,0 +1,35 @@
+# Rust
+/target/
+**/target/
+
+# Node / frontend
+node_modules/
+dist/
+dist-ssr/
+.vite/
+*.local
+
+# Tauri
+**/src-tauri/target/
+**/gen/schemas/
+
+# Env & secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+turnserver.conf
+!turnserver.conf.example
+
+# Logs / temp
+*.log
+*.tmp
+*.bak
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/extensions.json
