@@ -1,8 +1,9 @@
-# Arna — full stack for the VPS.
-#   caddy    : reverse proxy + automatic HTTPS for the website + backend
-#   website  : Next.js landing (arna.ifleon.com)
+# Arna — backend stack for the VPS.
+#   caddy    : reverse proxy + automatic HTTPS for the backend API
 #   backend  : Rust signaling hub (api.arna.ifleon.com)
 #   coturn   : TURN/STUN relay (turn.arna.ifleon.com) — host network for UDP relay
+#
+# The public website (arna.ifleon.com) is deployed from its own repo: arna-website.
 #
 # Copy .env.example -> .env and coturn/turnserver.conf.example -> coturn/turnserver.conf
 # before running:  docker compose up -d --build
@@ -19,14 +20,7 @@ services:
       - caddy_data:/data
       - caddy_config:/config
     depends_on:
-      - website
       - backend
-
-  website:
-    build: ../website
-    restart: unless-stopped
-    expose:
-      - "80"
 
   backend:
     build: ../backend

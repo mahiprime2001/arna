@@ -26,20 +26,22 @@ and fully owned.
 | `agent/`   | Tauri app installed on **store PCs** (capture, input injection, consent popup) |
 | `console/` | Tauri app for **admins** (control, files, chat, meet) |
 | `backend/` | Signaling + device registry + messaging + SSO verification (Rust / axum) |
-| `website/` | Public site at `arna.ifleon.com` (Vue 3 + Vite, served via nginx) |
 | `infra/`   | Dockerized stack — Caddy (auto-HTTPS) + coturn + `docker-compose` |
-| `.github/` | CI — backend, website, and Tauri build workflows |
+| `.github/` | CI — backend and Tauri build workflows |
 | `docs/`    | `PLAN.md` (source of truth), `PROTOCOL.md` |
+
+> The public website (`arna.ifleon.com`) lives in its own repo:
+> [`arna-website`](https://github.com/mahiprime2001/arna-website).
 
 ## Tech
 
-Tauri · Rust (`axum` backend; `webrtc-rs`, `windows-capture`, `vpx-encode`, `enigo` apps) · Vue 3 + Vite (website) · coturn · WebRTC (DTLS-SRTP, end-to-end encrypted)
+Tauri · Rust (`axum` backend; `webrtc-rs`, `windows-capture`, `vpx-encode`, `enigo` apps) · coturn · WebRTC (DTLS-SRTP, end-to-end encrypted)
 
 ## Domains
 
 | Subdomain | Service |
 |---|---|
-| `arna.ifleon.com` | Website (Next.js) |
+| `arna.ifleon.com` | Website (separate repo: [`arna-website`](https://github.com/mahiprime2001/arna-website)) |
 | `api.arna.ifleon.com` | Backend signaling (WSS + REST) |
 | `turn.arna.ifleon.com` | coturn TURN/STUN relay |
 
