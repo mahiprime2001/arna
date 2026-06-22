@@ -26,14 +26,14 @@ and fully owned.
 | `agent/`   | Tauri app installed on **store PCs** (capture, input injection, consent popup) |
 | `console/` | Tauri app for **admins** (control, files, chat, meet) |
 | `backend/` | Signaling + device registry + messaging + SSO verification (Rust / axum) |
-| `website/` | Public site at `arna.ifleon.com` (Next.js) |
+| `website/` | Public site at `arna.ifleon.com` (Vue 3 + Vite, served via nginx) |
 | `infra/`   | Dockerized stack — Caddy (auto-HTTPS) + coturn + `docker-compose` |
 | `.github/` | CI — backend, website, and Tauri build workflows |
 | `docs/`    | `PLAN.md` (source of truth), `PROTOCOL.md` |
 
 ## Tech
 
-Tauri · Rust (`axum` backend; `webrtc-rs`, `windows-capture`, `vpx-encode`, `enigo` apps) · Next.js (website) · coturn · WebRTC (DTLS-SRTP, end-to-end encrypted)
+Tauri · Rust (`axum` backend; `webrtc-rs`, `windows-capture`, `vpx-encode`, `enigo` apps) · Vue 3 + Vite (website) · coturn · WebRTC (DTLS-SRTP, end-to-end encrypted)
 
 ## Domains
 

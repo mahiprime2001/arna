@@ -212,7 +212,7 @@ notification system); P2P channels handle **live** chat + **large** transfers.
 5. **Incoming files** — fixed `ArnaRemote/Incoming` folder on the store PC + notice.
 6. **Packaging** — everything **Dockerized** (`infra/docker-compose.yml`); desktop
    apps built/published via **GitHub Actions** (`.github/workflows/tauri.yml`).
-7. **Website** — Next.js, dark UI, standalone Docker image.
+7. **Website** — Vue 3 + Vite, dark UI, built to static and served via nginx in Docker.
 
 ---
 

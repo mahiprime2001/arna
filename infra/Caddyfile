@@ -2,7 +2,7 @@
 
 arna.ifleon.com {
 	encode gzip zstd
-	reverse_proxy website:3000
+	reverse_proxy website:80
 }
 
 api.arna.ifleon.com {
