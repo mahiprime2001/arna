@@ -6,6 +6,7 @@ on:
     paths:
       - "core/**"
       - "poc/**"
+      - "agent/**"
       - "Cargo.toml"
       - "Cargo.lock"
       - ".github/workflows/core.yml"
@@ -13,12 +14,14 @@ on:
     paths:
       - "core/**"
       - "poc/**"
+      - "agent/**"
       - "Cargo.toml"
       - "Cargo.lock"
       - ".github/workflows/core.yml"
 
 jobs:
-  build:
+  # core + poc on Linux (the agent needs platform screen-capture libs, built below).
+  lint:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -28,7 +31,17 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Format check
         run: cargo fmt --check
-      - name: Clippy
-        run: cargo clippy --workspace --all-targets -- -D warnings
-      - name: Build
-        run: cargo build --workspace --locked
+      - name: Clippy (core + poc)
+        run: cargo clippy --workspace --exclude arna-agent --all-targets -- -D warnings
+      - name: Build (core + poc)
+        run: cargo build --workspace --exclude arna-agent --locked
+
+  # The agent (screen capture) is a Windows-first binary — build it on Windows.
+  agent:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build agent
+        run: cargo build -p arna-agent --locked

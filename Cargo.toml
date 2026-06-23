@@ -3,5 +3,5 @@
 # in its own Docker image (its build context is just backend/).
 [workspace]
 resolver = "2"
-members = ["core", "poc"]
+members = ["core", "poc", "agent"]
 exclude = ["backend"]
