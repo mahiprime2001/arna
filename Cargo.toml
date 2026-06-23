@@ -1,0 +1,7 @@
+# Workspace for the Arna apps/libraries.
+# The `backend` crate is intentionally excluded so it keeps building standalone
+# in its own Docker image (its build context is just backend/).
+[workspace]
+resolver = "2"
+members = ["core", "poc"]
+exclude = ["backend"]

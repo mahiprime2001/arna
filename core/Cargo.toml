@@ -1,0 +1,14 @@
+[package]
+name = "arna-core"
+version = "0.1.0"
+edition = "2021"
+description = "Arna shared core: signaling client + wire protocol"
+license = "LicenseRef-Proprietary"
+
+[dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }
+tokio-tungstenite = "0.21"
+futures-util = "0.3"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "1"

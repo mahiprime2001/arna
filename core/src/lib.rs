@@ -1,0 +1,127 @@
+//! Arna shared core — signaling client + wire protocol.
+//!
+//! Phase 1a: just the signaling layer. A peer connects to the backend, registers
+//! with a role + id, and can exchange opaque `signal` payloads with another peer
+//! (this is how WebRTC SDP offers/answers and ICE candidates will travel in the
+//! next slice). WebRTC transport, screen capture, input, and file/chat channels
+//! are layered on top of this in later phases.
+
+use futures_util::{SinkExt, StreamExt};
+use serde::{Deserialize, Serialize};
+use tokio::sync::mpsc;
+use tokio_tungstenite::tungstenite::Message;
+
+/// Messages this client sends to the signaling backend.
+#[derive(Debug, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ClientMsg {
+    Register { role: String, id: String },
+    Signal { to: String, data: serde_json::Value },
+    Ping,
+}
+
+/// Messages the backend sends back.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ServerMsg {
+    Registered {
+        id: String,
+    },
+    Signal {
+        from: String,
+        data: serde_json::Value,
+    },
+    PeerOffline {
+        to: String,
+    },
+    Error {
+        message: String,
+    },
+    Pong,
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum Error {
+    #[error("websocket error: {0}")]
+    Ws(#[from] tokio_tungstenite::tungstenite::Error),
+}
+
+/// A live signaling connection: send [`ClientMsg`]s, receive [`ServerMsg`]s.
+///
+/// Internally one task pumps outbound messages to the socket and another parses
+/// inbound frames, so callers just use [`Signaling::register`] / [`Signaling::signal`]
+/// and await [`Signaling::recv`].
+pub struct Signaling {
+    out: mpsc::UnboundedSender<Message>,
+    inbox: mpsc::UnboundedReceiver<ServerMsg>,
+}
+
+impl Signaling {
+    /// Connect to the signaling backend, e.g. `ws://127.0.0.1:8081/ws`.
+    pub async fn connect(url: &str) -> Result<Self, Error> {
+        let (ws, _resp) = tokio_tungstenite::connect_async(url).await?;
+        let (mut sink, mut stream) = ws.split();
+
+        let (out_tx, mut out_rx) = mpsc::unbounded_channel::<Message>();
+        let (in_tx, in_rx) = mpsc::unbounded_channel::<ServerMsg>();
+
+        // Writer: drain our outbound queue to the socket.
+        tokio::spawn(async move {
+            while let Some(msg) = out_rx.recv().await {
+                if sink.send(msg).await.is_err() {
+                    break;
+                }
+            }
+        });
+
+        // Reader: parse inbound text frames into ServerMsg (unknown frames ignored).
+        tokio::spawn(async move {
+            while let Some(Ok(msg)) = stream.next().await {
+                if let Message::Text(text) = msg {
+                    if let Ok(parsed) = serde_json::from_str::<ServerMsg>(&text) {
+                        if in_tx.send(parsed).is_err() {
+                            break;
+                        }
+                    }
+                }
+            }
+        });
+
+        Ok(Self {
+            out: out_tx,
+            inbox: in_rx,
+        })
+    }
+
+    fn send(&self, msg: &ClientMsg) {
+        if let Ok(text) = serde_json::to_string(msg) {
+            let _ = self.out.send(Message::Text(text));
+        }
+    }
+
+    /// Register this peer with the backend so others can reach it by `id`.
+    pub fn register(&self, role: &str, id: &str) {
+        self.send(&ClientMsg::Register {
+            role: role.to_string(),
+            id: id.to_string(),
+        });
+    }
+
+    /// Send an opaque signaling payload to another peer by id.
+    pub fn signal(&self, to: &str, data: serde_json::Value) {
+        self.send(&ClientMsg::Signal {
+            to: to.to_string(),
+            data,
+        });
+    }
+
+    /// Liveness ping (backend replies with `Pong`).
+    pub fn ping(&self) {
+        self.send(&ClientMsg::Ping);
+    }
+
+    /// Await the next message from the backend (`None` once the socket closes).
+    pub async fn recv(&mut self) -> Option<ServerMsg> {
+        self.inbox.recv().await
+    }
+}
