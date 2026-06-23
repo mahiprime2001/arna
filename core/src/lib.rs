@@ -8,6 +8,10 @@
 
 pub mod p2p;
 
+// Re-export so downstream crates (agent/console) can name WebRTC types without a
+// direct dependency, and stay on the exact version core uses.
+pub use webrtc;
+
 use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;

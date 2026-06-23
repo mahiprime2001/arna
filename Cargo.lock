@@ -59,8 +59,11 @@ dependencies = [
 name = "arna-agent"
 version = "0.1.0"
 dependencies = [
+ "arna-core",
+ "bytes",
  "image",
  "scrap",
+ "tokio",
 ]
 
 [[package]]

@@ -2,9 +2,12 @@
 name = "arna-agent"
 version = "0.1.0"
 edition = "2021"
-description = "Arna agent: screen capture (Phase 1c)"
+description = "Arna agent: screen capture + WebRTC streaming (Phase 1c)"
 license = "LicenseRef-Proprietary"
 
 [dependencies]
+arna-core = { path = "../core" }
+tokio = { version = "1", features = ["full"] }
+bytes = "1"
 scrap = "0.5"
 image = { version = "0.25", default-features = false, features = ["jpeg"] }

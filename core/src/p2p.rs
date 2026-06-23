@@ -1,9 +1,12 @@
-//! WebRTC peer-to-peer over the signaling channel (Phase 1b).
+//! WebRTC peer-to-peer over the signaling channel.
 //!
 //! Two peers negotiate a real `RTCPeerConnection` — SDP offer/answer and ICE
 //! candidates travel as opaque `signal` payloads through the backend — then open
-//! a data channel and exchange messages directly (P2P, or via TURN later). This
-//! is the transport the screen/video, input, and file/chat channels ride on.
+//! a data channel and exchange messages directly (P2P, or via TURN later).
+//!
+//! - [`run`] is the simple two-peer demo (offerer/answerer + a hello).
+//! - [`answer_streaming`] answers offers and hands each opened data channel to a
+//!   callback — the agent uses this to stream screen frames to a viewer.
 
 use std::sync::Arc;
 
@@ -20,44 +23,27 @@ use webrtc::interceptor::registry::Registry;
 use webrtc::peer_connection::configuration::RTCConfiguration;
 use webrtc::peer_connection::peer_connection_state::RTCPeerConnectionState;
 use webrtc::peer_connection::sdp::session_description::RTCSessionDescription;
+use webrtc::peer_connection::RTCPeerConnection;
 
-use crate::{Error, ServerMsg, Signaling};
+use crate::{Error, ServerMsg, SignalSender, Signaling};
 
-/// Wire up logging + a greeting on a data channel (both peers do this).
-fn setup_data_channel(dc: Arc<RTCDataChannel>, tag: String) {
-    let dc_open = dc.clone();
-    let tag_open = tag.clone();
-    dc.on_open(Box::new(move || {
-        let dc_open = dc_open.clone();
-        let tag_open = tag_open.clone();
-        Box::pin(async move {
-            println!("[{tag_open}] P2P data channel OPEN");
-            let _ = dc_open
-                .send_text(format!("hello over P2P from {tag_open}"))
-                .await;
-        })
-    }));
-
-    dc.on_message(Box::new(move |msg: DataChannelMessage| {
-        let text = String::from_utf8_lossy(&msg.data).to_string();
-        println!("P2P RECV: {text}");
-        Box::pin(async {})
-    }));
-}
-
-/// Run a P2P session over `signaling`.
+/// Build a peer connection wired for trickle ICE over signaling.
 ///
-/// - `offerer = true` creates the data channel + offer and sends it to `target`.
-/// - `offerer = false` waits for an incoming offer and answers it.
-///
-/// Runs until the signaling socket closes.
-pub async fn run(
-    mut signaling: Signaling,
+/// `target` is who we trickle ICE to — known up front for an offerer, or `None`
+/// for an answerer (it's learned from the incoming offer and stored in the
+/// returned cell before that side starts gathering candidates).
+async fn build_pc(
+    signaling: &Signaling,
     target: Option<String>,
-    offerer: bool,
-    tag: String,
-) -> Result<(), Error> {
-    // Build the WebRTC API with default codecs + interceptors.
+    tag: &str,
+) -> Result<
+    (
+        Arc<RTCPeerConnection>,
+        SignalSender,
+        Arc<Mutex<Option<String>>>,
+    ),
+    Error,
+> {
     let mut media = MediaEngine::default();
     media.register_default_codecs()?;
     let mut registry = Registry::new();
@@ -75,13 +61,9 @@ pub async fn run(
         ..Default::default()
     };
     let pc = Arc::new(api.new_peer_connection(config).await?);
-
     let sender = signaling.sender();
-    // The peer we trickle ICE to. Known up front for the offerer; learned from
-    // the incoming offer for the answerer (set before its ICE gathering starts).
-    let peer_cell: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(target.clone()));
+    let peer_cell = Arc::new(Mutex::new(target));
 
-    // Trickle local ICE candidates to the peer.
     {
         let sender = sender.clone();
         let peer_cell = peer_cell.clone();
@@ -100,37 +82,25 @@ pub async fn run(
         }));
     }
 
-    // Log connection state transitions.
     {
-        let tag = tag.clone();
+        let tag = tag.to_string();
         pc.on_peer_connection_state_change(Box::new(move |state: RTCPeerConnectionState| {
             println!("[{tag}] connection state: {state}");
             Box::pin(async {})
         }));
     }
 
-    if offerer {
-        let dc = pc.create_data_channel("data", None).await?;
-        setup_data_channel(dc, tag.clone());
+    Ok((pc, sender, peer_cell))
+}
 
-        // Give the answerer a moment to register before we send the offer.
-        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-
-        let offer = pc.create_offer(None).await?;
-        pc.set_local_description(offer.clone()).await?;
-        if let Some(peer) = target.clone() {
-            sender.signal(&peer, json!({ "kind": "offer", "sdp": offer.sdp }));
-            println!("[{tag}] sent offer to {peer}");
-        }
-    } else {
-        let tag2 = tag.clone();
-        pc.on_data_channel(Box::new(move |dc: Arc<RTCDataChannel>| {
-            setup_data_channel(dc, tag2.clone());
-            Box::pin(async {})
-        }));
-    }
-
-    // Drive the negotiation off the signaling channel.
+/// Drive negotiation off the signaling channel until the socket closes.
+async fn negotiation_loop(
+    pc: Arc<RTCPeerConnection>,
+    mut signaling: Signaling,
+    sender: SignalSender,
+    peer_cell: Arc<Mutex<Option<String>>>,
+    tag: &str,
+) -> Result<(), Error> {
     while let Some(msg) = signaling.recv().await {
         let ServerMsg::Signal { from, data } = msg else {
             continue;
@@ -168,6 +138,89 @@ pub async fn run(
             _ => {}
         }
     }
-
     Ok(())
+}
+
+/// Wire up logging + a greeting on a data channel (used by the [`run`] demo).
+fn setup_demo_channel(dc: Arc<RTCDataChannel>, tag: String) {
+    let dc_open = dc.clone();
+    let tag_open = tag.clone();
+    dc.on_open(Box::new(move || {
+        let dc_open = dc_open.clone();
+        let tag_open = tag_open.clone();
+        Box::pin(async move {
+            println!("[{tag_open}] P2P data channel OPEN");
+            let _ = dc_open
+                .send_text(format!("hello over P2P from {tag_open}"))
+                .await;
+        })
+    }));
+    dc.on_message(Box::new(move |msg: DataChannelMessage| {
+        let text = String::from_utf8_lossy(&msg.data).to_string();
+        println!("P2P RECV: {text}");
+        Box::pin(async {})
+    }));
+}
+
+/// Two-peer demo: `offerer = true` creates the channel + offer; otherwise waits.
+pub async fn run(
+    signaling: Signaling,
+    target: Option<String>,
+    offerer: bool,
+    tag: String,
+) -> Result<(), Error> {
+    let (pc, sender, peer_cell) = build_pc(&signaling, target.clone(), &tag).await?;
+
+    if offerer {
+        let dc = pc.create_data_channel("data", None).await?;
+        setup_demo_channel(dc, tag.clone());
+        // Give the answerer a moment to register before sending the offer.
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+        let offer = pc.create_offer(None).await?;
+        pc.set_local_description(offer.clone()).await?;
+        if let Some(peer) = target.clone() {
+            sender.signal(&peer, json!({ "kind": "offer", "sdp": offer.sdp }));
+            println!("[{tag}] sent offer to {peer}");
+        }
+    } else {
+        let tag2 = tag.clone();
+        pc.on_data_channel(Box::new(move |dc: Arc<RTCDataChannel>| {
+            setup_demo_channel(dc, tag2.clone());
+            Box::pin(async {})
+        }));
+    }
+
+    negotiation_loop(pc, signaling, sender, peer_cell, &tag).await
+}
+
+/// Answer incoming offers; when a data channel opens, hand it to `on_channel`.
+///
+/// The agent uses this: `on_channel` receives the live channel and starts
+/// pushing screen frames onto it. Runs until the signaling socket closes.
+pub async fn answer_streaming(
+    signaling: Signaling,
+    tag: String,
+    on_channel: Arc<dyn Fn(Arc<RTCDataChannel>) + Send + Sync>,
+) -> Result<(), Error> {
+    let (pc, sender, peer_cell) = build_pc(&signaling, None, &tag).await?;
+
+    let tag_dc = tag.clone();
+    pc.on_data_channel(Box::new(move |dc: Arc<RTCDataChannel>| {
+        let on_channel = on_channel.clone();
+        let dc_open = dc.clone();
+        let tag_dc = tag_dc.clone();
+        Box::pin(async move {
+            dc.on_open(Box::new(move || {
+                let on_channel = on_channel.clone();
+                let dc_open = dc_open.clone();
+                let tag_dc = tag_dc.clone();
+                Box::pin(async move {
+                    println!("[{tag_dc}] viewer channel open — streaming");
+                    on_channel(dc_open);
+                })
+            }));
+        })
+    }));
+
+    negotiation_loop(pc, signaling, sender, peer_cell, &tag).await
 }
