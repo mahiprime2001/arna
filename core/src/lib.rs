@@ -1,10 +1,12 @@
-//! Arna shared core — signaling client + wire protocol.
+//! Arna shared core — signaling client + WebRTC P2P.
 //!
-//! Phase 1a: just the signaling layer. A peer connects to the backend, registers
-//! with a role + id, and can exchange opaque `signal` payloads with another peer
-//! (this is how WebRTC SDP offers/answers and ICE candidates will travel in the
-//! next slice). WebRTC transport, screen capture, input, and file/chat channels
-//! are layered on top of this in later phases.
+//! - [`Signaling`] is the WebSocket client that connects peers through the
+//!   backend and relays opaque payloads.
+//! - [`p2p`] uses that signaling channel to negotiate a real WebRTC peer
+//!   connection (SDP offer/answer + ICE) and open a data channel — the
+//!   foundation the screen/video and file/chat channels are built on next.
+
+pub mod p2p;
 
 use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
@@ -44,13 +46,36 @@ pub enum ServerMsg {
 pub enum Error {
     #[error("websocket error: {0}")]
     Ws(#[from] tokio_tungstenite::tungstenite::Error),
+    #[error("webrtc error: {0}")]
+    Webrtc(#[from] webrtc::Error),
+    #[error("json error: {0}")]
+    Json(#[from] serde_json::Error),
+}
+
+/// A cheap, cloneable handle for sending signaling messages — usable from
+/// WebRTC callbacks (e.g. to trickle ICE candidates back to the peer).
+#[derive(Clone)]
+pub struct SignalSender {
+    out: mpsc::UnboundedSender<Message>,
+}
+
+impl SignalSender {
+    fn send(&self, msg: &ClientMsg) {
+        if let Ok(text) = serde_json::to_string(msg) {
+            let _ = self.out.send(Message::Text(text));
+        }
+    }
+
+    /// Send an opaque payload to another peer by id.
+    pub fn signal(&self, to: &str, data: serde_json::Value) {
+        self.send(&ClientMsg::Signal {
+            to: to.to_string(),
+            data,
+        });
+    }
 }
 
 /// A live signaling connection: send [`ClientMsg`]s, receive [`ServerMsg`]s.
-///
-/// Internally one task pumps outbound messages to the socket and another parses
-/// inbound frames, so callers just use [`Signaling::register`] / [`Signaling::signal`]
-/// and await [`Signaling::recv`].
 pub struct Signaling {
     out: mpsc::UnboundedSender<Message>,
     inbox: mpsc::UnboundedReceiver<ServerMsg>,
@@ -118,6 +143,13 @@ impl Signaling {
     /// Liveness ping (backend replies with `Pong`).
     pub fn ping(&self) {
         self.send(&ClientMsg::Ping);
+    }
+
+    /// A cloneable sender handle for use inside callbacks.
+    pub fn sender(&self) -> SignalSender {
+        SignalSender {
+            out: self.out.clone(),
+        }
     }
 
     /// Await the next message from the backend (`None` once the socket closes).

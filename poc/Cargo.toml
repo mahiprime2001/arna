@@ -2,10 +2,10 @@
 name = "arna-poc"
 version = "0.1.0"
 edition = "2021"
-description = "Arna signaling proof-of-concept CLI (Phase 1a)"
+description = "Arna WebRTC P2P proof-of-concept CLI (Phase 1b)"
 license = "LicenseRef-Proprietary"
 
 [dependencies]
 arna-core = { path = "../core" }
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
+tokio = { version = "1", features = ["full"] }
 serde_json = "1"

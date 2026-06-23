@@ -1,16 +1,15 @@
-//! Arna signaling proof-of-concept (Phase 1a).
+//! Arna WebRTC P2P proof-of-concept (Phase 1b).
 //!
-//! Connects to the backend, registers, and (optionally) sends a hello to another
-//! peer — proving the end-to-end signaling round-trip. Run two of these against
-//! a running backend:
+//! Two peers connect through the backend, negotiate a WebRTC peer connection
+//! over signaling, open a data channel, and greet each other directly P2P.
 //!
-//!   # terminal 1 (backend):   cargo run --manifest-path backend/Cargo.toml
-//!   # terminal 2 (listener):  cargo run -p arna-poc -- ws://127.0.0.1:8081/ws agent  store-1
-//!   # terminal 3 (caller):    cargo run -p arna-poc -- ws://127.0.0.1:8081/ws console me store-1
+//!   # terminal 1 (backend):  cargo run --manifest-path backend/Cargo.toml
+//!   # terminal 2 (answerer): cargo run -p arna-poc -- ws://127.0.0.1:8081/ws agent   store-1
+//!   # terminal 3 (offerer):  cargo run -p arna-poc -- ws://127.0.0.1:8081/ws console me store-1
 //!
-//! The listener should print a line:  RECV signal from me: {"hello": ...}
+//! Both should print:  [..] P2P data channel OPEN   and   P2P RECV: hello over P2P from ..
 
-use arna_core::{ServerMsg, Signaling};
+use arna_core::{p2p, Signaling};
 
 #[tokio::main]
 async fn main() {
@@ -26,33 +25,16 @@ async fn main() {
     let id = args.get(3).cloned().unwrap_or_else(|| "peer".to_string());
     let peer = args.get(4).cloned();
 
-    let mut sig = Signaling::connect(&url)
+    let signaling = Signaling::connect(&url)
         .await
         .expect("failed to connect to signaling backend");
-    sig.register(&role, &id);
+    signaling.register(&role, &id);
     println!("[{id}] connected and registered as {role}");
 
-    // If a peer id was given, greet it (after a beat so it can register first).
-    if let Some(peer_id) = peer.clone() {
-        tokio::time::sleep(std::time::Duration::from_millis(600)).await;
-        sig.signal(
-            &peer_id,
-            serde_json::json!({ "hello": format!("hi from {id}") }),
-        );
-        println!("[{id}] sent hello to {peer_id}");
+    // A peer id means we initiate (offerer); otherwise we wait for an offer.
+    let offerer = peer.is_some();
+    if let Err(e) = p2p::run(signaling, peer, offerer, id.clone()).await {
+        eprintln!("[{id}] p2p error: {e}");
     }
-
-    // Print everything the backend sends us.
-    while let Some(msg) = sig.recv().await {
-        match msg {
-            ServerMsg::Registered { id: rid } => {
-                println!("[{id}] server confirmed registration: {rid}")
-            }
-            ServerMsg::Signal { from, data } => println!("RECV signal from {from}: {data}"),
-            ServerMsg::PeerOffline { to } => println!("[{id}] peer offline: {to}"),
-            ServerMsg::Error { message } => println!("[{id}] error: {message}"),
-            ServerMsg::Pong => println!("[{id}] pong"),
-        }
-    }
-    println!("[{id}] connection closed");
+    println!("[{id}] session ended");
 }
