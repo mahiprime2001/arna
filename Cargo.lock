@@ -63,6 +63,7 @@ dependencies = [
  "bytes",
  "enigo",
  "image",
+ "rand",
  "scrap",
  "serde_json",
  "tokio",

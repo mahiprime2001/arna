@@ -4,7 +4,8 @@ import { useRemote } from "./composables/useRemote";
 
 const backend = ref("ws://127.0.0.1:8081/ws");
 const agentId = ref("agent-1");
-const { status, active, connected, canControl, screenUrl, connect, disconnect, sendInput } = useRemote();
+const ticket = ref("");
+const { status, active, connected, canControl, screenUrl, sessionCode, connect, disconnect, sendInput } = useRemote();
 
 const imgEl = ref<HTMLImageElement | null>(null);
 const screenEl = ref<HTMLDivElement | null>(null);
@@ -12,7 +13,7 @@ let lastMove = 0;
 
 function toggle() {
   if (active.value) disconnect();
-  else connect(backend.value.trim(), agentId.value.trim());
+  else connect(backend.value.trim(), agentId.value.trim(), ticket.value.trim());
 }
 
 const dotClass = computed(() => {
@@ -107,6 +108,16 @@ function onKeyUp(e: KeyboardEvent) {
         />
       </label>
 
+      <label class="flex items-center gap-2 text-sm text-slate-400">
+        Ticket
+        <input
+          v-model="ticket"
+          :disabled="active"
+          placeholder="SSO (optional)"
+          class="w-40 rounded-md border border-edge bg-ink px-2 py-1.5 text-slate-100 outline-none focus:border-accent disabled:opacity-50"
+        />
+      </label>
+
       <button
         class="rounded-md px-4 py-1.5 text-sm font-semibold transition"
         :class="active ? 'bg-rose-500/90 hover:bg-rose-500 text-white' : 'bg-accent hover:opacity-90 text-white'"
@@ -116,6 +127,9 @@ function onKeyUp(e: KeyboardEvent) {
       </button>
 
       <div class="ml-auto flex items-center gap-2 text-sm">
+        <span v-if="sessionCode" class="rounded-full bg-slate-700/60 px-2.5 py-0.5 font-mono text-xs text-slate-200">
+          code {{ sessionCode }}
+        </span>
         <span v-if="canControl" class="rounded-full bg-accent/15 px-2.5 py-0.5 text-xs font-semibold text-accent2">
           control
         </span>

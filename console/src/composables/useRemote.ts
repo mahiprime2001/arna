@@ -1,9 +1,9 @@
 import { onUnmounted, ref } from "vue";
 
 /**
- * Remote-screen session: connects to the signaling backend, negotiates a WebRTC
- * peer connection with the agent, and exposes the latest screen frame as an
- * object URL. (Phase 1c — view only; control comes next.)
+ * Remote-screen session: connects to the signaling backend, asks the agent for
+ * consent (the operator must accept), then negotiates a WebRTC peer connection
+ * and exposes the latest screen frame as an object URL.
  */
 export function useRemote() {
   const status = ref("idle");
@@ -11,6 +11,8 @@ export function useRemote() {
   const connected = ref(false);
   const canControl = ref(false);
   const screenUrl = ref<string | null>(null);
+  /** One-time session code echoed back by the agent on accept (display only). */
+  const sessionCode = ref<string | null>(null);
 
   let ws: WebSocket | null = null;
   let pc: RTCPeerConnection | null = null;
@@ -24,7 +26,7 @@ export function useRemote() {
     }
   }
 
-  function connect(backendUrl: string, agentId: string) {
+  function connect(backendUrl: string, agentId: string, ticket?: string) {
     disconnect();
     active.value = true;
     const myId = "viewer-" + Math.floor(Math.random() * 1e6);
@@ -32,8 +34,9 @@ export function useRemote() {
     ws = new WebSocket(backendUrl);
     ws.onopen = () => {
       ws!.send(JSON.stringify({ type: "register", role: "console", id: myId }));
-      status.value = "connecting";
-      offer(agentId);
+      // Ask for consent first; we only send the WebRTC offer once accepted.
+      ws!.send(JSON.stringify({ type: "connect_request", to: agentId, ticket: ticket || undefined }));
+      status.value = "requesting access…";
     };
     ws.onerror = () => (status.value = "connection error");
     ws.onclose = () => {
@@ -42,9 +45,21 @@ export function useRemote() {
     };
     ws.onmessage = async (ev) => {
       const m = JSON.parse(ev.data);
-      if (m.type === "signal") {
+      if (m.type === "request_denied") {
+        status.value = `denied: ${m.reason}`;
+        active.value = false;
+      } else if (m.type === "signal") {
         const d = m.data;
-        if (d.kind === "answer") {
+        if (d.kind === "consent") {
+          if (d.accepted) {
+            sessionCode.value = d.code ?? null;
+            status.value = "accepted — connecting";
+            offer(agentId);
+          } else {
+            status.value = `declined: ${d.reason ?? "by operator"}`;
+            active.value = false;
+          }
+        } else if (d.kind === "answer") {
           await pc!.setRemoteDescription({ type: "answer", sdp: d.sdp });
         } else if (d.kind === "ice") {
           try {
@@ -115,10 +130,11 @@ export function useRemote() {
       lastUrl = null;
     }
     screenUrl.value = null;
+    sessionCode.value = null;
     status.value = "idle";
   }
 
   onUnmounted(disconnect);
 
-  return { status, active, connected, canControl, screenUrl, connect, disconnect, sendInput };
+  return { status, active, connected, canControl, screenUrl, sessionCode, connect, disconnect, sendInput };
 }

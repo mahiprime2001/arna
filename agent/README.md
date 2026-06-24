@@ -1,13 +1,18 @@
-# agent — Tauri app (store PCs)
+# agent — store PCs (Tauri wrap pending)
 
 Runs quietly in the background on each store PC.
 
 - Persistent signaling connection; waits for connect requests.
-- **Consent popup** — small always-on-top window: "Admin wants to connect" +
-  6-digit code + Accept/Decline (does not block the cashier's work).
-- Screen capture (`windows-capture`) → VP8 encode (`vpx-encode`) → WebRTC video track.
+- **Consent** (Phase 3a, headless): on a connect request it decides via
+  `ARNA_CONSENT` = `accept` (default) · `prompt` (terminal y/N) · `decline`, and
+  only answers WebRTC offers from admitted consoles. A 6-digit session code is
+  generated and echoed to both sides. → becomes an always-on-top **popup window**
+  once wrapped in Tauri (Phase 3b).
+- Screen capture (`scrap`) → JPEG → WebRTC data channel. *(VP8 video track later.)*
 - Input injection (`enigo`) from the `input` data channel.
-- File send/receive, chat.
-- Tray icon; run-at-login (v1) → Windows service / SYSTEM (Phase 5, for UAC).
+- *(Later: file send/receive, chat; tray icon; run-at-login → service/SYSTEM.)*
 
-**Depends on:** `../core`. **Status:** not yet implemented (begins Phase 1).
+Run: `cargo run -p arna-agent --release -- ws://127.0.0.1:8081/ws agent-1`
+
+**Depends on:** `../core`. **Status:** ✅ capture + control + consent (Phase 3a);
+Tauri wrap is Phase 3b.

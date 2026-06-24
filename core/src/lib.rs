@@ -25,8 +25,21 @@ use tokio_tungstenite::tungstenite::Message;
 #[derive(Debug, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ClientMsg {
-    Register { role: String, id: String },
-    Signal { to: String, data: serde_json::Value },
+    Register {
+        role: String,
+        id: String,
+    },
+    /// Ask to start a session with `to`. The backend verifies `ticket` (when SSO
+    /// is enabled) and forwards an `incoming_request` to the agent.
+    ConnectRequest {
+        to: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        ticket: Option<String>,
+    },
+    Signal {
+        to: String,
+        data: serde_json::Value,
+    },
     Ping,
 }
 
@@ -36,6 +49,18 @@ pub enum ClientMsg {
 pub enum ServerMsg {
     Registered {
         id: String,
+    },
+    /// A console wants to connect (delivered to the agent after the backend has
+    /// verified the SSO ticket). `name` is the verified admin identity to show.
+    IncomingRequest {
+        from: String,
+        name: String,
+    },
+    /// The backend refused a `connect_request` (bad/expired ticket, agent
+    /// offline). Delivered to the console that asked.
+    RequestDenied {
+        to: String,
+        reason: String,
     },
     Signal {
         from: String,
@@ -145,6 +170,15 @@ impl Signaling {
         self.send(&ClientMsg::Signal {
             to: to.to_string(),
             data,
+        });
+    }
+
+    /// Ask the backend to broker a session with agent `to`, presenting an
+    /// optional SSO `ticket` for verification.
+    pub fn connect_request(&self, to: &str, ticket: Option<String>) {
+        self.send(&ClientMsg::ConnectRequest {
+            to: to.to_string(),
+            ticket,
         });
     }
 

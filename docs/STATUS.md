@@ -37,7 +37,8 @@ wraps into **Tauri** desktop apps (Agent on machines, Console for the admin).
 | 1b | WebRTC P2P data channel (SDP/ICE over signaling) | ✅ verified |
 | 1c | **See the remote screen** (capture→JPEG→WebRTC→browser) | ✅ verified (user saw it live) |
 | 2 | **Remote control** (mouse/keyboard → `enigo`) | ✅ built; user verifying |
-| 3 | Consent popup + auth (SSO ticket), then **Tauri** wrapping | ⏳ next |
+| 3a | **Consent + SSO auth** (connect_request → popup/policy → accept; HS256 ticket) | ✅ built + smoke-tested |
+| 3b | **Tauri** wrapping (agent tray + consent window; console desktop) | ⏳ next |
 | later | VP8/H.264 **video track** (replace JPEG), files, chat, SSH/FTP, fleet, meet | ⏳ |
 
 ## Run it locally (Windows)
@@ -54,6 +55,12 @@ cd console && npm install && npm run dev              # http://localhost:4310  (
 Website: `cd d:\Siri-apps\arna-website && npm run dev` (port 4300).
 
 ## How it works (current)
+- **Consent gate first** (Phase 3a): console sends `connect_request{to,ticket}`;
+  backend verifies the SSO ticket (or admits openly if `ARNA_SSO_SECRET` unset) and
+  forwards `incoming_request` to the agent; agent decides (policy/popup), replies
+  `signal{kind:"consent",accepted,code}`. Only on accept does the console send the
+  WebRTC offer, and the **agent only answers offers from admitted peers** (approval
+  revoked on disconnect → reconnect re-asks). See [PROTOCOL.md](PROTOCOL.md) §1/§4.
 - Signaling: Console (browser) is the **offerer**; agent is the **answerer**.
 - Agent builds a **fresh RTCPeerConnection per viewer** (reconnect + multi-viewer safe).
 - Two data channels: `screen` (agent → viewer, JPEG frames ~12fps) and `input`
@@ -70,14 +77,21 @@ Website: `cd d:\Siri-apps\arna-website && npm run dev` (port 4300).
 - Input wire format (over `input` channel): `{t:"m",x,y}` move (normalized 0..1),
   `{t:"d"/"u",b}` button, `{t:"w",dy}` wheel, `{t:"kd"/"ku",k}` key.
 
-## Next steps (Phase 3+)
-1. **Consent popup + auth**: agent shows Accept/Decline (+ optional code) before a
-   session; backend verifies an SSO ticket so only authorized consoles connect.
-2. **Tauri wrap**: turn `agent/` and `console/` into Tauri apps (Console reuses the
-   existing Vue frontend; Agent gets a tray + consent window).
-3. **Video track**: replace JPEG-over-data-channel with a real VP8/H.264 track.
-4. Then: files, chat, SSH/FTP, fleet health + remote commands, meet.
+## Consent + auth config (Phase 3a)
+- **Agent** `ARNA_CONSENT` = `accept` (default) · `prompt` (terminal y/N) · `decline`.
+- **Backend** `ARNA_SSO_SECRET` (HS256 secret; unset = open dev mode) and, for
+  testing, `ARNA_DEV_TICKETS=1` → `GET /dev/ticket?agent=<id>&name=<n>` mints a
+  5-min ticket. Console has an optional **Ticket** field (paste the dev JWT).
+- Smoke test (signaling-level, no GUI): `node scripts/smoke-consent.mjs` (open
+  mode) or `SSO=1 node scripts/smoke-consent.mjs` against an SSO-enabled backend.
 
-Known limitations: view+control only; no UAC/secure-desktop control (needs SYSTEM
-service); no consent/auth yet (anyone with the agent id can connect); coturn not
+## Next steps (Phase 3b+)
+1. **Tauri wrap**: turn `agent/` and `console/` into Tauri apps. Console reuses the
+   existing Vue frontend; Agent gets a tray + the real consent **popup window**
+   (replaces the `ARNA_CONSENT` policy with `Accept/Decline` + code UI).
+2. **Video track**: replace JPEG-over-data-channel with a real VP8/H.264 track.
+3. Then: files, chat, SSH/FTP, fleet health + remote commands, meet.
+
+Known limitations: view+control only; consent is **policy/terminal** until the
+Tauri popup lands; no UAC/secure-desktop control (needs SYSTEM service); coturn not
 deployed yet (P2P/STUN only).

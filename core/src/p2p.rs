@@ -9,7 +9,9 @@
 //!   callback. It builds a **fresh** peer connection per offer (keyed by the
 //!   viewer id), so reconnects and multiple viewers all work.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
 
 use serde_json::json;
@@ -75,30 +77,97 @@ fn wire_ice(pc: &Arc<RTCPeerConnection>, sender: SignalSender, peer: String) {
 }
 
 // ---------------------------------------------------------------------------
+// Consent gate (the agent decides whether to admit a console)
+// ---------------------------------------------------------------------------
+
+/// A console asking to start a session (already SSO-verified by the backend).
+pub struct ConnectRequest {
+    /// Signaling id of the requesting console.
+    pub from: String,
+    /// Verified admin identity to show in the popup.
+    pub name: String,
+}
+
+/// The agent's answer to a [`ConnectRequest`].
+pub enum Consent {
+    /// Admit the console. `code` (if any) is shown to both sides as a bonus.
+    Accept { code: Option<String> },
+    /// Refuse, with a short human-readable reason.
+    Decline { reason: String },
+}
+
+/// Async callback the agent supplies to decide consent (terminal prompt, fixed
+/// policy, or — once wrapped in Tauri — an always-on-top window).
+pub type ConsentFn =
+    Arc<dyn Fn(ConnectRequest) -> Pin<Box<dyn Future<Output = Consent> + Send>> + Send + Sync>;
+
+// ---------------------------------------------------------------------------
 // Streaming answerer (the agent)
 // ---------------------------------------------------------------------------
 
 /// Answer incoming offers; when a data channel opens, hand it to `on_channel`.
 ///
-/// A **new** peer connection is created per offer (keyed by the viewer id), so
-/// connect/disconnect/reconnect and multiple simultaneous viewers all work.
+/// Consent is enforced: the backend delivers `incoming_request` first, we ask
+/// `consent`, reply over signaling, and only **answer offers from peers we have
+/// admitted**. A **new** peer connection is created per offer (keyed by the
+/// viewer id), so connect/disconnect/reconnect and multiple viewers all work.
 /// Runs until the signaling socket closes.
 pub async fn answer_streaming(
     mut signaling: Signaling,
     tag: String,
+    consent: ConsentFn,
     on_channel: Arc<dyn Fn(Arc<RTCDataChannel>) + Send + Sync>,
 ) -> Result<(), Error> {
     let api = make_api()?;
     let sender = signaling.sender();
     let sessions: Arc<Mutex<HashMap<String, Arc<RTCPeerConnection>>>> =
         Arc::new(Mutex::new(HashMap::new()));
+    // Consoles the operator has admitted; an offer from anyone else is ignored.
+    let approved: Arc<Mutex<HashSet<String>>> = Arc::new(Mutex::new(HashSet::new()));
 
     while let Some(msg) = signaling.recv().await {
-        let ServerMsg::Signal { from, data } = msg else {
-            continue;
+        let (from, data) = match msg {
+            ServerMsg::IncomingRequest { from, name } => {
+                println!("[{tag}] connection request from {name} ({from})");
+                let consent = consent.clone();
+                let sender = sender.clone();
+                let approved = approved.clone();
+                let tag = tag.clone();
+                tokio::spawn(async move {
+                    match consent(ConnectRequest {
+                        from: from.clone(),
+                        name,
+                    })
+                    .await
+                    {
+                        Consent::Accept { code } => {
+                            approved.lock().await.insert(from.clone());
+                            println!("[{tag}] admitted {from}");
+                            sender.signal(
+                                &from,
+                                json!({ "kind": "consent", "accepted": true, "code": code }),
+                            );
+                        }
+                        Consent::Decline { reason } => {
+                            println!("[{tag}] declined {from}: {reason}");
+                            sender.signal(
+                                &from,
+                                json!({ "kind": "consent", "accepted": false, "reason": reason }),
+                            );
+                        }
+                    }
+                });
+                continue;
+            }
+            ServerMsg::Signal { from, data } => (from, data),
+            _ => continue,
         };
         match data.get("kind").and_then(|k| k.as_str()).unwrap_or("") {
             "offer" => {
+                if !approved.lock().await.contains(&from) {
+                    println!("[{tag}] ignoring offer from unapproved peer {from}");
+                    continue;
+                }
                 let sdp = data
                     .get("sdp")
                     .and_then(|s| s.as_str())
@@ -108,15 +177,18 @@ pub async fn answer_streaming(
                 let pc = Arc::new(api.new_peer_connection(rtc_config()).await?);
                 wire_ice(&pc, sender.clone(), from.clone());
 
-                // Drop the session when this connection ends.
+                // Drop the session — and revoke approval — when it ends, so a
+                // reconnect has to ask for consent again.
                 {
                     let sessions = sessions.clone();
+                    let approved = approved.clone();
                     let peer = from.clone();
                     let tag = tag.clone();
                     pc.on_peer_connection_state_change(Box::new(
                         move |s: RTCPeerConnectionState| {
                             println!("[{tag}] {peer}: {s}");
                             let sessions = sessions.clone();
+                            let approved = approved.clone();
                             let peer = peer.clone();
                             Box::pin(async move {
                                 if matches!(
@@ -126,6 +198,7 @@ pub async fn answer_streaming(
                                         | RTCPeerConnectionState::Closed
                                 ) {
                                     sessions.lock().await.remove(&peer);
+                                    approved.lock().await.remove(&peer);
                                 }
                             })
                         },

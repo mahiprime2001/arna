@@ -15,6 +15,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
+use arna_core::p2p::{Consent, ConnectRequest, ConsentFn};
 use arna_core::webrtc::data_channel::RTCDataChannel;
 use arna_core::{p2p, Signaling};
 use bytes::Bytes;
@@ -212,6 +213,80 @@ fn primary_size() -> (i32, i32) {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Consent
+// ---------------------------------------------------------------------------
+
+/// What the agent does when a console asks to connect. Set with `ARNA_CONSENT`:
+/// `accept` (default — auto-admit), `prompt` (ask y/n on the terminal), or
+/// `decline` (always refuse). Tauri later replaces this with a popup window.
+#[derive(Clone, Copy)]
+enum ConsentPolicy {
+    Accept,
+    Prompt,
+    Decline,
+}
+
+fn consent_policy() -> ConsentPolicy {
+    match std::env::var("ARNA_CONSENT").as_deref() {
+        Ok("prompt") => ConsentPolicy::Prompt,
+        Ok("decline") => ConsentPolicy::Decline,
+        _ => ConsentPolicy::Accept,
+    }
+}
+
+/// A one-time 6-digit session code, shown to both sides (a confirmation aid; it
+/// does not gate the connection in the default Accept-only mode).
+fn session_code() -> String {
+    use rand::Rng;
+    format!("{:06}", rand::thread_rng().gen_range(0..1_000_000))
+}
+
+/// Read a single y/n answer from the terminal without blocking the async runtime.
+async fn ask_terminal(prompt: String) -> bool {
+    tokio::task::spawn_blocking(move || {
+        use std::io::{BufRead, Write};
+        print!("{prompt} [y/N] ");
+        let _ = std::io::stdout().flush();
+        let mut line = String::new();
+        let _ = std::io::stdin().lock().read_line(&mut line);
+        matches!(line.trim().to_ascii_lowercase().as_str(), "y" | "yes")
+    })
+    .await
+    .unwrap_or(false)
+}
+
+fn build_consent(policy: ConsentPolicy) -> ConsentFn {
+    Arc::new(move |req: ConnectRequest| {
+        Box::pin(async move {
+            let code = session_code();
+            match policy {
+                ConsentPolicy::Accept => {
+                    println!(
+                        "agent: auto-accepting {} ({}) — session code {code}",
+                        req.name, req.from
+                    );
+                    Consent::Accept { code: Some(code) }
+                }
+                ConsentPolicy::Decline => Consent::Decline {
+                    reason: "operator policy: connections disabled".into(),
+                },
+                ConsentPolicy::Prompt => {
+                    println!("agent: session code for {} is {code}", req.name);
+                    if ask_terminal(format!("Allow {} ({}) to connect?", req.name, req.from)).await
+                    {
+                        Consent::Accept { code: Some(code) }
+                    } else {
+                        Consent::Decline {
+                            reason: "declined by operator".into(),
+                        }
+                    }
+                }
+            }
+        })
+    })
+}
+
 #[tokio::main]
 async fn main() {
     let args: Vec<String> = std::env::args().collect();
@@ -234,6 +309,9 @@ async fn main() {
     let enigo = Arc::new(Mutex::new(
         Enigo::new(&Settings::default()).expect("failed to init input injector"),
     ));
+
+    let policy = consent_policy();
+    let consent = build_consent(policy);
 
     let signaling = Signaling::connect(&url)
         .await
@@ -281,7 +359,7 @@ async fn main() {
             other => println!("agent: ignoring unknown channel '{other}'"),
         });
 
-    if let Err(e) = p2p::answer_streaming(signaling, id.clone(), on_channel).await {
+    if let Err(e) = p2p::answer_streaming(signaling, id.clone(), consent, on_channel).await {
         eprintln!("agent error: {e}");
     }
 }
