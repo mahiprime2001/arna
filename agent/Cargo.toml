@@ -2,7 +2,7 @@
 name = "arna-agent"
 version = "0.1.0"
 edition = "2021"
-description = "Arna agent: screen capture + WebRTC streaming (Phase 1c)"
+description = "Arna agent: screen capture + WebRTC streaming + input injection (Phase 2)"
 license = "LicenseRef-Proprietary"
 
 [dependencies]
@@ -11,3 +11,5 @@ tokio = { version = "1", features = ["full"] }
 bytes = "1"
 scrap = "0.5"
 image = { version = "0.25", default-features = false, features = ["jpeg"] }
+enigo = "0.2"
+serde_json = "1"

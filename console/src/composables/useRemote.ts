@@ -9,11 +9,20 @@ export function useRemote() {
   const status = ref("idle");
   const active = ref(false);
   const connected = ref(false);
+  const canControl = ref(false);
   const screenUrl = ref<string | null>(null);
 
   let ws: WebSocket | null = null;
   let pc: RTCPeerConnection | null = null;
+  let inputCh: RTCDataChannel | null = null;
   let lastUrl: string | null = null;
+
+  /** Send an input event to the agent (no-op until the control channel is open). */
+  function sendInput(event: Record<string, unknown>) {
+    if (inputCh && inputCh.readyState === "open") {
+      inputCh.send(JSON.stringify(event));
+    }
+  }
 
   function connect(backendUrl: string, agentId: string) {
     disconnect();
@@ -66,6 +75,11 @@ export function useRemote() {
         if (s !== "connected") status.value = s;
       };
 
+      // Control channel: we send mouse/keyboard events to the agent.
+      inputCh = pc.createDataChannel("input");
+      inputCh.onopen = () => (canControl.value = true);
+      inputCh.onclose = () => (canControl.value = false);
+
       const ch = pc.createDataChannel("screen");
       ch.binaryType = "arraybuffer";
       ch.onopen = () => (status.value = "streaming");
@@ -86,6 +100,8 @@ export function useRemote() {
   function disconnect() {
     active.value = false;
     connected.value = false;
+    canControl.value = false;
+    inputCh = null;
     if (pc) {
       pc.close();
       pc = null;
@@ -104,5 +120,5 @@ export function useRemote() {
 
   onUnmounted(disconnect);
 
-  return { status, active, connected, screenUrl, connect, disconnect };
+  return { status, active, connected, canControl, screenUrl, connect, disconnect, sendInput };
 }
