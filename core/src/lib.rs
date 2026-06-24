@@ -6,6 +6,10 @@
 //!   connection (SDP offer/answer + ICE) and open a data channel — the
 //!   foundation the screen/video and file/chat channels are built on next.
 
+// `webrtc::Error` is large, which makes our `Error` enum large; boxing it
+// everywhere would hurt `?` ergonomics for little gain here.
+#![allow(clippy::result_large_err)]
+
 pub mod p2p;
 
 // Re-export so downstream crates (agent/console) can name WebRTC types without a
