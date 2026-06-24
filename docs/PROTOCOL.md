@@ -47,14 +47,24 @@ Console                         Backend                          Agent
 `offer` from a peer it has admitted; approval is revoked when the session ends, so
 a reconnect requires fresh consent.
 
-## 2. Data channels — see PLAN.md §7
-- `screen` — JPEG frames (agent → console, ~12 fps). *(VP8/H.264 track later.)*
-- `input` — mouse/keyboard (console → agent). Wire format:
+## 2. Media + data channels — see PLAN.md §7
+- **screen video** — a real **H.264 WebRTC video track** (agent → console). The
+  agent captures the primary display, downscales to ≤1280-wide (even dims),
+  encodes with OpenH264 (one encoder per viewer), and writes samples to the
+  track. The browser adds a `recvonly` video transceiver and plays it in a
+  `<video>`. *(Replaced the old JPEG-over-data-channel.)*
+- `input` — mouse/keyboard data channel (console → agent). Wire format:
   `{t:"m",x,y}` move (normalized 0..1), `{t:"d"/"u",b}` button,
   `{t:"w",dy}` wheel, `{t:"kd"/"ku",k}` key.
 - `files` — chunked transfer (both ways). *(Phase 4.)*
 - `chat` — live messages (both ways). *(Phase 4.)*
 - `control` — monitor list, quality, clipboard, session end. *(later.)*
+
+> **H.264 negotiation notes (webrtc-rs answerer):** the agent registers a
+> **single** H.264 codec (`packetization-mode=1; profile-level-id=42e01f`) and
+> builds its track from that exact capability, and it calls `add_track` **before**
+> `set_remote_description` — otherwise webrtc-rs never binds the sender and emits
+> no RTP. See `core/src/p2p.rs` (`h264_capability`, `make_api`, `answer_streaming`).
 
 ## 3. File transfer framing — defined in Phase 4
 

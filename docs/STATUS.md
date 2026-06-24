@@ -20,7 +20,7 @@ wraps into **Tauri** desktop apps (Agent on machines, Console for the admin).
 | `backend/` | Rust **axum** signaling hub (WS: register / signal / ice) | ✅ works, dockerized |
 | `core/` | Rust lib: signaling client + **webrtc-rs** P2P (`p2p` module) | ✅ verified |
 | `poc/` | CLI to test signaling + P2P | ✅ verified |
-| `agent/` | Rust **lib + headless bin**: capture (`scrap`) → JPEG → WebRTC; input (`enigo`); consent | ✅ verified |
+| `agent/` | Rust **lib + headless bin**: capture (`scrap`) → **H.264** (`openh264`) → WebRTC video; input (`enigo`); consent | ✅ verified |
 | `agent-desktop/` | **Tauri v2** wrap of `agent`: tray + **consent popup window** (Vue) | ✅ builds + runs |
 | `console/` | **Vue 3 + Vite** app, wrapped in **Tauri v2** (`console/src-tauri/`) | ✅ desktop wrap builds + launches |
 | `infra/` | docker-compose (Caddy + backend + coturn), `.env.example` | scaffold |
@@ -42,7 +42,8 @@ wraps into **Tauri** desktop apps (Agent on machines, Console for the admin).
 | 2 | **Remote control** (mouse/keyboard → `enigo`) | ✅ built; user verifying |
 | 3a | **Consent + SSO auth** (connect_request → popup/policy → accept; HS256 ticket) | ✅ built + smoke-tested |
 | 3b | **Tauri** wrapping — console desktop ✅; agent tray + consent popup ✅ | ✅ done |
-| later | VP8/H.264 **video track** (replace JPEG), files, chat, SSH/FTP, fleet, meet | ⏳ |
+| 4a | **H.264 video track** (OpenH264) replaces JPEG-over-data-channel | ✅ verified (decodes in Chrome) |
+| later | files, chat, SSH/FTP, fleet, meet; multi-monitor; coturn | ⏳ |
 
 ## Run it locally (Windows)
 ```bash
@@ -69,16 +70,27 @@ Website: `cd d:\Siri-apps\arna-website && npm run dev` (port 4300).
   revoked on disconnect → reconnect re-asks). See [PROTOCOL.md](PROTOCOL.md) §1/§4.
 - Signaling: Console (browser) is the **offerer**; agent is the **answerer**.
 - Agent builds a **fresh RTCPeerConnection per viewer** (reconnect + multi-viewer safe).
-- Two data channels: `screen` (agent → viewer, JPEG frames ~12fps) and `input`
-  (viewer → agent, JSON mouse/key events; agent injects via `enigo`).
+- **Screen = a real H.264 video track** (agent captures → downscales ≤1280w →
+  OpenH264 → WebRTC track; browser plays it in `<video>`). Replaced JPEG frames.
+- **input** data channel (viewer → agent, JSON mouse/key events; injected via `enigo`).
 - Domains (planned): `arna.ifleon.com` site · `api.arna.ifleon.com` backend ·
   `turn.arna.ifleon.com` coturn. Console launch deep link: `arnaremote://`.
 
 ## Gotchas (important)
 - **Run the agent with `--release`** (debug capture is slow).
 - **Serve the Console over http** (Vite `npm run dev`), never `file://` (WS blocked).
-- **mDNS is enabled** in `core/p2p.rs` (`MulticastDnsMode::QueryAndGather`) — required
-  or Chrome↔webrtc-rs ICE gets stuck at "connecting".
+- **mDNS** in `core/p2p.rs` is now `MulticastDnsMode::QueryOnly` (agent resolves
+  the browser's `.local` candidates but advertises its own real IPs). `QueryAndGather`
+  put a 2nd mDNS responder on the box and made same-machine ICE flaky.
+- **H.264 send gotchas** (cost hours — don't undo): the agent registers a *single*
+  H.264 codec and calls `add_track` **before** `set_remote_description`, or webrtc-rs
+  never binds the sender → zero RTP. `block_in_place` in the encode loop stalled it
+  after one frame; encode inline. See `core/p2p.rs` + `agent/src/lib.rs`.
+- **Single-machine testing:** Chrome hides its host IP behind mDNS, so loopback ICE
+  is flaky (~1 in 3 fails to connect). Launch Chrome with
+  `--disable-features=WebRtcHideLocalIpsWithMdns` for reliable local tests; real
+  two-machine / coturn setups don't have this issue. Verify script:
+  `scripts/video-check.mjs` (needs `playwright` + Chrome).
 - Testing on **one machine** = the remote cursor fights your real cursor; use two PCs.
 - Input wire format (over `input` channel): `{t:"m",x,y}` move (normalized 0..1),
   `{t:"d"/"u",b}` button, `{t:"w",dy}` wheel, `{t:"kd"/"ku",k}` key.

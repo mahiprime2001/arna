@@ -17,7 +17,7 @@ use std::sync::Arc;
 use serde_json::json;
 use tokio::sync::Mutex;
 use webrtc::api::interceptor_registry::register_default_interceptors;
-use webrtc::api::media_engine::MediaEngine;
+use webrtc::api::media_engine::{MediaEngine, MIME_TYPE_H264};
 use webrtc::api::setting_engine::SettingEngine;
 use webrtc::api::{APIBuilder, API};
 use webrtc::data_channel::data_channel_message::DataChannelMessage;
@@ -30,20 +30,64 @@ use webrtc::peer_connection::configuration::RTCConfiguration;
 use webrtc::peer_connection::peer_connection_state::RTCPeerConnectionState;
 use webrtc::peer_connection::sdp::session_description::RTCSessionDescription;
 use webrtc::peer_connection::RTCPeerConnection;
+use webrtc::rtp_transceiver::rtp_codec::{
+    RTCRtpCodecCapability, RTCRtpCodecParameters, RTPCodecType,
+};
+use webrtc::rtp_transceiver::RTCPFeedback;
 
 use crate::{Error, ServerMsg, SignalSender, Signaling};
 
-/// Build a WebRTC API with default codecs + interceptors and mDNS enabled.
+/// The single H.264 video codec the agent streams: constrained-baseline,
+/// packetization-mode 1. The agent's video track **must** be created with this
+/// exact capability so webrtc-rs binds the track to the negotiated codec (an
+/// empty/mismatched fmtp silently produces no RTP).
+pub fn h264_capability() -> RTCRtpCodecCapability {
+    RTCRtpCodecCapability {
+        mime_type: MIME_TYPE_H264.to_owned(),
+        clock_rate: 90_000,
+        channels: 0,
+        sdp_fmtp_line: "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e01f"
+            .to_owned(),
+        rtcp_feedback: vec![
+            RTCPFeedback {
+                typ: "nack".to_owned(),
+                parameter: String::new(),
+            },
+            RTCPFeedback {
+                typ: "nack".to_owned(),
+                parameter: "pli".to_owned(),
+            },
+            RTCPFeedback {
+                typ: "goog-remb".to_owned(),
+                parameter: String::new(),
+            },
+        ],
+    }
+}
+
+/// Build a WebRTC API with mDNS enabled and a **single** H.264 video codec.
 ///
-/// Browsers obfuscate host candidates as mDNS `.local` names; without mDNS,
-/// Chrome <-> webrtc-rs ICE gets stuck at "connecting".
+/// - mDNS: browsers obfuscate host candidates as `.local` names; without it,
+///   Chrome <-> webrtc-rs ICE gets stuck at "connecting".
+/// - One codec: registering only H.264 (matching [`h264_capability`]) keeps the
+///   answer unambiguous so the agent's screen track binds and actually sends.
 fn make_api() -> Result<API, Error> {
     let mut media = MediaEngine::default();
-    media.register_default_codecs()?;
+    media.register_codec(
+        RTCRtpCodecParameters {
+            capability: h264_capability(),
+            payload_type: 102,
+            ..Default::default()
+        },
+        RTPCodecType::Video,
+    )?;
     let mut registry = Registry::new();
     registry = register_default_interceptors(registry, &mut media)?;
     let mut setting = SettingEngine::default();
-    setting.set_ice_multicast_dns_mode(MulticastDnsMode::QueryAndGather);
+    // QueryOnly: resolve the browser's `.local` (mDNS) candidates, but advertise
+    // our own host candidates as real IPs. (QueryAndGather puts a second mDNS
+    // responder on the box, which makes same-machine ICE flaky.)
+    setting.set_ice_multicast_dns_mode(MulticastDnsMode::QueryOnly);
     Ok(APIBuilder::new()
         .with_setting_engine(setting)
         .with_media_engine(media)
@@ -101,6 +145,15 @@ pub enum Consent {
 pub type ConsentFn =
     Arc<dyn Fn(ConnectRequest) -> Pin<Box<dyn Future<Output = Consent> + Send>> + Send + Sync>;
 
+/// Called for each admitted peer connection (after the remote offer is set, before
+/// the answer is created) so the agent can attach media tracks — e.g. the screen
+/// video track — to it. Keeps codec/capture concerns out of `core`.
+pub type OnPeer = Arc<
+    dyn Fn(Arc<RTCPeerConnection>, String) -> Pin<Box<dyn Future<Output = ()> + Send>>
+        + Send
+        + Sync,
+>;
+
 // ---------------------------------------------------------------------------
 // Streaming answerer (the agent)
 // ---------------------------------------------------------------------------
@@ -116,6 +169,7 @@ pub async fn answer_streaming(
     mut signaling: Signaling,
     tag: String,
     consent: ConsentFn,
+    on_peer: OnPeer,
     on_channel: Arc<dyn Fn(Arc<RTCDataChannel>) + Send + Sync>,
 ) -> Result<(), Error> {
     let api = make_api()?;
@@ -227,6 +281,12 @@ pub async fn answer_streaming(
                     }));
                 }
 
+                // Attach the agent's screen video track *before* applying the
+                // remote offer. webrtc-rs only marks a sender "negotiated" (and
+                // later binds it) when generating the answer for a transceiver it
+                // can match by mid; adding the track first makes that matching
+                // reliable, otherwise the sender never binds and emits no RTP.
+                on_peer(pc.clone(), from.clone()).await;
                 pc.set_remote_description(RTCSessionDescription::offer(sdp)?)
                     .await?;
                 let answer = pc.create_answer(None).await?;

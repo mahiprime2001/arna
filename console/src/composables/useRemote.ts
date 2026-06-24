@@ -10,14 +10,14 @@ export function useRemote() {
   const active = ref(false);
   const connected = ref(false);
   const canControl = ref(false);
-  const screenUrl = ref<string | null>(null);
+  /** The remote screen as a live H.264 video track (bind to a <video>). */
+  const videoStream = ref<MediaStream | null>(null);
   /** One-time session code echoed back by the agent on accept (display only). */
   const sessionCode = ref<string | null>(null);
 
   let ws: WebSocket | null = null;
   let pc: RTCPeerConnection | null = null;
   let inputCh: RTCDataChannel | null = null;
-  let lastUrl: string | null = null;
 
   /** Send an input event to the agent (no-op until the control channel is open). */
   function sendInput(event: Record<string, unknown>) {
@@ -90,21 +90,17 @@ export function useRemote() {
         if (s !== "connected") status.value = s;
       };
 
+      // The agent sends the screen as an H.264 video track.
+      pc.addTransceiver("video", { direction: "recvonly" });
+      pc.ontrack = (e) => {
+        videoStream.value = e.streams[0] ?? new MediaStream([e.track]);
+        status.value = "streaming";
+      };
+
       // Control channel: we send mouse/keyboard events to the agent.
       inputCh = pc.createDataChannel("input");
       inputCh.onopen = () => (canControl.value = true);
       inputCh.onclose = () => (canControl.value = false);
-
-      const ch = pc.createDataChannel("screen");
-      ch.binaryType = "arraybuffer";
-      ch.onopen = () => (status.value = "streaming");
-      ch.onmessage = (ev) => {
-        const blob = new Blob([ev.data], { type: "image/jpeg" });
-        const url = URL.createObjectURL(blob);
-        if (lastUrl) URL.revokeObjectURL(lastUrl);
-        lastUrl = url;
-        screenUrl.value = url;
-      };
 
       const off = await pc.createOffer();
       await pc.setLocalDescription(off);
@@ -125,16 +121,12 @@ export function useRemote() {
       ws.close();
       ws = null;
     }
-    if (lastUrl) {
-      URL.revokeObjectURL(lastUrl);
-      lastUrl = null;
-    }
-    screenUrl.value = null;
+    videoStream.value = null;
     sessionCode.value = null;
     status.value = "idle";
   }
 
   onUnmounted(disconnect);
 
-  return { status, active, connected, canControl, screenUrl, sessionCode, connect, disconnect, sendInput };
+  return { status, active, connected, canControl, videoStream, sessionCode, connect, disconnect, sendInput };
 }

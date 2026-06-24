@@ -1,15 +1,21 @@
 <script setup lang="ts">
-import { computed, ref } from "vue";
+import { computed, nextTick, ref, watch } from "vue";
 import { useRemote } from "./composables/useRemote";
 
 const backend = ref("ws://127.0.0.1:8081/ws");
 const agentId = ref("agent-1");
 const ticket = ref("");
-const { status, active, connected, canControl, screenUrl, sessionCode, connect, disconnect, sendInput } = useRemote();
+const { status, active, connected, canControl, videoStream, sessionCode, connect, disconnect, sendInput } = useRemote();
 
-const imgEl = ref<HTMLImageElement | null>(null);
+const videoEl = ref<HTMLVideoElement | null>(null);
 const screenEl = ref<HTMLDivElement | null>(null);
 let lastMove = 0;
+
+// The <video> is rendered only once a stream arrives, so attach after render.
+watch(videoStream, async (s) => {
+  await nextTick();
+  if (videoEl.value) videoEl.value.srcObject = s;
+});
 
 function toggle() {
   if (active.value) disconnect();
@@ -24,14 +30,14 @@ const dotClass = computed(() => {
   return "bg-amber-400 animate-pulse";
 });
 
-/** Mouse position normalized to the image content (0..1), or null if outside. */
+/** Mouse position normalized to the video content (0..1), or null if outside. */
 function norm(e: MouseEvent): { x: number; y: number } | null {
-  const img = imgEl.value;
-  if (!img || !img.naturalWidth || !img.naturalHeight) return null;
-  const rect = img.getBoundingClientRect();
-  const scale = Math.min(rect.width / img.naturalWidth, rect.height / img.naturalHeight);
-  const dispW = img.naturalWidth * scale;
-  const dispH = img.naturalHeight * scale;
+  const v = videoEl.value;
+  if (!v || !v.videoWidth || !v.videoHeight) return null;
+  const rect = v.getBoundingClientRect();
+  const scale = Math.min(rect.width / v.videoWidth, rect.height / v.videoHeight);
+  const dispW = v.videoWidth * scale;
+  const dispH = v.videoHeight * scale;
   const offX = (rect.width - dispW) / 2;
   const offY = (rect.height - dispH) / 2;
   const x = (e.clientX - rect.left - offX) / dispW;
@@ -143,18 +149,18 @@ function onKeyUp(e: KeyboardEvent) {
       ref="screenEl"
       tabindex="0"
       class="relative grid flex-1 place-items-center overflow-hidden bg-black/40 outline-none"
-      :class="{ 'cursor-none': canControl && screenUrl }"
+      :class="{ 'cursor-none': canControl && videoStream }"
       @keydown="onKeyDown"
       @keyup="onKeyUp"
       @contextmenu="onContextMenu"
     >
-      <img
-        v-if="screenUrl"
-        ref="imgEl"
-        :src="screenUrl"
-        alt="remote screen"
+      <video
+        v-if="videoStream"
+        ref="videoEl"
+        autoplay
+        playsinline
+        muted
         class="max-h-full max-w-full object-contain"
-        draggable="false"
         @mousemove="onMouseMove"
         @mousedown="onMouseDown"
         @mouseup="onMouseUp"
