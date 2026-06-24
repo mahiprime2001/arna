@@ -20,15 +20,17 @@ wraps into **Tauri** desktop apps (Agent on machines, Console for the admin).
 | `backend/` | Rust **axum** signaling hub (WS: register / signal / ice) | ✅ works, dockerized |
 | `core/` | Rust lib: signaling client + **webrtc-rs** P2P (`p2p` module) | ✅ verified |
 | `poc/` | CLI to test signaling + P2P | ✅ verified |
-| `agent/` | Rust: screen capture (`scrap`) → JPEG (`image`) → WebRTC; input injection (`enigo`) | ✅ verified |
+| `agent/` | Rust **lib + headless bin**: capture (`scrap`) → JPEG → WebRTC; input (`enigo`); consent | ✅ verified |
+| `agent-desktop/` | **Tauri v2** wrap of `agent`: tray + **consent popup window** (Vue) | ✅ builds + runs |
 | `console/` | **Vue 3 + Vite** app, wrapped in **Tauri v2** (`console/src-tauri/`) | ✅ desktop wrap builds + launches |
 | `infra/` | docker-compose (Caddy + backend + coturn), `.env.example` | scaffold |
 | `.github/workflows/` | `backend`, `core`, `console`, `release` (tag-driven) | ✅ green |
 | `docs/` | `PLAN.md`, `PROTOCOL.md`, `RELEASING.md`, this file | — |
 
-> `backend` and `console/src-tauri` are **excluded** from the Cargo workspace
-> (`members = core, poc, agent`): backend builds standalone in Docker, and the
-> Tauri CLI manages `console/src-tauri` as its own crate.
+> `backend` and the Tauri shells (`console/src-tauri`, `agent-desktop/src-tauri`)
+> are **excluded** from the Cargo workspace (`members = core, poc, agent`): backend
+> builds standalone in Docker, and the Tauri CLI manages the shells as their own
+> crates. `agent-desktop/src-tauri` depends on the `agent` crate by path.
 
 ## Phase progress
 | Phase | What | Status |
@@ -39,7 +41,7 @@ wraps into **Tauri** desktop apps (Agent on machines, Console for the admin).
 | 1c | **See the remote screen** (capture→JPEG→WebRTC→browser) | ✅ verified (user saw it live) |
 | 2 | **Remote control** (mouse/keyboard → `enigo`) | ✅ built; user verifying |
 | 3a | **Consent + SSO auth** (connect_request → popup/policy → accept; HS256 ticket) | ✅ built + smoke-tested |
-| 3b | **Tauri** wrapping — console desktop ✅ (builds + launches); agent tray + consent window ⏳ | 🔧 in progress |
+| 3b | **Tauri** wrapping — console desktop ✅; agent tray + consent popup ✅ | ✅ done |
 | later | VP8/H.264 **video track** (replace JPEG), files, chat, SSH/FTP, fleet, meet | ⏳ |
 
 ## Run it locally (Windows)
@@ -48,12 +50,13 @@ cd d:\Siri-apps\arna-remote
 cargo build --release -p arna-agent
 # 1) backend
 cargo run --manifest-path backend/Cargo.toml          # ws://127.0.0.1:8081/ws , GET /health
-# 2) agent (shares this screen)
+# 2) agent — headless (auto-consent, fast for 2-machine testing) ...
 cargo run -p arna-agent --release -- ws://127.0.0.1:8081/ws agent-1
+#    ... OR the desktop app: tray + a real Accept/Decline consent popup
+cd agent-desktop && npm install && npm run tauri:dev
 # 3) console — browser (fast dev) OR desktop app
 cd console && npm install && npm run dev              # http://localhost:4310  (Agent id = agent-1)
-#   or the Tauri desktop window around the same frontend:
-cd console && npm run tauri:dev
+cd console && npm run tauri:dev                       #   or the Tauri desktop window
 ```
 Website: `cd d:\Siri-apps\arna-website && npm run dev` (port 4300).
 
@@ -81,20 +84,22 @@ Website: `cd d:\Siri-apps\arna-website && npm run dev` (port 4300).
   `{t:"d"/"u",b}` button, `{t:"w",dy}` wheel, `{t:"kd"/"ku",k}` key.
 
 ## Consent + auth config (Phase 3a)
-- **Agent** `ARNA_CONSENT` = `accept` (default) · `prompt` (terminal y/N) · `decline`.
+- **Headless agent** `ARNA_CONSENT` = `accept` (default) · `prompt` (terminal y/N)
+  · `decline`. The **desktop agent** (`agent-desktop`) ignores this and shows the
+  real Accept/Decline popup instead (`ARNA_BACKEND` / `ARNA_AGENT_ID` configure it).
 - **Backend** `ARNA_SSO_SECRET` (HS256 secret; unset = open dev mode) and, for
   testing, `ARNA_DEV_TICKETS=1` → `GET /dev/ticket?agent=<id>&name=<n>` mints a
   5-min ticket. Console has an optional **Ticket** field (paste the dev JWT).
 - Smoke test (signaling-level, no GUI): `node scripts/smoke-consent.mjs` (open
   mode) or `SSO=1 node scripts/smoke-consent.mjs` against an SSO-enabled backend.
 
-## Next steps (Phase 3b+)
-1. **Tauri wrap**: turn `agent/` and `console/` into Tauri apps. Console reuses the
-   existing Vue frontend; Agent gets a tray + the real consent **popup window**
-   (replaces the `ARNA_CONSENT` policy with `Accept/Decline` + code UI).
-2. **Video track**: replace JPEG-over-data-channel with a real VP8/H.264 track.
-3. Then: files, chat, SSH/FTP, fleet health + remote commands, meet.
+## Next steps (Phase 4+)
+1. **Video track**: replace JPEG-over-data-channel with a real VP8/H.264 track.
+2. **Files + chat** (Phase 4): `files` (chunked drag-drop) and `chat` data channels.
+3. Then: SSH/FTP, fleet health + remote commands, meet.
+4. **Hardening** (Phase 5): multi-monitor, reconnect, run-as-service/SYSTEM (UAC),
+   signed installers, deep link (`arnaremote://`), audit log, coturn deploy.
 
-Known limitations: view+control only; consent is **policy/terminal** until the
-Tauri popup lands; no UAC/secure-desktop control (needs SYSTEM service); coturn not
-deployed yet (P2P/STUN only).
+Known limitations: view+control only; the agent popup is verified to appear, but
+end-to-end Accept→stream is best confirmed on two machines; no UAC/secure-desktop
+control (needs SYSTEM service); coturn not deployed yet (P2P/STUN only).
