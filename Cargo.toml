@@ -1,7 +1,8 @@
 # Workspace for the Arna apps/libraries.
-# The `backend` crate is intentionally excluded so it keeps building standalone
-# in its own Docker image (its build context is just backend/).
+# `backend` is excluded so it keeps building standalone in its own Docker image
+# (its build context is just backend/). `console/src-tauri` is excluded because
+# the Tauri CLI manages it as its own crate.
 [workspace]
 resolver = "2"
 members = ["core", "poc", "agent"]
-exclude = ["backend"]
+exclude = ["backend", "console/src-tauri"]

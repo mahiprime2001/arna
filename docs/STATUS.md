@@ -21,13 +21,14 @@ wraps into **Tauri** desktop apps (Agent on machines, Console for the admin).
 | `core/` | Rust lib: signaling client + **webrtc-rs** P2P (`p2p` module) | ✅ verified |
 | `poc/` | CLI to test signaling + P2P | ✅ verified |
 | `agent/` | Rust: screen capture (`scrap`) → JPEG (`image`) → WebRTC; input injection (`enigo`) | ✅ verified |
-| `console/` | **Vue 3 + Vite** app (becomes the Tauri Console) | ✅ works |
+| `console/` | **Vue 3 + Vite** app, wrapped in **Tauri v2** (`console/src-tauri/`) | ✅ desktop wrap builds + launches |
 | `infra/` | docker-compose (Caddy + backend + coturn), `.env.example` | scaffold |
 | `.github/workflows/` | `backend`, `core`, `console`, `release` (tag-driven) | ✅ green |
 | `docs/` | `PLAN.md`, `PROTOCOL.md`, `RELEASING.md`, this file | — |
 
-> `backend` is **excluded** from the Cargo workspace (`members = core, poc, agent`)
-> so its Docker image builds standalone.
+> `backend` and `console/src-tauri` are **excluded** from the Cargo workspace
+> (`members = core, poc, agent`): backend builds standalone in Docker, and the
+> Tauri CLI manages `console/src-tauri` as its own crate.
 
 ## Phase progress
 | Phase | What | Status |
@@ -38,7 +39,7 @@ wraps into **Tauri** desktop apps (Agent on machines, Console for the admin).
 | 1c | **See the remote screen** (capture→JPEG→WebRTC→browser) | ✅ verified (user saw it live) |
 | 2 | **Remote control** (mouse/keyboard → `enigo`) | ✅ built; user verifying |
 | 3a | **Consent + SSO auth** (connect_request → popup/policy → accept; HS256 ticket) | ✅ built + smoke-tested |
-| 3b | **Tauri** wrapping (agent tray + consent window; console desktop) | ⏳ next |
+| 3b | **Tauri** wrapping — console desktop ✅ (builds + launches); agent tray + consent window ⏳ | 🔧 in progress |
 | later | VP8/H.264 **video track** (replace JPEG), files, chat, SSH/FTP, fleet, meet | ⏳ |
 
 ## Run it locally (Windows)
@@ -49,8 +50,10 @@ cargo build --release -p arna-agent
 cargo run --manifest-path backend/Cargo.toml          # ws://127.0.0.1:8081/ws , GET /health
 # 2) agent (shares this screen)
 cargo run -p arna-agent --release -- ws://127.0.0.1:8081/ws agent-1
-# 3) console
+# 3) console — browser (fast dev) OR desktop app
 cd console && npm install && npm run dev              # http://localhost:4310  (Agent id = agent-1)
+#   or the Tauri desktop window around the same frontend:
+cd console && npm run tauri:dev
 ```
 Website: `cd d:\Siri-apps\arna-website && npm run dev` (port 4300).
 
