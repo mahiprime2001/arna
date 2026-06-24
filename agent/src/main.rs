@@ -5,7 +5,7 @@
 //!
 //!   # backend:  cargo run --manifest-path backend/Cargo.toml
 //!   # agent:    cargo run -p arna-agent --release -- ws://127.0.0.1:8081/ws agent-1
-//!   # viewer:   open console/viewer.html in a browser, agent id = agent-1
+//!   # console:  cd console && npm install && npm run dev  ->  http://localhost:4310
 //!
 //! (Run the agent with --release for smooth capture.)
 
