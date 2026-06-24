@@ -14,9 +14,11 @@ use serde_json::json;
 use tokio::sync::Mutex;
 use webrtc::api::interceptor_registry::register_default_interceptors;
 use webrtc::api::media_engine::MediaEngine;
+use webrtc::api::setting_engine::SettingEngine;
 use webrtc::api::APIBuilder;
 use webrtc::data_channel::data_channel_message::DataChannelMessage;
 use webrtc::data_channel::RTCDataChannel;
+use webrtc::ice::mdns::MulticastDnsMode;
 use webrtc::ice_transport::ice_candidate::RTCIceCandidateInit;
 use webrtc::ice_transport::ice_server::RTCIceServer;
 use webrtc::interceptor::registry::Registry;
@@ -48,7 +50,15 @@ async fn build_pc(
     media.register_default_codecs()?;
     let mut registry = Registry::new();
     registry = register_default_interceptors(registry, &mut media)?;
+
+    // Browsers (Chrome/Edge) obfuscate their host candidates as mDNS `.local`
+    // names. Enable mDNS so the agent can both gather and resolve those — without
+    // this, Chrome <-> webrtc-rs ICE gets stuck at "connecting".
+    let mut setting = SettingEngine::default();
+    setting.set_ice_multicast_dns_mode(MulticastDnsMode::QueryAndGather);
+
     let api = APIBuilder::new()
+        .with_setting_engine(setting)
         .with_media_engine(media)
         .with_interceptor_registry(registry)
         .build();
