@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from "vue";
 import { useRemote } from "./composables/useRemote";
+import Icon from "./components/Icon.vue";
 
 const backend = ref("ws://127.0.0.1:8081/ws");
 const agentId = ref("agent-1");
@@ -65,6 +66,34 @@ const dotClass = computed(() => {
   return "bg-amber-400 animate-pulse";
 });
 
+/** Which screen to show: the connection panel, the connecting state, or the live video. */
+const phase = computed<"idle" | "connecting" | "live">(() => {
+  if (videoStream.value) return "live";
+  if (active.value) return "connecting";
+  return "idle";
+});
+
+/** True when the last status reflects a failure the user should see on the panel. */
+const isError = computed(() => {
+  const s = status.value;
+  return (
+    s.includes("error") ||
+    s.includes("offline") ||
+    s.includes("declined") ||
+    s.includes("denied") ||
+    s === "disconnected"
+  );
+});
+
+/** Friendly one-liner for the connecting state, derived from the raw status. */
+const connectingLabel = computed(() => {
+  const s = status.value;
+  if (s.startsWith("requesting")) return "Waiting for the remote PC to accept…";
+  if (s.startsWith("accepted")) return "Accepted — starting the video…";
+  if (s === "connecting" || s === "checking" || s === "new") return "Establishing a secure connection…";
+  return s.charAt(0).toUpperCase() + s.slice(1);
+});
+
 /** Mouse position normalized to the video content (0..1), or null if outside. */
 function norm(e: MouseEvent): { x: number; y: number } | null {
   const v = videoEl.value;
@@ -121,80 +150,75 @@ function onKeyUp(e: KeyboardEvent) {
 </script>
 
 <template>
-  <div class="flex h-full flex-col">
-    <!-- Top bar -->
-    <header class="flex flex-wrap items-center gap-3 border-b border-edge bg-panel px-4 py-3">
-      <div class="flex items-center gap-2">
-        <span class="inline-block h-6 w-6 rounded-md bg-gradient-to-br from-accent to-accent2" />
-        <span class="text-lg font-semibold tracking-tight">Arna Console</span>
+  <div class="flex h-full flex-col bg-ink text-slate-200">
+    <!-- ── Top bar ─────────────────────────────────────────────────────── -->
+    <header
+      class="flex h-14 shrink-0 items-center gap-3 border-b border-edge/80 bg-panel/80 px-4 backdrop-blur"
+    >
+      <div class="flex items-center gap-2.5">
+        <span
+          class="grid h-7 w-7 place-items-center rounded-lg bg-gradient-to-br from-accent to-accent2 shadow-[0_2px_10px_-2px] shadow-accent/50"
+        >
+          <Icon name="monitor" class="h-4 w-4 text-white" />
+        </span>
+        <div class="leading-none">
+          <div class="text-[15px] font-semibold tracking-tight text-slate-100">Arna</div>
+          <div class="mt-0.5 text-[10px] font-medium uppercase tracking-[0.15em] text-slate-500">Console</div>
+        </div>
       </div>
 
-      <div class="mx-2 hidden h-6 w-px bg-edge sm:block" />
+      <!-- Live session info -->
+      <template v-if="phase === 'live'">
+        <div class="mx-1 h-6 w-px bg-edge" />
+        <div class="flex items-center gap-2">
+          <span class="h-2 w-2 rounded-full" :class="dotClass" />
+          <span class="font-mono text-sm text-slate-300">{{ agentId }}</span>
+        </div>
+      </template>
 
-      <label class="flex items-center gap-2 text-sm text-slate-400">
-        Backend
-        <input
-          v-model="backend"
-          :disabled="active"
-          class="w-56 rounded-md border border-edge bg-ink px-2 py-1.5 text-slate-100 outline-none focus:border-accent disabled:opacity-50"
-        />
-      </label>
+      <div class="ml-auto flex items-center gap-2">
+        <span v-if="uploadStatus" class="hidden text-xs text-slate-400 sm:inline">{{ uploadStatus }}</span>
 
-      <label class="flex items-center gap-2 text-sm text-slate-400">
-        Agent
-        <input
-          v-model="agentId"
-          :disabled="active"
-          class="w-32 rounded-md border border-edge bg-ink px-2 py-1.5 text-slate-100 outline-none focus:border-accent disabled:opacity-50"
-        />
-      </label>
+        <span
+          v-if="sessionCode && phase === 'live'"
+          class="flex items-center gap-1.5 rounded-full border border-edge bg-ink/60 px-2.5 py-1 font-mono text-xs text-slate-300"
+          title="Session code"
+        >
+          <Icon name="shield" class="h-3.5 w-3.5 text-slate-500" />{{ sessionCode }}
+        </span>
 
-      <label class="flex items-center gap-2 text-sm text-slate-400">
-        Ticket
-        <input
-          v-model="ticket"
-          :disabled="active"
-          placeholder="SSO (optional)"
-          class="w-40 rounded-md border border-edge bg-ink px-2 py-1.5 text-slate-100 outline-none focus:border-accent disabled:opacity-50"
-        />
-      </label>
+        <span
+          v-if="canControl"
+          class="flex items-center gap-1.5 rounded-full bg-accent/15 px-2.5 py-1 text-xs font-semibold text-accent2"
+        >
+          <Icon name="keyboard" class="h-3.5 w-3.5" /> control
+        </span>
 
-      <button
-        class="rounded-md px-4 py-1.5 text-sm font-semibold transition"
-        :class="active ? 'bg-rose-500/90 hover:bg-rose-500 text-white' : 'bg-accent hover:opacity-90 text-white'"
-        @click="toggle"
-      >
-        {{ active ? "Disconnect" : "Connect" }}
-      </button>
-
-      <button
-        v-if="canSendFiles"
-        class="rounded-md border border-edge px-3 py-1.5 text-sm font-medium text-slate-200 transition hover:bg-ink"
-        @click="pickFile"
-      >
-        Send file
-      </button>
+        <template v-if="phase === 'live'">
+          <button
+            v-if="canSendFiles"
+            class="flex items-center gap-1.5 rounded-lg border border-edge bg-ink/50 px-3 py-1.5 text-sm font-medium text-slate-200 transition hover:border-slate-600 hover:bg-ink focus-visible:ring-2 focus-visible:ring-accent"
+            @click="pickFile"
+          >
+            <Icon name="upload" class="h-4 w-4" /> Send file
+          </button>
+          <button
+            class="flex items-center gap-1.5 rounded-lg bg-rose-500/90 px-3 py-1.5 text-sm font-semibold text-white transition hover:bg-rose-500 focus-visible:ring-2 focus-visible:ring-rose-400"
+            @click="toggle"
+          >
+            <Icon name="x" class="h-4 w-4" /> End
+          </button>
+        </template>
+      </div>
       <input ref="fileInput" type="file" class="hidden" @change="onFileChosen" />
-
-      <div class="ml-auto flex items-center gap-2 text-sm">
-        <span v-if="uploadStatus" class="text-xs text-slate-400">{{ uploadStatus }}</span>
-        <span v-if="sessionCode" class="rounded-full bg-slate-700/60 px-2.5 py-0.5 font-mono text-xs text-slate-200">
-          code {{ sessionCode }}
-        </span>
-        <span v-if="canControl" class="rounded-full bg-accent/15 px-2.5 py-0.5 text-xs font-semibold text-accent2">
-          control
-        </span>
-        <span class="h-2.5 w-2.5 rounded-full" :class="dotClass" />
-        <span class="font-mono text-slate-400">{{ status }}</span>
-      </div>
     </header>
 
-    <!-- Screen area (focusable so it can capture keystrokes) -->
+    <!-- ── Stage ───────────────────────────────────────────────────────── -->
     <main
       ref="screenEl"
       tabindex="0"
-      class="relative grid flex-1 place-items-center overflow-hidden bg-black/40 outline-none"
-      :class="{ 'cursor-none': canControl && videoStream }"
+      class="relative grid flex-1 place-items-center overflow-hidden bg-ink outline-none"
+      :class="{ 'cursor-none': canControl && videoStream, 'stage-grid': phase !== 'live' }"
       @keydown="onKeyDown"
       @keyup="onKeyUp"
       @contextmenu="onContextMenu"
@@ -205,49 +229,141 @@ function onKeyUp(e: KeyboardEvent) {
       <!-- Upload progress -->
       <div
         v-if="uploadProgress > 0 && uploadProgress < 1"
-        class="pointer-events-none absolute left-0 right-0 top-0 z-20 h-1 bg-edge"
+        class="pointer-events-none absolute inset-x-0 top-0 z-30 h-0.5 bg-edge"
       >
-        <div class="h-full bg-accent transition-[width]" :style="{ width: uploadProgress * 100 + '%' }" />
+        <div class="h-full bg-accent transition-[width] duration-150" :style="{ width: uploadProgress * 100 + '%' }" />
       </div>
 
       <!-- Drag-to-send overlay -->
       <div
         v-if="dragOver && canSendFiles"
-        class="pointer-events-none absolute inset-3 z-20 grid place-items-center rounded-xl border-2 border-dashed border-accent/70 bg-ink/70 text-slate-200"
+        class="pointer-events-none absolute inset-4 z-30 grid place-items-center rounded-2xl border-2 border-dashed border-accent/70 bg-ink/80 backdrop-blur-sm"
       >
         <div class="text-center">
-          <div class="mb-1 text-3xl">📁</div>
-          <p class="font-medium">Drop to send to the remote PC</p>
+          <Icon name="upload" class="mx-auto mb-2 h-8 w-8 text-accent2" />
+          <p class="font-medium text-slate-100">Drop to send to the remote PC</p>
         </div>
       </div>
-      <video
-        v-if="videoStream"
-        ref="videoEl"
-        autoplay
-        playsinline
-        muted
-        class="max-h-full max-w-full object-contain"
-        @mousemove="onMouseMove"
-        @mousedown="onMouseDown"
-        @mouseup="onMouseUp"
-        @wheel="onWheel"
-      />
-      <div v-else class="px-6 text-center text-slate-500">
-        <div class="mb-3 text-5xl">🖥️</div>
-        <p v-if="!active" class="font-medium">Not connected</p>
-        <p v-else class="font-medium">Connecting to <span class="font-mono">{{ agentId }}</span>…</p>
-        <p class="mt-1 text-sm">
-          Start the backend and an agent, then click <span class="text-slate-300">Connect</span>.
+
+      <!-- LIVE: the remote screen -->
+      <template v-if="phase === 'live'">
+        <video
+          ref="videoEl"
+          autoplay
+          playsinline
+          muted
+          class="max-h-full max-w-full object-contain"
+          @mousemove="onMouseMove"
+          @mousedown="onMouseDown"
+          @mouseup="onMouseUp"
+          @wheel="onWheel"
+        />
+        <div
+          class="pointer-events-none absolute right-4 top-4 z-20 flex items-center gap-2 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-3 py-1 text-xs font-semibold text-emerald-300 backdrop-blur"
+        >
+          <span class="h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-400" /> LIVE
+        </div>
+        <div
+          v-if="canControl"
+          class="pointer-events-none absolute bottom-4 left-1/2 z-20 -translate-x-1/2 rounded-full border border-edge/80 bg-panel/80 px-3.5 py-1.5 text-xs text-slate-400 backdrop-blur"
+        >
+          Click to control · keystrokes are forwarded
+        </div>
+      </template>
+
+      <!-- CONNECTING -->
+      <div v-else-if="phase === 'connecting'" class="flex flex-col items-center gap-5 px-6 text-center">
+        <div class="relative grid h-16 w-16 place-items-center">
+          <span class="absolute inset-0 animate-spin rounded-full border-2 border-edge border-t-accent" />
+          <Icon name="monitor" class="h-6 w-6 text-slate-400" />
+        </div>
+        <div>
+          <p class="text-base font-medium text-slate-100">{{ connectingLabel }}</p>
+          <p class="mt-1 font-mono text-sm text-slate-500">{{ agentId }}</p>
+        </div>
+        <p
+          v-if="sessionCode"
+          class="rounded-lg border border-edge bg-panel px-3 py-2 text-sm text-slate-400"
+        >
+          If asked for a code, share <span class="font-mono font-semibold text-accent2">{{ sessionCode }}</span>
         </p>
+        <button
+          class="rounded-lg border border-edge px-4 py-2 text-sm font-medium text-slate-300 transition hover:bg-panel focus-visible:ring-2 focus-visible:ring-accent"
+          @click="toggle"
+        >
+          Cancel
+        </button>
       </div>
 
-      <div
-        v-if="connected"
-        class="pointer-events-none absolute right-3 top-3 flex items-center gap-2 rounded-full bg-emerald-500/15 px-3 py-1 text-xs font-semibold text-emerald-300"
-      >
-        ● live
-        <span v-if="canControl" class="text-slate-300">· click screen to control</span>
+      <!-- IDLE: connection panel -->
+      <div v-else class="w-full max-w-md px-6">
+        <div class="rounded-2xl border border-edge bg-panel/90 p-7 shadow-2xl shadow-black/40">
+          <div class="mb-5 flex items-center gap-3">
+            <span class="grid h-11 w-11 place-items-center rounded-xl bg-accent/10 text-accent2 ring-1 ring-inset ring-accent/20">
+              <Icon name="monitor" class="h-5 w-5" />
+            </span>
+            <div>
+              <h1 class="text-lg font-semibold tracking-tight text-slate-100">Connect to a machine</h1>
+              <p class="text-sm text-slate-500">Enter the agent ID to start a remote session.</p>
+            </div>
+          </div>
+
+          <div
+            v-if="isError"
+            class="mb-4 flex items-start gap-2 rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-sm text-rose-300"
+          >
+            <span class="mt-0.5 h-1.5 w-1.5 shrink-0 rounded-full bg-rose-400" />
+            <span class="capitalize">{{ status }}</span>
+          </div>
+
+          <form class="space-y-3.5" @submit.prevent="toggle">
+            <div>
+              <label class="mb-1 block text-xs font-medium text-slate-400">Agent ID</label>
+              <input
+                v-model="agentId"
+                placeholder="agent-1"
+                class="w-full rounded-lg border border-edge bg-ink px-3 py-2.5 text-slate-100 outline-none transition placeholder:text-slate-600 focus:border-accent focus:ring-2 focus:ring-accent/30"
+              />
+            </div>
+            <div>
+              <label class="mb-1 block text-xs font-medium text-slate-400">Signaling server</label>
+              <input
+                v-model="backend"
+                class="w-full rounded-lg border border-edge bg-ink px-3 py-2.5 font-mono text-sm text-slate-300 outline-none transition focus:border-accent focus:ring-2 focus:ring-accent/30"
+              />
+            </div>
+            <div>
+              <label class="mb-1 block text-xs font-medium text-slate-400">
+                SSO ticket <span class="text-slate-600">· optional</span>
+              </label>
+              <input
+                v-model="ticket"
+                placeholder="paste a signed ticket if required"
+                class="w-full rounded-lg border border-edge bg-ink px-3 py-2.5 text-sm text-slate-300 outline-none transition placeholder:text-slate-600 focus:border-accent focus:ring-2 focus:ring-accent/30"
+              />
+            </div>
+            <button
+              type="submit"
+              class="mt-1 flex w-full items-center justify-center gap-2 rounded-lg bg-accent px-4 py-2.5 text-sm font-semibold text-white shadow-lg shadow-accent/25 transition hover:bg-accent/90 focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-panel"
+            >
+              <Icon name="power" class="h-4 w-4" /> Connect
+              <Icon name="arrowRight" class="h-4 w-4 opacity-70" />
+            </button>
+          </form>
+        </div>
+        <p class="mt-4 text-center text-xs text-slate-600">
+          The remote PC must accept the connection before the screen appears.
+        </p>
       </div>
     </main>
   </div>
 </template>
+
+<style scoped>
+/* Subtle dotted grid behind the connection / connecting states. */
+.stage-grid {
+  background-image: radial-gradient(circle at center, rgba(109, 94, 252, 0.07), transparent 60%),
+    radial-gradient(rgba(255, 255, 255, 0.035) 1px, transparent 1px);
+  background-size: 100% 100%, 22px 22px;
+}
+</style>
