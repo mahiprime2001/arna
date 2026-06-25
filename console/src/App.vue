@@ -1,11 +1,41 @@
 <script setup lang="ts">
-import { computed, nextTick, ref, watch } from "vue";
+import { computed, nextTick, onMounted, ref, watch } from "vue";
 import { useRemote } from "./composables/useRemote";
 import Icon from "./components/Icon.vue";
 
-const backend = ref("ws://127.0.0.1:8081/ws");
-const agentId = ref("agent-1");
+// Remember the server/agent and recent machines so you don't retype them.
+const STORE_KEY = "arna.console";
+type Store = { backend?: string; agentId?: string; recents?: string[] };
+function loadStore(): Store {
+  try {
+    return JSON.parse(localStorage.getItem(STORE_KEY) || "{}");
+  } catch {
+    return {};
+  }
+}
+const saved = loadStore();
+
+const backend = ref(saved.backend || "ws://127.0.0.1:8081/ws");
+const agentId = ref(saved.agentId || "agent-1");
 const ticket = ref("");
+const recents = ref<string[]>(saved.recents || []);
+
+function persist() {
+  try {
+    localStorage.setItem(
+      STORE_KEY,
+      JSON.stringify({ backend: backend.value, agentId: agentId.value, recents: recents.value }),
+    );
+  } catch {
+    /* storage unavailable — fine */
+  }
+}
+function rememberAgent(id: string) {
+  if (!id) return;
+  recents.value = [id, ...recents.value.filter((x) => x !== id)].slice(0, 5);
+}
+/** Recently-used agents other than the one currently in the field. */
+const recentOthers = computed(() => recents.value.filter((r) => r !== agentId.value.trim()));
 const {
   status,
   active,
@@ -56,8 +86,14 @@ watch(videoStream, async (s) => {
 });
 
 function toggle() {
-  if (active.value) disconnect();
-  else connect(backend.value.trim(), agentId.value.trim(), ticket.value.trim());
+  if (active.value) {
+    disconnect();
+    return;
+  }
+  const id = agentId.value.trim();
+  rememberAgent(id);
+  persist();
+  connect(backend.value.trim(), id, ticket.value.trim());
 }
 
 const dotClass = computed(() => {
@@ -82,6 +118,18 @@ const connectingLabel = computed(() => {
   if (s.startsWith("accepted")) return "Accepted — starting the video…";
   if (s === "connecting" || s === "checking" || s === "new") return "Establishing a secure connection…";
   return s.charAt(0).toUpperCase() + s.slice(1);
+});
+
+// Autofocus the Agent field whenever the connection panel is showing.
+const agentInput = ref<HTMLInputElement | null>(null);
+function focusAgent() {
+  nextTick(() => agentInput.value?.focus());
+}
+onMounted(() => {
+  if (phase.value === "idle") focusAgent();
+});
+watch(phase, (p) => {
+  if (p === "idle") focusAgent();
 });
 
 /** Mouse position normalized to the video content (0..1), or null if outside. */
@@ -311,10 +359,25 @@ function onKeyUp(e: KeyboardEvent) {
             <div>
               <label class="mb-1 block text-xs font-medium text-slate-400">Agent ID</label>
               <input
+                ref="agentInput"
                 v-model="agentId"
                 placeholder="agent-1"
+                autocomplete="off"
+                spellcheck="false"
                 class="w-full rounded-lg border border-edge bg-ink px-3 py-2.5 text-slate-100 outline-none transition placeholder:text-slate-600 focus:border-accent focus:ring-2 focus:ring-accent/30"
               />
+              <div v-if="recentOthers.length" class="mt-2 flex flex-wrap items-center gap-1.5">
+                <span class="text-xs text-slate-600">Recent</span>
+                <button
+                  v-for="r in recentOthers"
+                  :key="r"
+                  type="button"
+                  class="rounded-full border border-edge bg-ink px-2.5 py-1 font-mono text-xs text-slate-400 transition hover:border-slate-600 hover:text-slate-200"
+                  @click="agentId = r"
+                >
+                  {{ r }}
+                </button>
+              </div>
             </div>
             <div>
               <label class="mb-1 block text-xs font-medium text-slate-400">Signaling server</label>
