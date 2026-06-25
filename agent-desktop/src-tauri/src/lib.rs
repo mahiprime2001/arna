@@ -74,7 +74,7 @@ fn make_consent(app: AppHandle, pending: Pending) -> ConsentFn {
             );
             let built = WebviewWindowBuilder::new(&app, &label, WebviewUrl::App(url.into()))
                 .title("Arna — connection request")
-                .inner_size(400.0, 250.0)
+                .inner_size(420.0, 300.0)
                 .resizable(false)
                 .always_on_top(true)
                 .center()
