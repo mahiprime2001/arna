@@ -120,6 +120,18 @@ const connectingLabel = computed(() => {
   return s.charAt(0).toUpperCase() + s.slice(1);
 });
 
+// Fullscreen the remote-screen stage (Esc exits).
+const isFullscreen = ref(false);
+function toggleFullscreen() {
+  if (document.fullscreenElement) document.exitFullscreen();
+  else screenEl.value?.requestFullscreen?.();
+}
+onMounted(() => {
+  document.addEventListener("fullscreenchange", () => {
+    isFullscreen.value = !!document.fullscreenElement;
+  });
+});
+
 // Autofocus the Agent field whenever the connection panel is showing.
 const agentInput = ref<HTMLInputElement | null>(null);
 function focusAgent() {
@@ -233,6 +245,13 @@ function onKeyUp(e: KeyboardEvent) {
         </span>
 
         <template v-if="phase === 'live'">
+          <button
+            class="grid h-8 w-8 place-items-center rounded-lg border border-edge bg-ink/50 text-slate-300 transition hover:border-slate-600 hover:text-slate-100 focus-visible:ring-2 focus-visible:ring-accent"
+            :title="isFullscreen ? 'Exit fullscreen' : 'Fullscreen'"
+            @click="toggleFullscreen"
+          >
+            <Icon :name="isFullscreen ? 'minimize' : 'maximize'" class="h-4 w-4" />
+          </button>
           <button
             v-if="canSendFiles"
             class="flex items-center gap-1.5 rounded-lg border border-edge bg-ink/50 px-3 py-1.5 text-sm font-medium text-slate-200 transition hover:border-slate-600 hover:bg-ink focus-visible:ring-2 focus-visible:ring-accent"
