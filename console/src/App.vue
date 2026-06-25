@@ -13,6 +13,8 @@ const {
   canControl,
   videoStream,
   sessionCode,
+  errorMessage,
+  errorKind,
   canSendFiles,
   uploadProgress,
   uploadStatus,
@@ -71,18 +73,6 @@ const phase = computed<"idle" | "connecting" | "live">(() => {
   if (videoStream.value) return "live";
   if (active.value) return "connecting";
   return "idle";
-});
-
-/** True when the last status reflects a failure the user should see on the panel. */
-const isError = computed(() => {
-  const s = status.value;
-  return (
-    s.includes("error") ||
-    s.includes("offline") ||
-    s.includes("declined") ||
-    s.includes("denied") ||
-    s === "disconnected"
-  );
 });
 
 /** Friendly one-liner for the connecting state, derived from the raw status. */
@@ -309,11 +299,12 @@ function onKeyUp(e: KeyboardEvent) {
           </div>
 
           <div
-            v-if="isError"
-            class="mb-4 flex items-start gap-2 rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-sm text-rose-300"
+            v-if="errorMessage"
+            role="alert"
+            class="mb-4 flex items-start gap-2.5 rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2.5 text-sm text-rose-200"
           >
-            <span class="mt-0.5 h-1.5 w-1.5 shrink-0 rounded-full bg-rose-400" />
-            <span class="capitalize">{{ status }}</span>
+            <Icon :name="errorKind === 'offline' ? 'offline' : 'alert'" class="mt-0.5 h-4 w-4 shrink-0 text-rose-400" />
+            <span>{{ errorMessage }}</span>
           </div>
 
           <form class="space-y-3.5" @submit.prevent="toggle">

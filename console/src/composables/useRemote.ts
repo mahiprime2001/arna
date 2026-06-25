@@ -14,6 +14,10 @@ export function useRemote() {
   const videoStream = ref<MediaStream | null>(null);
   /** One-time session code echoed back by the agent on accept (display only). */
   const sessionCode = ref<string | null>(null);
+  /** A clear, user-facing failure reason (offline / declined / unreachable), or null. */
+  const errorMessage = ref<string | null>(null);
+  /** Coarse error kind so the UI can pick an icon: "offline" | "denied" | null. */
+  const errorKind = ref<"offline" | "denied" | null>(null);
   /** Whether files can be sent (the `files` channel is open). */
   const canSendFiles = ref(false);
   /** Current upload progress 0..1 (0 when idle). */
@@ -77,16 +81,32 @@ export function useRemote() {
       ws!.send(JSON.stringify({ type: "connect_request", to: agentId, ticket: ticket || undefined }));
       status.value = "requesting access…";
     };
-    ws.onerror = () => (status.value = "connection error");
+    /** Record a clear failure and drop back to the idle panel. */
+    function fail(message: string, kind: "offline" | "denied" | null = null) {
+      errorMessage.value = message;
+      errorKind.value = kind;
+      status.value = "idle";
+      active.value = false;
+    }
+
+    ws.onerror = () => {
+      if (!connected.value) fail("Can't reach the server. Check the address and that the backend is running.");
+    };
     ws.onclose = () => {
-      if (active.value) status.value = "disconnected";
+      if (connected.value) fail(`Connection to "${agentId}" was lost.`);
       connected.value = false;
     };
     ws.onmessage = async (ev) => {
       const m = JSON.parse(ev.data);
       if (m.type === "request_denied") {
-        status.value = `denied: ${m.reason}`;
-        active.value = false;
+        const reason = String(m.reason ?? "");
+        if (reason.includes("offline")) {
+          fail(`"${agentId}" is offline. Make sure the agent app is running on that PC.`, "offline");
+        } else if (reason.includes("auth") || reason.includes("ticket")) {
+          fail(`Access denied — ${reason}.`, "denied");
+        } else {
+          fail(`Couldn't connect — ${reason}.`, "denied");
+        }
       } else if (m.type === "signal") {
         const d = m.data;
         if (d.kind === "consent") {
@@ -95,8 +115,7 @@ export function useRemote() {
             status.value = "accepted — connecting";
             offer(agentId);
           } else {
-            status.value = `declined: ${d.reason ?? "by operator"}`;
-            active.value = false;
+            fail(d.reason ? `The remote PC declined: ${d.reason}.` : "The remote PC declined the connection.", "denied");
           }
         } else if (d.kind === "answer") {
           await pc!.setRemoteDescription({ type: "answer", sdp: d.sdp });
@@ -108,9 +127,9 @@ export function useRemote() {
           }
         }
       } else if (m.type === "peer_offline") {
-        status.value = `agent "${m.to}" is offline`;
+        fail(`"${m.to}" went offline.`, "offline");
       } else if (m.type === "error") {
-        status.value = "error: " + m.message;
+        fail(`Server error: ${m.message}.`, "denied");
       }
     };
 
@@ -170,6 +189,8 @@ export function useRemote() {
     canSendFiles.value = false;
     uploadProgress.value = 0;
     uploadStatus.value = "";
+    errorMessage.value = null;
+    errorKind.value = null;
     inputCh = null;
     filesCh = null;
     if (pc) {
@@ -194,6 +215,8 @@ export function useRemote() {
     canControl,
     videoStream,
     sessionCode,
+    errorMessage,
+    errorKind,
     canSendFiles,
     uploadProgress,
     uploadStatus,
