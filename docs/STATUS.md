@@ -43,7 +43,8 @@ wraps into **Tauri** desktop apps (Agent on machines, Console for the admin).
 | 3a | **Consent + SSO auth** (connect_request → popup/policy → accept; HS256 ticket) | ✅ built + smoke-tested |
 | 3b | **Tauri** wrapping — console desktop ✅; agent tray + consent popup ✅ | ✅ done |
 | 4a | **H.264 video track** (OpenH264) replaces JPEG-over-data-channel | ✅ verified (decodes in Chrome) |
-| later | files, chat, SSH/FTP, fleet, meet; multi-monitor; coturn | ⏳ |
+| 4b | **File transfer** console → agent (drag-drop → `~/ArnaRemote/Incoming`) | ✅ verified (byte-identical) |
+| later | chat, file download, SSH/FTP, fleet, meet; multi-monitor; coturn | ⏳ |
 
 ## Run it locally (Windows)
 ```bash
@@ -73,6 +74,8 @@ Website: `cd d:\Siri-apps\arna-website && npm run dev` (port 4300).
 - **Screen = a real H.264 video track** (agent captures → downscales ≤1280w →
   OpenH264 → WebRTC track; browser plays it in `<video>`). Replaced JPEG frames.
 - **input** data channel (viewer → agent, JSON mouse/key events; injected via `enigo`).
+- **files** data channel (viewer → agent): drag a file onto the console (or "Send
+  file") → chunked over the channel → agent saves to `~/ArnaRemote/Incoming`.
 - Domains (planned): `arna.ifleon.com` site · `api.arna.ifleon.com` backend ·
   `turn.arna.ifleon.com` coturn. Console launch deep link: `arnaremote://`.
 
@@ -105,13 +108,18 @@ Website: `cd d:\Siri-apps\arna-website && npm run dev` (port 4300).
 - Smoke test (signaling-level, no GUI): `node scripts/smoke-consent.mjs` (open
   mode) or `SSO=1 node scripts/smoke-consent.mjs` against an SSO-enabled backend.
 
-## Next steps (Phase 4+)
-1. **Video track**: replace JPEG-over-data-channel with a real VP8/H.264 track.
-2. **Files + chat** (Phase 4): `files` (chunked drag-drop) and `chat` data channels.
+## Next steps
+1. **Chat** (Phase 4c): live `chat` data channel — panel in the console, small
+   window in `agent-desktop`.
+2. **File download** (agent → console): pick a file on the store PC (Tauri dialog)
+   and pull it to the admin.
 3. Then: SSH/FTP, fleet health + remote commands, meet.
-4. **Hardening** (Phase 5): multi-monitor, reconnect, run-as-service/SYSTEM (UAC),
-   signed installers, deep link (`arnaremote://`), audit log, coturn deploy.
+4. **Bundle + ship**: configurable server address (stop hand-editing `127.0.0.1`),
+   `tauri build` installers, then deploy backend + **coturn** so two machines across
+   the internet connect reliably (current P2P/STUN is LAN-reliable only).
+5. **Hardening** (Phase 5): multi-monitor, reconnect, run-as-service/SYSTEM (UAC),
+   signed installers, deep link (`arnaremote://`), audit log.
 
-Known limitations: view+control only; the agent popup is verified to appear, but
-end-to-end Accept→stream is best confirmed on two machines; no UAC/secure-desktop
-control (needs SYSTEM service); coturn not deployed yet (P2P/STUN only).
+Known limitations: view+control + file push works; file pull/chat not yet; the
+agent popup is verified to appear but Accept→stream is best confirmed on two
+machines; no UAC/secure-desktop control; coturn not deployed (P2P/STUN, LAN-reliable).

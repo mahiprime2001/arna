@@ -5,11 +5,46 @@ import { useRemote } from "./composables/useRemote";
 const backend = ref("ws://127.0.0.1:8081/ws");
 const agentId = ref("agent-1");
 const ticket = ref("");
-const { status, active, connected, canControl, videoStream, sessionCode, connect, disconnect, sendInput } = useRemote();
+const {
+  status,
+  active,
+  connected,
+  canControl,
+  videoStream,
+  sessionCode,
+  canSendFiles,
+  uploadProgress,
+  uploadStatus,
+  connect,
+  disconnect,
+  sendInput,
+  sendFile,
+} = useRemote();
 
 const videoEl = ref<HTMLVideoElement | null>(null);
 const screenEl = ref<HTMLDivElement | null>(null);
+const fileInput = ref<HTMLInputElement | null>(null);
+const dragOver = ref(false);
 let lastMove = 0;
+
+function pickFile() {
+  fileInput.value?.click();
+}
+function onFileChosen(e: Event) {
+  const input = e.target as HTMLInputElement;
+  const file = input.files?.[0];
+  if (file) sendFile(file);
+  input.value = "";
+}
+function onDrop(e: DragEvent) {
+  dragOver.value = false;
+  if (!canSendFiles.value) return;
+  const file = e.dataTransfer?.files?.[0];
+  if (file) sendFile(file);
+}
+function onDragOver() {
+  if (canSendFiles.value) dragOver.value = true;
+}
 
 // The <video> is rendered only once a stream arrives, so attach after render.
 watch(videoStream, async (s) => {
@@ -132,7 +167,17 @@ function onKeyUp(e: KeyboardEvent) {
         {{ active ? "Disconnect" : "Connect" }}
       </button>
 
+      <button
+        v-if="canSendFiles"
+        class="rounded-md border border-edge px-3 py-1.5 text-sm font-medium text-slate-200 transition hover:bg-ink"
+        @click="pickFile"
+      >
+        Send file
+      </button>
+      <input ref="fileInput" type="file" class="hidden" @change="onFileChosen" />
+
       <div class="ml-auto flex items-center gap-2 text-sm">
+        <span v-if="uploadStatus" class="text-xs text-slate-400">{{ uploadStatus }}</span>
         <span v-if="sessionCode" class="rounded-full bg-slate-700/60 px-2.5 py-0.5 font-mono text-xs text-slate-200">
           code {{ sessionCode }}
         </span>
@@ -153,7 +198,28 @@ function onKeyUp(e: KeyboardEvent) {
       @keydown="onKeyDown"
       @keyup="onKeyUp"
       @contextmenu="onContextMenu"
+      @dragover.prevent="onDragOver"
+      @dragleave="dragOver = false"
+      @drop.prevent="onDrop"
     >
+      <!-- Upload progress -->
+      <div
+        v-if="uploadProgress > 0 && uploadProgress < 1"
+        class="pointer-events-none absolute left-0 right-0 top-0 z-20 h-1 bg-edge"
+      >
+        <div class="h-full bg-accent transition-[width]" :style="{ width: uploadProgress * 100 + '%' }" />
+      </div>
+
+      <!-- Drag-to-send overlay -->
+      <div
+        v-if="dragOver && canSendFiles"
+        class="pointer-events-none absolute inset-3 z-20 grid place-items-center rounded-xl border-2 border-dashed border-accent/70 bg-ink/70 text-slate-200"
+      >
+        <div class="text-center">
+          <div class="mb-1 text-3xl">📁</div>
+          <p class="font-medium">Drop to send to the remote PC</p>
+        </div>
+      </div>
       <video
         v-if="videoStream"
         ref="videoEl"

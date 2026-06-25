@@ -56,7 +56,11 @@ a reconnect requires fresh consent.
 - `input` — mouse/keyboard data channel (console → agent). Wire format:
   `{t:"m",x,y}` move (normalized 0..1), `{t:"d"/"u",b}` button,
   `{t:"w",dy}` wheel, `{t:"kd"/"ku",k}` key.
-- `files` — chunked transfer (both ways). *(Phase 4.)*
+- `files` — file transfer (console → agent, Phase 4b). Text control frames +
+  binary chunks: `{t:"file_start",id,name,size}` → binary chunks (~16 KB, throttled
+  by `bufferedAmount`) → `{t:"file_end",id}`. The agent saves to
+  `~/ArnaRemote/Incoming` (name sanitized, de-duplicated) and replies
+  `{t:"file_done",name,bytes}`. *(Agent → console download: later.)*
 - `chat` — live messages (both ways). *(Phase 4.)*
 - `control` — monitor list, quality, clipboard, session end. *(later.)*
 

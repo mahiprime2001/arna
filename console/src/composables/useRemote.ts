@@ -14,16 +14,55 @@ export function useRemote() {
   const videoStream = ref<MediaStream | null>(null);
   /** One-time session code echoed back by the agent on accept (display only). */
   const sessionCode = ref<string | null>(null);
+  /** Whether files can be sent (the `files` channel is open). */
+  const canSendFiles = ref(false);
+  /** Current upload progress 0..1 (0 when idle). */
+  const uploadProgress = ref(0);
+  /** Short upload status line, e.g. "sending report.pdf…" / "saved on remote". */
+  const uploadStatus = ref("");
 
   let ws: WebSocket | null = null;
   let pc: RTCPeerConnection | null = null;
   let inputCh: RTCDataChannel | null = null;
+  let filesCh: RTCDataChannel | null = null;
 
   /** Send an input event to the agent (no-op until the control channel is open). */
   function sendInput(event: Record<string, unknown>) {
     if (inputCh && inputCh.readyState === "open") {
       inputCh.send(JSON.stringify(event));
     }
+  }
+
+  /**
+   * Send a file to the remote PC over the `files` channel: a `file_start`
+   * control message, binary chunks (throttled by bufferedAmount), then
+   * `file_end`. The agent saves it to ~/ArnaRemote/Incoming and acks.
+   */
+  async function sendFile(file: File) {
+    if (!filesCh || filesCh.readyState !== "open") return;
+    const ch = filesCh;
+    const id = Date.now();
+    const CHUNK = 16 * 1024;
+    const HIGH_WATER = 1 * 1024 * 1024; // pause sending above 1 MB buffered
+
+    ch.send(JSON.stringify({ t: "file_start", id, name: file.name, size: file.size }));
+    uploadStatus.value = `sending ${file.name}…`;
+    uploadProgress.value = 0;
+
+    let offset = 0;
+    while (offset < file.size) {
+      // Backpressure: let the buffer drain before queueing more.
+      while (ch.bufferedAmount > HIGH_WATER) {
+        await new Promise((r) => setTimeout(r, 20));
+      }
+      const slice = file.slice(offset, offset + CHUNK);
+      const buf = await slice.arrayBuffer();
+      ch.send(buf);
+      offset += buf.byteLength;
+      uploadProgress.value = file.size ? offset / file.size : 1;
+    }
+    ch.send(JSON.stringify({ t: "file_end", id }));
+    uploadStatus.value = `sent ${file.name} — finishing…`;
   }
 
   function connect(backendUrl: string, agentId: string, ticket?: string) {
@@ -102,6 +141,22 @@ export function useRemote() {
       inputCh.onopen = () => (canControl.value = true);
       inputCh.onclose = () => (canControl.value = false);
 
+      // Files channel: push files to the remote PC; the agent acks file_done.
+      filesCh = pc.createDataChannel("files");
+      filesCh.onopen = () => (canSendFiles.value = true);
+      filesCh.onclose = () => (canSendFiles.value = false);
+      filesCh.onmessage = (ev) => {
+        try {
+          const m = JSON.parse(ev.data);
+          if (m.t === "file_done") {
+            uploadStatus.value = `saved on remote: ${m.name}`;
+            uploadProgress.value = 0;
+          }
+        } catch {
+          /* ignore non-JSON */
+        }
+      };
+
       const off = await pc.createOffer();
       await pc.setLocalDescription(off);
       ws!.send(JSON.stringify({ type: "signal", to: agentId, data: { kind: "offer", sdp: off.sdp } }));
@@ -112,7 +167,11 @@ export function useRemote() {
     active.value = false;
     connected.value = false;
     canControl.value = false;
+    canSendFiles.value = false;
+    uploadProgress.value = 0;
+    uploadStatus.value = "";
     inputCh = null;
+    filesCh = null;
     if (pc) {
       pc.close();
       pc = null;
@@ -128,5 +187,19 @@ export function useRemote() {
 
   onUnmounted(disconnect);
 
-  return { status, active, connected, canControl, videoStream, sessionCode, connect, disconnect, sendInput };
+  return {
+    status,
+    active,
+    connected,
+    canControl,
+    videoStream,
+    sessionCode,
+    canSendFiles,
+    uploadProgress,
+    uploadStatus,
+    connect,
+    disconnect,
+    sendInput,
+    sendFile,
+  };
 }

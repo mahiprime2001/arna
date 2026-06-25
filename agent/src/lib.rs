@@ -29,7 +29,9 @@ use openh264::encoder::{Encoder, EncoderConfig, RateControlMode, UsageType};
 use openh264::formats::{RgbSliceU8, YUVBuffer};
 use openh264::OpenH264API;
 use scrap::{Capturer, Display};
-use tokio::sync::watch;
+use std::path::{Path, PathBuf};
+use tokio::io::AsyncWriteExt;
+use tokio::sync::{watch, Mutex as AsyncMutex};
 
 // Re-export the consent types so the apps can build a `ConsentFn` without a
 // direct dependency on `arna-core`.
@@ -335,6 +337,128 @@ fn primary_size() -> (i32, i32) {
 }
 
 // ---------------------------------------------------------------------------
+// File transfer (console -> agent): files land in ~/ArnaRemote/Incoming
+// ---------------------------------------------------------------------------
+
+/// Where received files are saved on the store PC.
+fn incoming_dir() -> PathBuf {
+    let home = std::env::var("USERPROFILE")
+        .or_else(|_| std::env::var("HOME"))
+        .unwrap_or_else(|_| ".".to_string());
+    Path::new(&home).join("ArnaRemote").join("Incoming")
+}
+
+/// Keep only the file name (drop any path the sender included) so a transfer
+/// can't write outside the incoming folder.
+fn safe_file_name(name: &str) -> String {
+    Path::new(name)
+        .file_name()
+        .and_then(|s| s.to_str())
+        .filter(|s| !s.is_empty())
+        .unwrap_or("file")
+        .to_string()
+}
+
+/// Pick a non-clobbering path: `name`, then `name (1)`, `name (2)`, …
+fn unique_path(dir: &Path, name: &str) -> PathBuf {
+    let first = dir.join(name);
+    if !first.exists() {
+        return first;
+    }
+    let path = Path::new(name);
+    let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or(name);
+    let ext = path.extension().and_then(|s| s.to_str());
+    for i in 1..10_000 {
+        let candidate = match ext {
+            Some(e) => dir.join(format!("{stem} ({i}).{e}")),
+            None => dir.join(format!("{stem} ({i})")),
+        };
+        if !candidate.exists() {
+            return candidate;
+        }
+    }
+    first
+}
+
+/// An in-progress incoming file.
+struct IncomingFile {
+    name: String,
+    file: tokio::fs::File,
+    received: u64,
+}
+
+/// Wire up a `files` data channel: text frames are control messages
+/// (`file_start` / `file_end`), binary frames are file chunks. One transfer at a
+/// time per channel (the console sends them sequentially).
+fn handle_files_channel(dc: Arc<RTCDataChannel>) {
+    println!("agent: file channel open");
+    let state: Arc<AsyncMutex<Option<IncomingFile>>> = Arc::new(AsyncMutex::new(None));
+    let ack = dc.clone();
+    dc.on_message(Box::new(move |msg| {
+        let state = state.clone();
+        let ack = ack.clone();
+        Box::pin(async move {
+            if msg.is_string {
+                let text = String::from_utf8_lossy(&msg.data);
+                let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) else {
+                    return;
+                };
+                match v.get("t").and_then(|t| t.as_str()).unwrap_or("") {
+                    "file_start" => {
+                        let name =
+                            safe_file_name(v.get("name").and_then(|n| n.as_str()).unwrap_or("file"));
+                        let size = v.get("size").and_then(|n| n.as_u64()).unwrap_or(0);
+                        let dir = incoming_dir();
+                        let _ = tokio::fs::create_dir_all(&dir).await;
+                        let path = unique_path(&dir, &name);
+                        match tokio::fs::File::create(&path).await {
+                            Ok(file) => {
+                                println!(
+                                    "agent: receiving '{name}' ({size} bytes) -> {}",
+                                    path.display()
+                                );
+                                *state.lock().await = Some(IncomingFile {
+                                    name,
+                                    file,
+                                    received: 0,
+                                });
+                            }
+                            Err(e) => eprintln!("agent: cannot create '{}': {e}", path.display()),
+                        }
+                    }
+                    "file_end" => {
+                        if let Some(mut inc) = state.lock().await.take() {
+                            let _ = inc.file.flush().await;
+                            let _ = inc.file.sync_all().await;
+                            println!("agent: saved '{}' ({} bytes)", inc.name, inc.received);
+                            let _ = ack
+                                .send_text(
+                                    serde_json::json!({
+                                        "t": "file_done",
+                                        "name": inc.name,
+                                        "bytes": inc.received,
+                                    })
+                                    .to_string(),
+                                )
+                                .await;
+                        }
+                    }
+                    _ => {}
+                }
+            } else {
+                // Binary chunk: append to the active transfer.
+                let mut guard = state.lock().await;
+                if let Some(inc) = guard.as_mut() {
+                    if inc.file.write_all(&msg.data).await.is_ok() {
+                        inc.received += msg.data.len() as u64;
+                    }
+                }
+            }
+        })
+    }));
+}
+
+// ---------------------------------------------------------------------------
 // The agent loop
 // ---------------------------------------------------------------------------
 
@@ -367,22 +491,24 @@ pub async fn run(url: String, id: String, consent: ConsentFn) {
     // Per admitted connection: attach a screen video track + start encoding.
     let on_peer = make_on_peer(rx);
 
-    // Each opened data channel: "input" -> inject the events the viewer sends.
-    let on_channel: Arc<dyn Fn(Arc<RTCDataChannel>) + Send + Sync> = Arc::new(move |dc| {
-        if dc.label() == "input" {
-            println!("agent: control channel open");
-            let enigo = enigo.clone();
-            dc.on_message(Box::new(move |msg| {
+    // Per opened data channel: "input" -> inject events; "files" -> receive
+    // files into ~/ArnaRemote/Incoming.
+    let on_channel: Arc<dyn Fn(Arc<RTCDataChannel>) + Send + Sync> =
+        Arc::new(move |dc| match dc.label() {
+            "input" => {
+                println!("agent: control channel open");
                 let enigo = enigo.clone();
-                let text = String::from_utf8_lossy(&msg.data).to_string();
-                Box::pin(async move {
-                    handle_input(&text, &enigo, screen_w, screen_h);
-                })
-            }));
-        } else {
-            println!("agent: ignoring unknown channel '{}'", dc.label());
-        }
-    });
+                dc.on_message(Box::new(move |msg| {
+                    let enigo = enigo.clone();
+                    let text = String::from_utf8_lossy(&msg.data).to_string();
+                    Box::pin(async move {
+                        handle_input(&text, &enigo, screen_w, screen_h);
+                    })
+                }));
+            }
+            "files" => handle_files_channel(dc),
+            other => println!("agent: ignoring unknown channel '{other}'"),
+        });
 
     if let Err(e) = p2p::answer_streaming(signaling, id, consent, on_peer, on_channel).await {
         eprintln!("agent error: {e}");
