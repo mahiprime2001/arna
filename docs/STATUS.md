@@ -14,10 +14,13 @@ A self-hosted, all-in-one remote platform: **Remote control, Fleet, Chat, Meet,
 Files, SSH/FTP** — built on one WebRTC engine. v1 focus = remote control. Later
 wraps into **Tauri** desktop apps (Agent on machines, Console for the controller).
 
-**Audience:** general-purpose, **for everyone** (personal + enterprise) — like
-TeamViewer/AnyDesk, self-hosted. The "store/admin/fleet" wording here is the
-enterprise lens, not the whole product; a **Personal** vs **Enterprise** edition
-split is planned later. Keep UI copy generic. See [PLAN.md](PLAN.md) §0.
+**Audience & distribution:** general-purpose, **for everyone** (personal +
+enterprise) — like TeamViewer/AnyDesk. **Open source + hosted:** we host it so
+non-devs just sign up (apps default to the hosted server), and developers can
+**self-host** on their own server (configurable address). The "store/admin/fleet"
+wording here is the enterprise lens, not the whole product; a **Personal** vs
+**Enterprise** edition split is planned later. Keep UI copy generic + the server
+address configurable. See [PLAN.md](PLAN.md) §0.
 
 ## Repo layout (`arna`)
 | Path | What | State |

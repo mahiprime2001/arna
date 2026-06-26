@@ -24,15 +24,30 @@ TeamViewer / AnyDesk, but self-hosted and open. Two audiences from day one:
 The store/"admin"/"fleet" framing elsewhere in this doc is the enterprise lens; the
 same engine serves personal users equally.
 
+**Distribution: open source + hosted service** (like Bitwarden / Supabase / n8n):
+
+- **Open source** — the whole stack (apps + backend + infra) is open; anyone can
+  take it and run it.
+- **Hosted (managed)** — we *also* run it as a service so **non-developers** can
+  just sign up and use it with zero server setup. The apps **default to the hosted
+  backend + coturn**, so it works out of the box.
+- **Self-hosted** — **developers / companies** run their own backend + coturn and
+  point the apps at **their own server** (a configurable server address).
+
+So the same apps serve both: hosted by default (non-devs), custom server when set
+(self-hosters). This is why bundling needs a **configurable/remembered server
+address** rather than a hardcoded one.
+
 **Editions (future, once it's proven):** split into a **Personal** edition (simple,
 free/cheap, just connect-and-control + files + chat) and an **Enterprise** edition
 (adds fleet dashboard, multi-admin, roles/audit, SSO, central deployment). The
 shared `core` engine + backend powers both; editions differ in the apps and which
-modules are enabled.
+modules are enabled. Both can be used hosted or self-hosted.
 
 **Implication for the build:** keep shared features and **UI copy generic** ("the
 remote PC", "the person at the other machine", "the person connecting"), not
-store/admin-specific. Defer enterprise-only modules to the Enterprise edition.
+store/admin-specific. Make the **server address configurable** (hosted default +
+custom override). Defer enterprise-only modules to the Enterprise edition.
 
 ---
 
