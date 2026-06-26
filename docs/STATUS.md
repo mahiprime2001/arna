@@ -12,7 +12,12 @@ Commits are authored as `mahiprime2001` (noreply email) + `Co-Authored-By: Claud
 ## What Arna is
 A self-hosted, all-in-one remote platform: **Remote control, Fleet, Chat, Meet,
 Files, SSH/FTP** — built on one WebRTC engine. v1 focus = remote control. Later
-wraps into **Tauri** desktop apps (Agent on machines, Console for the admin).
+wraps into **Tauri** desktop apps (Agent on machines, Console for the controller).
+
+**Audience:** general-purpose, **for everyone** (personal + enterprise) — like
+TeamViewer/AnyDesk, self-hosted. The "store/admin/fleet" wording here is the
+enterprise lens, not the whole product; a **Personal** vs **Enterprise** edition
+split is planned later. Keep UI copy generic. See [PLAN.md](PLAN.md) §0.
 
 ## Repo layout (`arna`)
 | Path | What | State |

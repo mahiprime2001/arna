@@ -223,7 +223,7 @@ pub fn run() {
             let download: arna_agent::DownloadProvider = Arc::new(|| {
                 Box::pin(async {
                     let file = rfd::AsyncFileDialog::new()
-                        .set_title("Send a file to the admin")
+                        .set_title("Choose a file to send")
                         .pick_file()
                         .await?;
                     Some(arna_agent::DownloadFile {

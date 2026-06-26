@@ -1,13 +1,38 @@
 # Arna — Self-Hosted All-in-One Platform (Technical Plan)
 
-Arna is an internal **all-in-one platform** for the store network — remote
-support, fleet monitoring, team chat, video meetings, and file sharing — all on a
-single WebRTC engine, self-hosted, end-to-end encrypted, built on our Tauri/Rust
-stack. v1 ships the remote-support core; every other tool is a layer on the same
-foundation. The billing app (and any future app) launches it with one click.
+Arna is an **all-in-one remote platform** — remote control, fleet monitoring, team
+chat, video meetings, and file sharing — all on a single WebRTC engine,
+self-hosted, end-to-end encrypted, built on our Tauri/Rust stack. v1 ships the
+remote-support core; every other tool is a layer on the same foundation.
 
-Status: PLAN — no code written yet. Source of truth for the build.
-See §12 for the full product vision & module roadmap.
+Source of truth for the build. See §0 for who it's for, §12 for the full product
+vision & module roadmap.
+
+---
+
+## 0. Audience & editions
+
+Arna is a **general-purpose remote-desktop product for everyone** — like
+TeamViewer / AnyDesk, but self-hosted and open. Two audiences from day one:
+
+- **Personal / public:** any individual viewing or controlling another PC — helping
+  a friend, reaching your own machine remotely, ad-hoc support. This is a primary
+  audience, not an afterthought.
+- **Stores / enterprise:** the store-network / fleet use case (fleet health,
+  multi-admin, SSO, audit). One important use case, **not** the whole product.
+
+The store/"admin"/"fleet" framing elsewhere in this doc is the enterprise lens; the
+same engine serves personal users equally.
+
+**Editions (future, once it's proven):** split into a **Personal** edition (simple,
+free/cheap, just connect-and-control + files + chat) and an **Enterprise** edition
+(adds fleet dashboard, multi-admin, roles/audit, SSO, central deployment). The
+shared `core` engine + backend powers both; editions differ in the apps and which
+modules are enabled.
+
+**Implication for the build:** keep shared features and **UI copy generic** ("the
+remote PC", "the person at the other machine", "the person connecting"), not
+store/admin-specific. Defer enterprise-only modules to the Enterprise edition.
 
 ---
 

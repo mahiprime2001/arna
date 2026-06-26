@@ -86,7 +86,7 @@ export function useRemote() {
   function requestDownload() {
     if (!filesCh || filesCh.readyState !== "open") return;
     filesCh.send(JSON.stringify({ t: "dl_request" }));
-    downloadStatus.value = "waiting for the store to choose a file…";
+    downloadStatus.value = "waiting for the other PC to choose a file…";
     downloadProgress.value = 0;
   }
 
@@ -241,7 +241,7 @@ export function useRemote() {
             dl = null;
             downloadProgress.value = 0;
             downloadStatus.value =
-              m.reason === "cancelled" ? "the store cancelled the download" : "download failed";
+              m.reason === "cancelled" ? "the other PC cancelled the download" : "download failed";
           }
         } catch {
           /* ignore non-JSON */

@@ -48,7 +48,7 @@ onMounted(async () => {
       </span>
       <div>
         <div class="title">Chat</div>
-        <div class="subtitle">with the admin</div>
+        <div class="subtitle">with the other person</div>
       </div>
     </header>
 
