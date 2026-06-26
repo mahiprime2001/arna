@@ -45,7 +45,8 @@ wraps into **Tauri** desktop apps (Agent on machines, Console for the admin).
 | 4a | **H.264 video track** (OpenH264) replaces JPEG-over-data-channel | ✅ verified (decodes in Chrome) |
 | 4b | **File transfer** console → agent (drag-drop → `~/ArnaRemote/Incoming`) | ✅ verified (byte-identical) |
 | 4c | **Live chat** both ways (console panel ↔ agent terminal / desktop chat window) | ✅ verified two-way |
-| later | file download, SSH/FTP, fleet, meet; multi-monitor; coturn | ⏳ |
+| 4d | **File download** agent → console (operator picks via native dialog) | ✅ verified (byte-identical) |
+| later | SSH/FTP, fleet, meet; multi-monitor; coturn | ⏳ |
 
 ## Run it locally (Windows)
 ```bash
@@ -75,8 +76,10 @@ Website: `cd d:\Siri-apps\arna-website && npm run dev` (port 4300).
 - **Screen = a real H.264 video track** (agent captures → downscales ≤1280w →
   OpenH264 → WebRTC track; browser plays it in `<video>`). Replaced JPEG frames.
 - **input** data channel (viewer → agent, JSON mouse/key events; injected via `enigo`).
-- **files** data channel (viewer → agent): drag a file onto the console (or "Send
-  file") → chunked over the channel → agent saves to `~/ArnaRemote/Incoming`.
+- **files** data channel (both ways): **upload** — drag a file onto the console (or
+  "Send file") → agent saves to `~/ArnaRemote/Incoming`. **download** — console
+  "Download" button → the operator picks a file (native dialog; `ARNA_DOWNLOAD_FILE`
+  for the headless agent) → streams back → browser saves it.
 - **chat** data channel (both ways): console chat panel ↔ agent. The headless
   agent chats via the terminal; `agent-desktop` opens a chat window on the first
   message. `node scripts/chat-check.mjs` verifies both directions.

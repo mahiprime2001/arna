@@ -56,11 +56,16 @@ a reconnect requires fresh consent.
 - `input` — mouse/keyboard data channel (console → agent). Wire format:
   `{t:"m",x,y}` move (normalized 0..1), `{t:"d"/"u",b}` button,
   `{t:"w",dy}` wheel, `{t:"kd"/"ku",k}` key.
-- `files` — file transfer (console → agent, Phase 4b). Text control frames +
-  binary chunks: `{t:"file_start",id,name,size}` → binary chunks (~16 KB, throttled
-  by `bufferedAmount`) → `{t:"file_end",id}`. The agent saves to
-  `~/ArnaRemote/Incoming` (name sanitized, de-duplicated) and replies
-  `{t:"file_done",name,bytes}`. *(Agent → console download: later.)*
+- `files` — file transfer both ways.
+  - **Upload** (console → agent, Phase 4b): `{t:"file_start",id,name,size}` → binary
+    chunks (~16 KB, throttled by `bufferedAmount`) → `{t:"file_end",id}`. The agent
+    saves to `~/ArnaRemote/Incoming` (name sanitized, de-duplicated) and replies
+    `{t:"file_done",name,bytes}`.
+  - **Download** (Phase 4d): console sends `{t:"dl_request"}`; the operator picks a
+    file (native dialog in the desktop app; `ARNA_DOWNLOAD_FILE` for the headless
+    agent), then the agent sends `{t:"dl_start",name,size}` → binary chunks →
+    `{t:"dl_end"}`, or `{t:"dl_cancel",reason}`. The console saves it via the
+    browser. Same channel; per-side direction disambiguates the binary frames.
 - `chat` — live text both ways (Phase 4c): `{t:"msg",text,ts}`. The agent bridges
   it to the host app (terminal for the headless agent; a chat window in
   `agent-desktop`).

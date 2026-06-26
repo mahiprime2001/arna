@@ -29,8 +29,10 @@ use openh264::encoder::{Encoder, EncoderConfig, RateControlMode, UsageType};
 use openh264::formats::{RgbSliceU8, YUVBuffer};
 use openh264::OpenH264API;
 use scrap::{Capturer, Display};
+use std::future::Future;
 use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::pin::Pin;
+use std::time::{Duration as StdDuration, SystemTime, UNIX_EPOCH};
 use tokio::io::AsyncWriteExt;
 use tokio::sync::{watch, Mutex as AsyncMutex};
 
@@ -388,16 +390,58 @@ struct IncomingFile {
     received: u64,
 }
 
+/// A file the operator chose to send back to the console (download).
+pub struct DownloadFile {
+    pub name: String,
+    pub bytes: Vec<u8>,
+}
+
+/// Asked when the console requests a download: returns the file the operator
+/// picks, or `None` if they cancel. (A native dialog in the desktop app; a fixed
+/// file for the headless agent.)
+pub type DownloadProvider =
+    Arc<dyn Fn() -> Pin<Box<dyn Future<Output = Option<DownloadFile>> + Send>> + Send + Sync>;
+
+/// Stream a chosen file back to the console over the `files` channel:
+/// `dl_start` → binary chunks (throttled by `buffered_amount`) → `dl_end`.
+async fn stream_download(dc: Arc<RTCDataChannel>, download: DownloadProvider) {
+    let Some(file) = download().await else {
+        let _ = dc
+            .send_text(serde_json::json!({ "t": "dl_cancel", "reason": "cancelled" }).to_string())
+            .await;
+        return;
+    };
+    let size = file.bytes.len();
+    if dc
+        .send_text(serde_json::json!({ "t": "dl_start", "name": file.name, "size": size }).to_string())
+        .await
+        .is_err()
+    {
+        return;
+    }
+    for chunk in file.bytes.chunks(16 * 1024) {
+        while dc.buffered_amount().await > 1024 * 1024 {
+            tokio::time::sleep(StdDuration::from_millis(8)).await;
+        }
+        if dc.send(&Bytes::from(chunk.to_vec())).await.is_err() {
+            return;
+        }
+    }
+    let _ = dc.send_text(serde_json::json!({ "t": "dl_end" }).to_string()).await;
+    println!("agent: sent '{}' ({size} bytes) to console", file.name);
+}
+
 /// Wire up a `files` data channel: text frames are control messages
-/// (`file_start` / `file_end`), binary frames are file chunks. One transfer at a
-/// time per channel (the console sends them sequentially).
-fn handle_files_channel(dc: Arc<RTCDataChannel>) {
+/// (`file_start`/`file_end` for uploads, `dl_request` for downloads), binary
+/// frames are upload chunks. One transfer at a time per channel.
+fn handle_files_channel(dc: Arc<RTCDataChannel>, download: DownloadProvider) {
     println!("agent: file channel open");
     let state: Arc<AsyncMutex<Option<IncomingFile>>> = Arc::new(AsyncMutex::new(None));
     let ack = dc.clone();
     dc.on_message(Box::new(move |msg| {
         let state = state.clone();
         let ack = ack.clone();
+        let download = download.clone();
         Box::pin(async move {
             if msg.is_string {
                 let text = String::from_utf8_lossy(&msg.data);
@@ -405,6 +449,10 @@ fn handle_files_channel(dc: Arc<RTCDataChannel>) {
                     return;
                 };
                 match v.get("t").and_then(|t| t.as_str()).unwrap_or("") {
+                    "dl_request" => {
+                        let dc = ack.clone();
+                        tokio::spawn(async move { stream_download(dc, download).await });
+                    }
                     "file_start" => {
                         let name =
                             safe_file_name(v.get("name").and_then(|n| n.as_str()).unwrap_or("file"));
@@ -536,9 +584,15 @@ impl ChatBridge {
 /// Run the agent: capture the primary screen, register on the signaling
 /// backend, and serve admitted viewers (H.264 screen video + inject their
 /// input + files + chat). `consent` decides whether each requesting console is
-/// admitted; `chat` bridges live text to the host app. Returns when the
-/// signaling socket closes.
-pub async fn run(url: String, id: String, consent: ConsentFn, chat: ChatBridge) {
+/// admitted; `chat` bridges live text to the host app; `download` supplies a file
+/// when the console requests one. Returns when the signaling socket closes.
+pub async fn run(
+    url: String,
+    id: String,
+    consent: ConsentFn,
+    chat: ChatBridge,
+    download: DownloadProvider,
+) {
     let (screen_w, screen_h) = primary_size();
 
     // Capture thread publishes the latest downscaled RGB frame.
@@ -578,7 +632,7 @@ pub async fn run(url: String, id: String, consent: ConsentFn, chat: ChatBridge) 
                     })
                 }));
             }
-            "files" => handle_files_channel(dc),
+            "files" => handle_files_channel(dc, download.clone()),
             "chat" => {
                 println!("agent: chat channel open");
                 chat.attach(dc);

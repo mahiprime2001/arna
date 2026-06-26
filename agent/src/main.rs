@@ -12,7 +12,9 @@
 
 use std::sync::Arc;
 
-use arna_agent::{session_code, ChatBridge, Consent, ConnectRequest, ConsentFn};
+use arna_agent::{
+    session_code, ChatBridge, Consent, ConnectRequest, ConsentFn, DownloadFile, DownloadProvider,
+};
 use tokio::io::AsyncBufReadExt;
 
 /// What the agent does when a console asks to connect. Set with `ARNA_CONSENT`:
@@ -105,5 +107,19 @@ async fn main() {
         });
     }
 
-    arna_agent::run(url, id, consent, chat).await;
+    // Download: the headless agent has no file picker, so it serves the file at
+    // ARNA_DOWNLOAD_FILE (if set) when the console requests a download.
+    let download: DownloadProvider = Arc::new(|| {
+        Box::pin(async {
+            let path = std::env::var("ARNA_DOWNLOAD_FILE").ok()?;
+            let bytes = tokio::fs::read(&path).await.ok()?;
+            let name = std::path::Path::new(&path)
+                .file_name()?
+                .to_str()?
+                .to_string();
+            Some(DownloadFile { name, bytes })
+        })
+    });
+
+    arna_agent::run(url, id, consent, chat, download).await;
 }

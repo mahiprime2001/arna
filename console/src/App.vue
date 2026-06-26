@@ -48,6 +48,8 @@ const {
   canSendFiles,
   uploadProgress,
   uploadStatus,
+  downloadProgress,
+  downloadStatus,
   canChat,
   messages,
   unread,
@@ -55,9 +57,14 @@ const {
   disconnect,
   sendInput,
   sendFile,
+  requestDownload,
   sendChat,
   markChatRead,
 } = useRemote();
+
+// Show whichever transfer (upload or download) is active.
+const transferProgress = computed(() => Math.max(uploadProgress.value, downloadProgress.value));
+const transferStatus = computed(() => downloadStatus.value || uploadStatus.value);
 
 const videoEl = ref<HTMLVideoElement | null>(null);
 const screenEl = ref<HTMLDivElement | null>(null);
@@ -257,7 +264,7 @@ function onKeyUp(e: KeyboardEvent) {
       </template>
 
       <div class="ml-auto flex items-center gap-2">
-        <span v-if="uploadStatus" class="hidden text-xs text-slate-400 sm:inline">{{ uploadStatus }}</span>
+        <span v-if="transferStatus" class="hidden text-xs text-slate-400 sm:inline">{{ transferStatus }}</span>
 
         <span
           v-if="sessionCode && phase === 'live'"
@@ -299,6 +306,14 @@ function onKeyUp(e: KeyboardEvent) {
           </button>
           <button
             v-if="canSendFiles"
+            class="grid h-8 w-8 place-items-center rounded-lg border border-edge bg-ink/50 text-slate-300 transition hover:border-slate-600 hover:text-slate-100 focus-visible:ring-2 focus-visible:ring-accent"
+            title="Download a file from the remote PC"
+            @click="requestDownload"
+          >
+            <Icon name="download" class="h-4 w-4" />
+          </button>
+          <button
+            v-if="canSendFiles"
             class="flex items-center gap-1.5 rounded-lg border border-edge bg-ink/50 px-3 py-1.5 text-sm font-medium text-slate-200 transition hover:border-slate-600 hover:bg-ink focus-visible:ring-2 focus-visible:ring-accent"
             @click="pickFile"
           >
@@ -328,12 +343,12 @@ function onKeyUp(e: KeyboardEvent) {
       @dragleave="dragOver = false"
       @drop.prevent="onDrop"
     >
-      <!-- Upload progress -->
+      <!-- Transfer progress (upload or download) -->
       <div
-        v-if="uploadProgress > 0 && uploadProgress < 1"
+        v-if="transferProgress > 0 && transferProgress < 1"
         class="pointer-events-none absolute inset-x-0 top-0 z-30 h-0.5 bg-edge"
       >
-        <div class="h-full bg-accent transition-[width] duration-150" :style="{ width: uploadProgress * 100 + '%' }" />
+        <div class="h-full bg-accent transition-[width] duration-150" :style="{ width: transferProgress * 100 + '%' }" />
       </div>
 
       <!-- Drag-to-send overlay -->

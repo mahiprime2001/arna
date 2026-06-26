@@ -218,8 +218,23 @@ pub fn run() {
             });
             app.manage(chat.clone());
 
+            // Download: when the console asks for a file, show a native picker so
+            // the operator chooses what leaves their PC.
+            let download: arna_agent::DownloadProvider = Arc::new(|| {
+                Box::pin(async {
+                    let file = rfd::AsyncFileDialog::new()
+                        .set_title("Send a file to the admin")
+                        .pick_file()
+                        .await?;
+                    Some(arna_agent::DownloadFile {
+                        name: file.file_name(),
+                        bytes: file.read().await,
+                    })
+                })
+            });
+
             tauri::async_runtime::spawn(async move {
-                arna_agent::run(url, id, consent, chat).await;
+                arna_agent::run(url, id, consent, chat, download).await;
             });
             Ok(())
         })

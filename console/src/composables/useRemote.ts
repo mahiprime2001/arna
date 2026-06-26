@@ -24,6 +24,12 @@ export function useRemote() {
   const uploadProgress = ref(0);
   /** Short upload status line, e.g. "sending report.pdf…" / "saved on remote". */
   const uploadStatus = ref("");
+  /** Current download progress 0..1 (0 when idle). */
+  const downloadProgress = ref(0);
+  /** Short download status line. */
+  const downloadStatus = ref("");
+  /** Reassembly buffer for an in-progress download. */
+  let dl: { name: string; size: number; received: number; chunks: Uint8Array[] } | null = null;
   /** Whether chat is available (the `chat` channel is open). */
   const canChat = ref(false);
   /** In-session chat log. */
@@ -74,6 +80,31 @@ export function useRemote() {
     }
     ch.send(JSON.stringify({ t: "file_end", id }));
     uploadStatus.value = `sent ${file.name} — finishing…`;
+  }
+
+  /** Ask the remote PC for a file; the operator there picks which one to send. */
+  function requestDownload() {
+    if (!filesCh || filesCh.readyState !== "open") return;
+    filesCh.send(JSON.stringify({ t: "dl_request" }));
+    downloadStatus.value = "waiting for the store to choose a file…";
+    downloadProgress.value = 0;
+  }
+
+  /** Assemble received chunks and trigger a browser "Save as". */
+  function finishDownload() {
+    if (!dl) return;
+    const blob = new Blob(dl.chunks as BlobPart[], { type: "application/octet-stream" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = dl.name;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    downloadStatus.value = `downloaded ${dl.name}`;
+    downloadProgress.value = 0;
+    dl = null;
   }
 
   /** Send a chat message to the remote PC. */
@@ -180,16 +211,37 @@ export function useRemote() {
       inputCh.onopen = () => (canControl.value = true);
       inputCh.onclose = () => (canControl.value = false);
 
-      // Files channel: push files to the remote PC; the agent acks file_done.
+      // Files channel: upload to (text + binary) and download from the remote PC.
       filesCh = pc.createDataChannel("files");
+      filesCh.binaryType = "arraybuffer";
       filesCh.onopen = () => (canSendFiles.value = true);
       filesCh.onclose = () => (canSendFiles.value = false);
       filesCh.onmessage = (ev) => {
+        if (typeof ev.data !== "string") {
+          // Binary = a download chunk.
+          if (!dl) return;
+          const u8 = new Uint8Array(ev.data);
+          dl.chunks.push(u8);
+          dl.received += u8.byteLength;
+          downloadProgress.value = dl.size ? dl.received / dl.size : 0;
+          return;
+        }
         try {
           const m = JSON.parse(ev.data);
           if (m.t === "file_done") {
             uploadStatus.value = `saved on remote: ${m.name}`;
             uploadProgress.value = 0;
+          } else if (m.t === "dl_start") {
+            dl = { name: m.name, size: m.size ?? 0, received: 0, chunks: [] };
+            downloadStatus.value = `downloading ${m.name}…`;
+            downloadProgress.value = 0;
+          } else if (m.t === "dl_end") {
+            finishDownload();
+          } else if (m.t === "dl_cancel") {
+            dl = null;
+            downloadProgress.value = 0;
+            downloadStatus.value =
+              m.reason === "cancelled" ? "the store cancelled the download" : "download failed";
           }
         } catch {
           /* ignore non-JSON */
@@ -225,6 +277,9 @@ export function useRemote() {
     canSendFiles.value = false;
     uploadProgress.value = 0;
     uploadStatus.value = "";
+    downloadProgress.value = 0;
+    downloadStatus.value = "";
+    dl = null;
     canChat.value = false;
     messages.value = [];
     unread.value = 0;
@@ -260,6 +315,8 @@ export function useRemote() {
     canSendFiles,
     uploadProgress,
     uploadStatus,
+    downloadProgress,
+    downloadStatus,
     canChat,
     messages,
     unread,
@@ -267,6 +324,7 @@ export function useRemote() {
     disconnect,
     sendInput,
     sendFile,
+    requestDownload,
     sendChat,
     markChatRead,
   };
