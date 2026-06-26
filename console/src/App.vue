@@ -48,10 +48,15 @@ const {
   canSendFiles,
   uploadProgress,
   uploadStatus,
+  canChat,
+  messages,
+  unread,
   connect,
   disconnect,
   sendInput,
   sendFile,
+  sendChat,
+  markChatRead,
 } = useRemote();
 
 const videoEl = ref<HTMLVideoElement | null>(null);
@@ -119,6 +124,31 @@ const connectingLabel = computed(() => {
   if (s === "connecting" || s === "checking" || s === "new") return "Establishing a secure connection…";
   return s.charAt(0).toUpperCase() + s.slice(1);
 });
+
+// Chat panel.
+const chatOpen = ref(false);
+const draft = ref("");
+const chatLog = ref<HTMLDivElement | null>(null);
+function toggleChat() {
+  chatOpen.value = !chatOpen.value;
+  if (chatOpen.value) markChatRead();
+}
+function sendDraft() {
+  const text = draft.value;
+  draft.value = "";
+  sendChat(text);
+}
+// Auto-scroll to the newest message; clear unread while the panel is open.
+watch(
+  messages,
+  () => {
+    if (chatOpen.value) markChatRead();
+    nextTick(() => {
+      if (chatLog.value) chatLog.value.scrollTop = chatLog.value.scrollHeight;
+    });
+  },
+  { deep: true },
+);
 
 // Fullscreen the remote-screen stage (Esc exits).
 const isFullscreen = ref(false);
@@ -246,6 +276,21 @@ function onKeyUp(e: KeyboardEvent) {
 
         <template v-if="phase === 'live'">
           <button
+            v-if="canChat"
+            class="relative grid h-8 w-8 place-items-center rounded-lg border bg-ink/50 transition focus-visible:ring-2 focus-visible:ring-accent"
+            :class="chatOpen ? 'border-accent text-accent2' : 'border-edge text-slate-300 hover:border-slate-600 hover:text-slate-100'"
+            title="Chat"
+            @click="toggleChat"
+          >
+            <Icon name="chat" class="h-4 w-4" />
+            <span
+              v-if="unread > 0"
+              class="absolute -right-1 -top-1 grid h-4 min-w-4 place-items-center rounded-full bg-accent px-1 text-[10px] font-bold text-white"
+            >
+              {{ unread > 9 ? "9+" : unread }}
+            </span>
+          </button>
+          <button
             class="grid h-8 w-8 place-items-center rounded-lg border border-edge bg-ink/50 text-slate-300 transition hover:border-slate-600 hover:text-slate-100 focus-visible:ring-2 focus-visible:ring-accent"
             :title="isFullscreen ? 'Exit fullscreen' : 'Fullscreen'"
             @click="toggleFullscreen"
@@ -326,6 +371,58 @@ function onKeyUp(e: KeyboardEvent) {
         >
           Click to control · keystrokes are forwarded
         </div>
+
+        <!-- Chat panel -->
+        <transition name="slide">
+          <aside
+            v-if="chatOpen"
+            class="absolute bottom-0 right-0 top-0 z-30 flex w-80 flex-col border-l border-edge bg-panel/95 backdrop-blur"
+          >
+            <header class="flex items-center gap-2 border-b border-edge px-4 py-3">
+              <Icon name="chat" class="h-4 w-4 text-accent2" />
+              <span class="text-sm font-semibold text-slate-100">Chat</span>
+              <span class="text-xs text-slate-500">with {{ agentId }}</span>
+              <button
+                class="ml-auto grid h-6 w-6 place-items-center rounded-md text-slate-500 transition hover:bg-ink hover:text-slate-200"
+                title="Close"
+                @click="toggleChat"
+              >
+                <Icon name="x" class="h-4 w-4" />
+              </button>
+            </header>
+
+            <div ref="chatLog" class="flex-1 space-y-2 overflow-y-auto px-3 py-3">
+              <p v-if="!messages.length" class="mt-6 px-3 text-center text-sm text-slate-600">
+                No messages yet. Say hello to the person at the remote PC.
+              </p>
+              <div v-for="(m, i) in messages" :key="i" class="flex" :class="m.mine ? 'justify-end' : 'justify-start'">
+                <span
+                  class="max-w-[85%] whitespace-pre-wrap break-words rounded-2xl px-3 py-1.5 text-sm"
+                  :class="m.mine ? 'rounded-br-sm bg-accent text-white' : 'rounded-bl-sm bg-ink text-slate-200'"
+                >
+                  {{ m.text }}
+                </span>
+              </div>
+            </div>
+
+            <form class="flex items-center gap-2 border-t border-edge p-3" @submit.prevent="sendDraft">
+              <input
+                v-model="draft"
+                placeholder="Type a message…"
+                autocomplete="off"
+                @keydown.enter.prevent="sendDraft"
+                class="min-w-0 flex-1 rounded-lg border border-edge bg-ink px-3 py-2 text-sm text-slate-100 outline-none transition placeholder:text-slate-600 focus:border-accent focus:ring-2 focus:ring-accent/30"
+              />
+              <button
+                type="submit"
+                :disabled="!draft.trim()"
+                class="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-accent text-white transition hover:bg-accent/90 disabled:opacity-40 focus-visible:ring-2 focus-visible:ring-accent"
+              >
+                <Icon name="send" class="h-4 w-4" />
+              </button>
+            </form>
+          </aside>
+        </transition>
       </template>
 
       <!-- CONNECTING -->
@@ -433,6 +530,17 @@ function onKeyUp(e: KeyboardEvent) {
 </template>
 
 <style scoped>
+/* Chat panel slide-in. */
+.slide-enter-active,
+.slide-leave-active {
+  transition: transform 0.2s ease, opacity 0.2s ease;
+}
+.slide-enter-from,
+.slide-leave-to {
+  transform: translateX(100%);
+  opacity: 0;
+}
+
 /* Subtle dotted grid behind the connection / connecting states. */
 .stage-grid {
   background-image: radial-gradient(circle at center, rgba(109, 94, 252, 0.07), transparent 60%),

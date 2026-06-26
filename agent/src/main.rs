@@ -12,7 +12,8 @@
 
 use std::sync::Arc;
 
-use arna_agent::{session_code, Consent, ConnectRequest, ConsentFn};
+use arna_agent::{session_code, ChatBridge, Consent, ConnectRequest, ConsentFn};
+use tokio::io::AsyncBufReadExt;
 
 /// What the agent does when a console asks to connect. Set with `ARNA_CONSENT`:
 /// `accept` (default — auto-admit), `prompt` (ask y/n on the terminal), or
@@ -87,5 +88,22 @@ async fn main() {
     let id = args.get(2).cloned().unwrap_or_else(|| "agent-1".to_string());
 
     let consent = build_consent(consent_policy());
-    arna_agent::run(url, id, consent).await;
+
+    // Chat: print what the admin sends; send whatever the operator types here.
+    // (Lines from stdin go to the connected console.)
+    let chat = ChatBridge::new(|text| println!("\n[chat] admin: {text}"));
+    {
+        let chat = chat.clone();
+        tokio::spawn(async move {
+            let mut lines = tokio::io::BufReader::new(tokio::io::stdin()).lines();
+            while let Ok(Some(line)) = lines.next_line().await {
+                let line = line.trim().to_string();
+                if !line.is_empty() {
+                    chat.send(&line).await;
+                }
+            }
+        });
+    }
+
+    arna_agent::run(url, id, consent, chat).await;
 }

@@ -30,6 +30,7 @@ use openh264::formats::{RgbSliceU8, YUVBuffer};
 use openh264::OpenH264API;
 use scrap::{Capturer, Display};
 use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::io::AsyncWriteExt;
 use tokio::sync::{watch, Mutex as AsyncMutex};
 
@@ -459,14 +460,85 @@ fn handle_files_channel(dc: Arc<RTCDataChannel>) {
 }
 
 // ---------------------------------------------------------------------------
+// Chat (live text, both ways) — bridges the `chat` channel to the host app
+// ---------------------------------------------------------------------------
+
+fn now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+/// Bridges in-session chat between the WebRTC `chat` data channels and the host
+/// app (terminal for the headless agent, a window for the desktop app). Incoming
+/// messages are handed to `on_incoming`; [`ChatBridge::send`] delivers a reply to
+/// every connected viewer.
+#[derive(Clone)]
+pub struct ChatBridge {
+    channels: Arc<Mutex<Vec<Arc<RTCDataChannel>>>>,
+    on_incoming: Arc<dyn Fn(String) + Send + Sync>,
+}
+
+impl ChatBridge {
+    /// `on_incoming(text)` is called for each message a viewer sends.
+    pub fn new(on_incoming: impl Fn(String) + Send + Sync + 'static) -> Self {
+        Self {
+            channels: Arc::new(Mutex::new(Vec::new())),
+            on_incoming: Arc::new(on_incoming),
+        }
+    }
+
+    /// Send a chat message to all connected viewers.
+    pub async fn send(&self, text: &str) {
+        let payload = serde_json::json!({ "t": "msg", "text": text, "ts": now_ms() }).to_string();
+        // Snapshot the channels so we don't hold the lock across awaits.
+        let chans: Vec<Arc<RTCDataChannel>> = match self.channels.lock() {
+            Ok(c) => c.clone(),
+            Err(_) => return,
+        };
+        for ch in chans {
+            let _ = ch.send_text(payload.clone()).await;
+        }
+    }
+
+    /// Attach a freshly-opened `chat` channel: forward its messages to
+    /// `on_incoming` and keep it for outgoing replies. Called synchronously when
+    /// the channel opens so no early message is missed.
+    fn attach(&self, dc: Arc<RTCDataChannel>) {
+        let on_incoming = self.on_incoming.clone();
+        dc.on_message(Box::new(move |msg| {
+            let on_incoming = on_incoming.clone();
+            Box::pin(async move {
+                if !msg.is_string {
+                    return;
+                }
+                let text = String::from_utf8_lossy(&msg.data);
+                if let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) {
+                    if v.get("t").and_then(|t| t.as_str()) == Some("msg") {
+                        if let Some(body) = v.get("text").and_then(|t| t.as_str()) {
+                            on_incoming(body.to_string());
+                        }
+                    }
+                }
+            })
+        }));
+        if let Ok(mut chans) = self.channels.lock() {
+            chans.push(dc);
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // The agent loop
 // ---------------------------------------------------------------------------
 
 /// Run the agent: capture the primary screen, register on the signaling
 /// backend, and serve admitted viewers (H.264 screen video + inject their
-/// input). `consent` decides whether each requesting console is admitted.
-/// Returns when the signaling socket closes.
-pub async fn run(url: String, id: String, consent: ConsentFn) {
+/// input + files + chat). `consent` decides whether each requesting console is
+/// admitted; `chat` bridges live text to the host app. Returns when the
+/// signaling socket closes.
+pub async fn run(url: String, id: String, consent: ConsentFn, chat: ChatBridge) {
     let (screen_w, screen_h) = primary_size();
 
     // Capture thread publishes the latest downscaled RGB frame.
@@ -492,7 +564,7 @@ pub async fn run(url: String, id: String, consent: ConsentFn) {
     let on_peer = make_on_peer(rx);
 
     // Per opened data channel: "input" -> inject events; "files" -> receive
-    // files into ~/ArnaRemote/Incoming.
+    // files into ~/ArnaRemote/Incoming; "chat" -> bridge live text.
     let on_channel: Arc<dyn Fn(Arc<RTCDataChannel>) + Send + Sync> =
         Arc::new(move |dc| match dc.label() {
             "input" => {
@@ -507,6 +579,10 @@ pub async fn run(url: String, id: String, consent: ConsentFn) {
                 }));
             }
             "files" => handle_files_channel(dc),
+            "chat" => {
+                println!("agent: chat channel open");
+                chat.attach(dc);
+            }
             other => println!("agent: ignoring unknown channel '{other}'"),
         });
 

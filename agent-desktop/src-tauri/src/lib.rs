@@ -142,8 +142,11 @@ pub fn run() {
                 .unwrap_or_else(|_| "ws://127.0.0.1:8081/ws".to_string());
             let id = std::env::var("ARNA_AGENT_ID").unwrap_or_else(|_| "agent-1".to_string());
 
+            // Chat bridge — for now just logs incoming; a chat window is added next.
+            let chat = arna_agent::ChatBridge::new(|text| log::info!("chat from admin: {text}"));
+
             tauri::async_runtime::spawn(async move {
-                arna_agent::run(url, id, consent).await;
+                arna_agent::run(url, id, consent, chat).await;
             });
             Ok(())
         })

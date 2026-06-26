@@ -24,11 +24,18 @@ export function useRemote() {
   const uploadProgress = ref(0);
   /** Short upload status line, e.g. "sending report.pdf…" / "saved on remote". */
   const uploadStatus = ref("");
+  /** Whether chat is available (the `chat` channel is open). */
+  const canChat = ref(false);
+  /** In-session chat log. */
+  const messages = ref<{ mine: boolean; text: string; ts: number }[]>([]);
+  /** Unread incoming messages (reset via markChatRead). */
+  const unread = ref(0);
 
   let ws: WebSocket | null = null;
   let pc: RTCPeerConnection | null = null;
   let inputCh: RTCDataChannel | null = null;
   let filesCh: RTCDataChannel | null = null;
+  let chatCh: RTCDataChannel | null = null;
 
   /** Send an input event to the agent (no-op until the control channel is open). */
   function sendInput(event: Record<string, unknown>) {
@@ -67,6 +74,19 @@ export function useRemote() {
     }
     ch.send(JSON.stringify({ t: "file_end", id }));
     uploadStatus.value = `sent ${file.name} — finishing…`;
+  }
+
+  /** Send a chat message to the remote PC. */
+  function sendChat(text: string) {
+    const body = text.trim();
+    if (!body || !chatCh || chatCh.readyState !== "open") return;
+    chatCh.send(JSON.stringify({ t: "msg", text: body, ts: Date.now() }));
+    messages.value.push({ mine: true, text: body, ts: Date.now() });
+  }
+
+  /** Clear the unread counter (call when the chat panel is open/focused). */
+  function markChatRead() {
+    unread.value = 0;
   }
 
   function connect(backendUrl: string, agentId: string, ticket?: string) {
@@ -176,6 +196,22 @@ export function useRemote() {
         }
       };
 
+      // Chat channel: live text both ways during the session.
+      chatCh = pc.createDataChannel("chat");
+      chatCh.onopen = () => (canChat.value = true);
+      chatCh.onclose = () => (canChat.value = false);
+      chatCh.onmessage = (ev) => {
+        try {
+          const m = JSON.parse(ev.data);
+          if (m.t === "msg" && typeof m.text === "string") {
+            messages.value.push({ mine: false, text: m.text, ts: m.ts ?? Date.now() });
+            unread.value += 1;
+          }
+        } catch {
+          /* ignore non-JSON */
+        }
+      };
+
       const off = await pc.createOffer();
       await pc.setLocalDescription(off);
       ws!.send(JSON.stringify({ type: "signal", to: agentId, data: { kind: "offer", sdp: off.sdp } }));
@@ -189,10 +225,14 @@ export function useRemote() {
     canSendFiles.value = false;
     uploadProgress.value = 0;
     uploadStatus.value = "";
+    canChat.value = false;
+    messages.value = [];
+    unread.value = 0;
     errorMessage.value = null;
     errorKind.value = null;
     inputCh = null;
     filesCh = null;
+    chatCh = null;
     if (pc) {
       pc.close();
       pc = null;
@@ -220,9 +260,14 @@ export function useRemote() {
     canSendFiles,
     uploadProgress,
     uploadStatus,
+    canChat,
+    messages,
+    unread,
     connect,
     disconnect,
     sendInput,
     sendFile,
+    sendChat,
+    markChatRead,
   };
 }
