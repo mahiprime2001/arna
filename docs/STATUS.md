@@ -44,7 +44,8 @@ wraps into **Tauri** desktop apps (Agent on machines, Console for the admin).
 | 3b | **Tauri** wrapping — console desktop ✅; agent tray + consent popup ✅ | ✅ done |
 | 4a | **H.264 video track** (OpenH264) replaces JPEG-over-data-channel | ✅ verified (decodes in Chrome) |
 | 4b | **File transfer** console → agent (drag-drop → `~/ArnaRemote/Incoming`) | ✅ verified (byte-identical) |
-| later | chat, file download, SSH/FTP, fleet, meet; multi-monitor; coturn | ⏳ |
+| 4c | **Live chat** both ways (console panel ↔ agent terminal / desktop chat window) | ✅ verified two-way |
+| later | file download, SSH/FTP, fleet, meet; multi-monitor; coturn | ⏳ |
 
 ## Run it locally (Windows)
 ```bash
@@ -76,6 +77,9 @@ Website: `cd d:\Siri-apps\arna-website && npm run dev` (port 4300).
 - **input** data channel (viewer → agent, JSON mouse/key events; injected via `enigo`).
 - **files** data channel (viewer → agent): drag a file onto the console (or "Send
   file") → chunked over the channel → agent saves to `~/ArnaRemote/Incoming`.
+- **chat** data channel (both ways): console chat panel ↔ agent. The headless
+  agent chats via the terminal; `agent-desktop` opens a chat window on the first
+  message. `node scripts/chat-check.mjs` verifies both directions.
 - Domains (planned): `arna.ifleon.com` site · `api.arna.ifleon.com` backend ·
   `turn.arna.ifleon.com` coturn. Console launch deep link: `arnaremote://`.
 

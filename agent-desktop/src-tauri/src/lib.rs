@@ -10,17 +10,78 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-use arna_agent::{session_code, Consent, ConnectRequest, ConsentFn};
+use arna_agent::{session_code, ChatBridge, Consent, ConnectRequest, ConsentFn};
 use tauri::{
     menu::{Menu, MenuItem},
     tray::TrayIconBuilder,
-    AppHandle, Manager, WebviewUrl, WebviewWindowBuilder,
+    AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder,
 };
 use tokio::sync::{oneshot, Mutex};
 
 /// Pending consent decisions, keyed by the requesting console id. The popup's
 /// `respond_consent` command fulfils the matching sender.
 type Pending = Arc<Mutex<HashMap<String, oneshot::Sender<Consent>>>>;
+
+// ---------------------------------------------------------------------------
+// Chat window
+// ---------------------------------------------------------------------------
+
+/// One chat message in the session log. `id` (its index) lets the window dedupe
+/// the initial history against live events.
+#[derive(Clone, serde::Serialize)]
+struct ChatMsg {
+    id: u64,
+    mine: bool,
+    text: String,
+}
+
+/// In-session chat log, so a freshly-opened chat window can show what came before.
+type ChatLog = Arc<std::sync::Mutex<Vec<ChatMsg>>>;
+
+/// Append a message and return it (with its assigned id).
+fn push_msg(log: &ChatLog, mine: bool, text: String) -> ChatMsg {
+    let mut l = log.lock().expect("chat log");
+    let msg = ChatMsg {
+        id: l.len() as u64,
+        mine,
+        text,
+    };
+    l.push(msg.clone());
+    msg
+}
+
+/// Create the chat window if it isn't already open (and focus it).
+fn ensure_chat_window(app: &AppHandle) {
+    if let Some(win) = app.get_webview_window("chat") {
+        let _ = win.set_focus();
+        return;
+    }
+    let _ = WebviewWindowBuilder::new(app, "chat", WebviewUrl::App("index.html?view=chat".into()))
+        .title("Arna — chat")
+        .inner_size(380.0, 520.0)
+        .min_inner_size(320.0, 380.0)
+        .build();
+}
+
+/// The chat window fetches the existing log on open.
+#[tauri::command]
+fn chat_history(log: tauri::State<'_, ChatLog>) -> Vec<ChatMsg> {
+    log.lock().map(|l| l.clone()).unwrap_or_default()
+}
+
+/// Send a reply from the store to the connected console.
+#[tauri::command]
+async fn send_chat(
+    app: AppHandle,
+    chat: tauri::State<'_, ChatBridge>,
+    log: tauri::State<'_, ChatLog>,
+    text: String,
+) -> Result<(), String> {
+    let msg = push_msg(&log, true, text.clone());
+    let _ = app.emit("chat://msg", &msg);
+    chat.send(&text).await;
+    Ok(())
+}
 
 /// Window label for a console's consent popup (ids are safe: `viewer-<n>`).
 fn consent_label(console_id: &str) -> String {
@@ -117,7 +178,8 @@ pub fn run() {
         .manage(Arc::new(Mutex::new(
             HashMap::<String, oneshot::Sender<Consent>>::new(),
         )) as Pending)
-        .invoke_handler(tauri::generate_handler![respond_consent])
+        .manage(Arc::new(std::sync::Mutex::new(Vec::<ChatMsg>::new())) as ChatLog)
+        .invoke_handler(tauri::generate_handler![respond_consent, chat_history, send_chat])
         .setup(|app| {
             // Tray icon: the agent runs in the background; the menu offers Quit.
             let quit = MenuItem::with_id(app, "quit", "Quit Arna Agent", true, None::<&str>)?;
@@ -142,8 +204,19 @@ pub fn run() {
                 .unwrap_or_else(|_| "ws://127.0.0.1:8081/ws".to_string());
             let id = std::env::var("ARNA_AGENT_ID").unwrap_or_else(|_| "agent-1".to_string());
 
-            // Chat bridge — for now just logs incoming; a chat window is added next.
-            let chat = arna_agent::ChatBridge::new(|text| log::info!("chat from admin: {text}"));
+            // Chat: log the message, make sure the chat window is open, and push
+            // it to the window. The window dedupes history vs. live events by id.
+            let chat_log = app.state::<ChatLog>().inner().clone();
+            let chat_handle = app.handle().clone();
+            let chat = ChatBridge::new(move |text| {
+                let msg = push_msg(&chat_log, false, text);
+                let handle = chat_handle.clone();
+                let _ = chat_handle.run_on_main_thread(move || {
+                    ensure_chat_window(&handle);
+                    let _ = handle.emit("chat://msg", &msg);
+                });
+            });
+            app.manage(chat.clone());
 
             tauri::async_runtime::spawn(async move {
                 arna_agent::run(url, id, consent, chat).await;

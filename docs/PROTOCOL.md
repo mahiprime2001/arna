@@ -61,7 +61,9 @@ a reconnect requires fresh consent.
   by `bufferedAmount`) → `{t:"file_end",id}`. The agent saves to
   `~/ArnaRemote/Incoming` (name sanitized, de-duplicated) and replies
   `{t:"file_done",name,bytes}`. *(Agent → console download: later.)*
-- `chat` — live messages (both ways). *(Phase 4.)*
+- `chat` — live text both ways (Phase 4c): `{t:"msg",text,ts}`. The agent bridges
+  it to the host app (terminal for the headless agent; a chat window in
+  `agent-desktop`).
 - `control` — monitor list, quality, clipboard, session end. *(later.)*
 
 > **H.264 negotiation notes (webrtc-rs answerer):** the agent registers a
