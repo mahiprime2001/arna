@@ -90,6 +90,18 @@ async function run() {
   expect(m.type === "request_denied" && m.reason === "not an agent", "should deny connect to a console");
   ok("connect_request to a non-agent is refused");
 
+  // 6) Spamming connect_requests gets rate-limited.
+  const spam = await open();
+  sockets.push(spam);
+  send(spam, { type: "register", role: "console", id: "viewer-spam" });
+  await next(spam);
+  const st = await devToken("agent=agent-1&name=Spam");
+  for (let i = 0; i < 14; i++) send(spam, { type: "connect_request", to: "agent-1", ticket: st });
+  await new Promise((r) => setTimeout(r, 500));
+  const throttled = spam.inbox.filter((x) => x.type === "request_denied" && /too many/.test(x.reason || ""));
+  expect(throttled.length > 0, "connect_request spam should be throttled");
+  ok(`connect_request spam is rate-limited (${throttled.length} refused)`);
+
   console.log("\nAUTH HARDENING OK");
 }
 

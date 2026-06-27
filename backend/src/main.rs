@@ -25,7 +25,7 @@
 //! unset, auth is **open** (dev mode) and the console is shown as "Console (id)".
 
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use axum::{
     extract::{
@@ -232,12 +232,32 @@ async fn handle_socket(socket: WebSocket, hub: Arc<Hub>) {
 
     let mut my_id: Option<String> = None;
 
+    // Per-connection rate limits: cap overall message rate (anti-flood, closes the
+    // socket) and connect_requests (anti popup-spam, just refuses the extra ones).
+    const MSG_PER_SEC: u32 = 60;
+    const CREQ_PER_WINDOW: u32 = 10;
+    let creq_window = Duration::from_secs(5);
+    let (mut msg_win, mut msg_n) = (Instant::now(), 0u32);
+    let (mut creq_win, mut creq_n) = (Instant::now(), 0u32);
+
     while let Some(Ok(msg)) = stream.next().await {
         let text = match msg {
             Message::Text(t) => t,
             Message::Close(_) => break,
             _ => continue,
         };
+
+        // Anti-flood: too many messages per second -> drop this abusive socket.
+        let now = Instant::now();
+        if now.duration_since(msg_win) >= Duration::from_secs(1) {
+            msg_win = now;
+            msg_n = 0;
+        }
+        msg_n += 1;
+        if msg_n > MSG_PER_SEC {
+            warn!(id = ?my_id, "rate limit: message flood — closing connection");
+            break;
+        }
 
         let incoming: Incoming = match serde_json::from_str(&text) {
             Ok(v) => v,
@@ -291,6 +311,21 @@ async fn handle_socket(socket: WebSocket, hub: Arc<Hub>) {
                         continue;
                     }
                 };
+                // Throttle connect_requests so one console can't spam an agent's
+                // consent popup (or brute-force agent ids).
+                let now = Instant::now();
+                if now.duration_since(creq_win) >= creq_window {
+                    creq_win = now;
+                    creq_n = 0;
+                }
+                creq_n += 1;
+                if creq_n > CREQ_PER_WINDOW {
+                    let _ = tx.send(encode(&Outgoing::RequestDenied {
+                        to,
+                        reason: "too many requests — slow down".into(),
+                    }));
+                    continue;
+                }
                 match verify_ticket(&hub.sso_secret, ticket.as_deref(), &to, &from) {
                     Ok(name) => match hub.peers.get(&to) {
                         // Only route to a peer that actually registered as an agent.

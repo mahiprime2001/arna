@@ -117,24 +117,32 @@ Website: `cd d:\Siri-apps\arna-website && npm run dev` (port 4300).
 - **Headless agent** `ARNA_CONSENT` = `accept` (default) · `prompt` (terminal y/N)
   · `decline`. The **desktop agent** (`agent-desktop`) ignores this and shows the
   real Accept/Decline popup instead (`ARNA_BACKEND` / `ARNA_AGENT_ID` configure it).
-- **Backend** `ARNA_SSO_SECRET` (HS256 secret; unset = open dev mode) and, for
-  testing, `ARNA_DEV_TICKETS=1` → `GET /dev/ticket?agent=<id>&name=<n>` mints a
-  5-min ticket. Console has an optional **Ticket** field (paste the dev JWT).
+- **Backend** `ARNA_SSO_SECRET` (HS256 secret; unset = open dev mode). When set:
+  agents must present a token (`ARNA_AGENT_TOKEN`) to register, and consoles need a
+  ticket to connect. For testing, `ARNA_DEV_TICKETS=1` →
+  `GET /dev/ticket?role=agent&id=<id>` (agent token) or `?agent=<id>&name=<n>`
+  (console ticket). Console has an optional **Ticket** field.
+- **Security model + secure-deploy checklist:** see [SECURITY.md](SECURITY.md).
+  Hardening done: device auth (no impersonation), role-aware routing, rate limiting.
+  Verify: `node scripts/smoke-auth.mjs` against an SSO backend.
 - Smoke test (signaling-level, no GUI): `node scripts/smoke-consent.mjs` (open
   mode) or `SSO=1 node scripts/smoke-consent.mjs` against an SSO-enabled backend.
 
 ## Next steps
-1. **Chat** (Phase 4c): live `chat` data channel — panel in the console, small
-   window in `agent-desktop`.
-2. **File download** (agent → console): pick a file on the store PC (Tauri dialog)
-   and pull it to the admin.
-3. Then: SSH/FTP, fleet health + remote commands, meet.
-4. **Bundle + ship**: configurable server address (stop hand-editing `127.0.0.1`),
-   `tauri build` installers, then deploy backend + **coturn** so two machines across
-   the internet connect reliably (current P2P/STUN is LAN-reliable only).
-5. **Hardening** (Phase 5): multi-monitor, reconnect, run-as-service/SYSTEM (UAC),
-   signed installers, deep link (`arnaremote://`), audit log.
+1. **Security — finish hardening:** optional **require-code** consent mode; then the
+   big one — **accounts + device ownership** (sign in, your devices belong to you,
+   connect only to your own/shared devices). See [SECURITY.md](SECURITY.md).
+2. **Accounts/identity backend:** SQLite, users, device registry, pairing — replaces
+   the shared-secret tokens with per-user authorization.
+3. **Bundle + ship:** configurable/remembered server address (hosted default +
+   custom), `tauri build` installers, deploy backend + **coturn** so two machines
+   across the internet connect reliably (current P2P/STUN is LAN-reliable only).
+4. **More features:** fleet health + remote commands, clipboard sync, multi-monitor,
+   SSH/FTP, meet.
+5. **Phase 5 polish:** reconnect, run-as-service/SYSTEM (UAC), signed installers,
+   deep link (`arnaremote://`), audit log.
 
-Known limitations: view+control + file push works; file pull/chat not yet; the
-agent popup is verified to appear but Accept→stream is best confirmed on two
-machines; no UAC/secure-desktop control; coturn not deployed (P2P/STUN, LAN-reliable).
+Known limitations: view+control + files (both ways) + chat work. Security: device
+auth + role routing + rate limiting done; **no user accounts yet** (token-based);
+no audit log; consent is Accept-only (require-code planned). Two-machine Accept→
+stream best confirmed on real machines; coturn not deployed (P2P/STUN, LAN-reliable).
