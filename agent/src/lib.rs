@@ -589,6 +589,7 @@ impl ChatBridge {
 pub async fn run(
     url: String,
     id: String,
+    token: Option<String>,
     consent: ConsentFn,
     chat: ChatBridge,
     download: DownloadProvider,
@@ -611,7 +612,7 @@ pub async fn run(
             return;
         }
     };
-    signaling.register("agent", &id);
+    signaling.register("agent", &id, token.as_deref());
     println!("agent registered as '{id}' — waiting for a viewer...");
 
     // Per admitted connection: attach a screen video track + start encoding.

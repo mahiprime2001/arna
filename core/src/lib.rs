@@ -28,6 +28,8 @@ pub enum ClientMsg {
     Register {
         role: String,
         id: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        token: Option<String>,
     },
     /// Ask to start a session with `to`. The backend verifies `ticket` (when SSO
     /// is enabled) and forwards an `incoming_request` to the agent.
@@ -157,11 +159,14 @@ impl Signaling {
         }
     }
 
-    /// Register this peer with the backend so others can reach it by `id`.
-    pub fn register(&self, role: &str, id: &str) {
+    /// Register this peer with the backend so others can reach it by `id`. Agents
+    /// pass a `token` proving they own the id (required when the backend has auth
+    /// enabled); consoles pass `None`.
+    pub fn register(&self, role: &str, id: &str, token: Option<&str>) {
         self.send(&ClientMsg::Register {
             role: role.to_string(),
             id: id.to_string(),
+            token: token.map(|t| t.to_string()),
         });
     }
 

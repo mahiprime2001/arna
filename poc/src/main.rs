@@ -28,7 +28,7 @@ async fn main() {
     let signaling = Signaling::connect(&url)
         .await
         .expect("failed to connect to signaling backend");
-    signaling.register(&role, &id);
+    signaling.register(&role, &id, None);
     println!("[{id}] connected and registered as {role}");
 
     // A peer id means we initiate (offerer); otherwise we wait for an offer.

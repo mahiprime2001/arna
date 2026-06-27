@@ -203,6 +203,7 @@ pub fn run() {
             let url = std::env::var("ARNA_BACKEND")
                 .unwrap_or_else(|_| "ws://127.0.0.1:8081/ws".to_string());
             let id = std::env::var("ARNA_AGENT_ID").unwrap_or_else(|_| "agent-1".to_string());
+            let token = std::env::var("ARNA_AGENT_TOKEN").ok().filter(|t| !t.is_empty());
 
             // Chat: log the message, make sure the chat window is open, and push
             // it to the window. The window dedupes history vs. live events by id.
@@ -234,7 +235,7 @@ pub fn run() {
             });
 
             tauri::async_runtime::spawn(async move {
-                arna_agent::run(url, id, consent, chat, download).await;
+                arna_agent::run(url, id, token, consent, chat, download).await;
             });
             Ok(())
         })

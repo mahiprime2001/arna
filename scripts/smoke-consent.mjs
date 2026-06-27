@@ -6,7 +6,7 @@ const URL = "ws://127.0.0.1:8081/ws";
 const HTTP = "http://127.0.0.1:8081";
 
 const sockets = [];
-function open(id, role) {
+function open(id, role, token) {
   return new Promise((resolve) => {
     const ws = new WebSocket(URL);
     sockets.push(ws);
@@ -21,10 +21,14 @@ function open(id, role) {
       else ws.inbox.push(m);
     };
     ws.onopen = () => {
-      ws.send(JSON.stringify({ type: "register", role, id }));
+      ws.send(JSON.stringify({ type: "register", role, id, token }));
       resolve(ws);
     };
   });
+}
+async function agentToken(id) {
+  const r = await fetch(`${HTTP}/dev/ticket?role=agent&id=${encodeURIComponent(id)}`);
+  return r.ok ? (await r.json()).token : undefined;
 }
 function next(ws, timeoutMs = 2000) {
   if (ws.inbox.length) return Promise.resolve(ws.inbox.shift());
@@ -77,7 +81,7 @@ async function run() {
   // ---- SSO mode (requires backend started with ARNA_SSO_SECRET + ARNA_DEV_TICKETS=1) ----
   if (ssoOn) {
     console.log("[sso mode]");
-    const a2 = await open("agent-sso", "agent");
+    const a2 = await open("agent-sso", "agent", await agentToken("agent-sso"));
     const c2 = await open("viewer-sso", "console");
     await drainRegistered(a2);
     await drainRegistered(c2);

@@ -88,6 +88,8 @@ async fn main() {
         .cloned()
         .unwrap_or_else(|| "ws://127.0.0.1:8081/ws".to_string());
     let id = args.get(2).cloned().unwrap_or_else(|| "agent-1".to_string());
+    // Token proving this agent owns its id (required when the backend has auth on).
+    let token = std::env::var("ARNA_AGENT_TOKEN").ok().filter(|t| !t.is_empty());
 
     let consent = build_consent(consent_policy());
 
@@ -121,5 +123,5 @@ async fn main() {
         })
     });
 
-    arna_agent::run(url, id, consent, chat, download).await;
+    arna_agent::run(url, id, token, consent, chat, download).await;
 }
