@@ -45,6 +45,9 @@ const {
   sessionCode,
   errorMessage,
   errorKind,
+  awaitingCode,
+  codeError,
+  submitCode,
   canSendFiles,
   uploadProgress,
   uploadStatus,
@@ -133,6 +136,12 @@ const connectingLabel = computed(() => {
 });
 
 // Chat panel.
+const codeInput = ref("");
+function onSubmitCode() {
+  submitCode(codeInput.value);
+  codeInput.value = "";
+}
+
 const chatOpen = ref(false);
 const draft = ref("");
 const chatLog = ref<HTMLDivElement | null>(null);
@@ -442,26 +451,54 @@ function onKeyUp(e: KeyboardEvent) {
 
       <!-- CONNECTING -->
       <div v-else-if="phase === 'connecting'" class="flex flex-col items-center gap-5 px-6 text-center">
-        <div class="relative grid h-16 w-16 place-items-center">
-          <span class="absolute inset-0 animate-spin rounded-full border-2 border-edge border-t-accent" />
-          <Icon name="monitor" class="h-6 w-6 text-slate-400" />
-        </div>
-        <div>
-          <p class="text-base font-medium text-slate-100">{{ connectingLabel }}</p>
-          <p class="mt-1 font-mono text-sm text-slate-500">{{ agentId }}</p>
-        </div>
-        <p
-          v-if="sessionCode"
-          class="rounded-lg border border-edge bg-panel px-3 py-2 text-sm text-slate-400"
-        >
-          If asked for a code, share <span class="font-mono font-semibold text-accent2">{{ sessionCode }}</span>
-        </p>
-        <button
-          class="rounded-lg border border-edge px-4 py-2 text-sm font-medium text-slate-300 transition hover:bg-panel focus-visible:ring-2 focus-visible:ring-accent"
-          @click="toggle"
-        >
-          Cancel
-        </button>
+        <!-- Require-code: ask the caller for the code the operator reads out -->
+        <template v-if="awaitingCode">
+          <div class="grid h-14 w-14 place-items-center rounded-2xl bg-accent/10 text-accent2 ring-1 ring-inset ring-accent/20">
+            <Icon name="shield" class="h-6 w-6" />
+          </div>
+          <div>
+            <p class="text-base font-medium text-slate-100">Enter the code</p>
+            <p class="mt-1 max-w-xs text-sm text-slate-500">
+              The person at <span class="font-mono text-slate-400">{{ agentId }}</span> will read you a 6-digit code.
+            </p>
+          </div>
+          <form class="flex flex-col items-center gap-2" @submit.prevent="onSubmitCode">
+            <input
+              v-model="codeInput"
+              inputmode="numeric"
+              maxlength="6"
+              placeholder="000000"
+              autofocus
+              class="w-44 rounded-lg border border-edge bg-ink px-3 py-2.5 text-center font-mono text-2xl tracking-[0.3em] text-slate-100 outline-none focus:border-accent focus:ring-2 focus:ring-accent/30"
+            />
+            <p v-if="codeError" class="text-xs text-rose-300">{{ codeError }}</p>
+            <div class="mt-1 flex gap-2">
+              <button type="button" class="rounded-lg border border-edge px-4 py-2 text-sm font-medium text-slate-300 transition hover:bg-panel" @click="toggle">Cancel</button>
+              <button type="submit" :disabled="codeInput.trim().length < 6" class="rounded-lg bg-accent px-5 py-2 text-sm font-semibold text-white transition hover:bg-accent/90 disabled:opacity-40">Connect</button>
+            </div>
+          </form>
+        </template>
+
+        <!-- Normal connecting -->
+        <template v-else>
+          <div class="relative grid h-16 w-16 place-items-center">
+            <span class="absolute inset-0 animate-spin rounded-full border-2 border-edge border-t-accent" />
+            <Icon name="monitor" class="h-6 w-6 text-slate-400" />
+          </div>
+          <div>
+            <p class="text-base font-medium text-slate-100">{{ connectingLabel }}</p>
+            <p class="mt-1 font-mono text-sm text-slate-500">{{ agentId }}</p>
+          </div>
+          <p v-if="sessionCode" class="rounded-lg border border-edge bg-panel px-3 py-2 text-sm text-slate-400">
+            If asked for a code, share <span class="font-mono font-semibold text-accent2">{{ sessionCode }}</span>
+          </p>
+          <button
+            class="rounded-lg border border-edge px-4 py-2 text-sm font-medium text-slate-300 transition hover:bg-panel focus-visible:ring-2 focus-visible:ring-accent"
+            @click="toggle"
+          >
+            Cancel
+          </button>
+        </template>
       </div>
 
       <!-- IDLE: connection panel -->

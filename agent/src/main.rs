@@ -18,18 +18,21 @@ use arna_agent::{
 use tokio::io::AsyncBufReadExt;
 
 /// What the agent does when a console asks to connect. Set with `ARNA_CONSENT`:
-/// `accept` (default — auto-admit), `prompt` (ask y/n on the terminal), or
-/// `decline` (always refuse). The Tauri app replaces this with a popup window.
+/// `accept` (default — auto-admit), `prompt` (ask y/n on the terminal), `code`
+/// (the caller must type the code shown here), or `decline` (always refuse). The
+/// Tauri app replaces this with a popup window.
 #[derive(Clone, Copy)]
 enum ConsentPolicy {
     Accept,
     Prompt,
+    Code,
     Decline,
 }
 
 fn consent_policy() -> ConsentPolicy {
     match std::env::var("ARNA_CONSENT").as_deref() {
         Ok("prompt") => ConsentPolicy::Prompt,
+        Ok("code") => ConsentPolicy::Code,
         Ok("decline") => ConsentPolicy::Decline,
         _ => ConsentPolicy::Accept,
     }
@@ -60,6 +63,13 @@ fn build_consent(policy: ConsentPolicy) -> ConsentFn {
                         req.name, req.from
                     );
                     Consent::Accept { code: Some(code) }
+                }
+                ConsentPolicy::Code => {
+                    println!(
+                        "agent: {} must enter code {code} to connect — read it out to them",
+                        req.name
+                    );
+                    Consent::AskCode { code }
                 }
                 ConsentPolicy::Decline => Consent::Decline {
                     reason: "operator policy: connections disabled".into(),

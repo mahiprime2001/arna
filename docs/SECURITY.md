@@ -13,6 +13,9 @@ How Arna keeps remote sessions safe, and how to deploy it securely. This is the
   one-time 6-digit code before any session starts, and can end it at any time. The
   agent only answers WebRTC offers from peers it has admitted; approval is revoked
   on disconnect, so a reconnect must re-consent.
+- **Optional require-code mode.** In `code` mode the agent admits a caller only
+  after they type the 6-digit code the operator reads out (3 tries, then refused) —
+  guards against blind-accept social engineering. `node scripts/smoke-code.mjs`.
 
 ## Hardening (implemented)
 
@@ -49,8 +52,6 @@ How Arna keeps remote sessions safe, and how to deploy it securely. This is the
 - No user accounts / device ownership yet — authorization is by shared-secret token,
   not per-user. (Accounts, device pairing, "only your devices" come next.)
 - No audit log of who connected to what, when.
-- Consent is Accept-only by default; an optional **require-code** mode (the caller
-  must enter the operator's code) is planned.
 - coturn not deployed yet (P2P/STUN only; LAN-reliable).
 
 ## Verify it

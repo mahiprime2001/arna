@@ -143,6 +143,6 @@ Website: `cd d:\Siri-apps\arna-website && npm run dev` (port 4300).
    deep link (`arnaremote://`), audit log.
 
 Known limitations: view+control + files (both ways) + chat work. Security: device
-auth + role routing + rate limiting done; **no user accounts yet** (token-based);
-no audit log; consent is Accept-only (require-code planned). Two-machine Accept→
-stream best confirmed on real machines; coturn not deployed (P2P/STUN, LAN-reliable).
+auth + role routing + rate limiting + require-code consent done; **no user accounts
+yet** (token-based); no audit log. Two-machine Accept→stream best confirmed on real
+machines; coturn not deployed (P2P/STUN, LAN-reliable).

@@ -136,6 +136,9 @@ pub struct ConnectRequest {
 pub enum Consent {
     /// Admit the console. `code` (if any) is shown to both sides as a bonus.
     Accept { code: Option<String> },
+    /// Admit only after the console echoes this exact code (the operator reads it
+    /// out, the caller types it in). Guards against blind-accept social engineering.
+    AskCode { code: String },
     /// Refuse, with a short human-readable reason.
     Decline { reason: String },
 }
@@ -178,6 +181,9 @@ pub async fn answer_streaming(
         Arc::new(Mutex::new(HashMap::new()));
     // Consoles the operator has admitted; an offer from anyone else is ignored.
     let approved: Arc<Mutex<HashSet<String>>> = Arc::new(Mutex::new(HashSet::new()));
+    // Consoles awaiting code entry (require-code mode): peer -> (expected, attempts).
+    let pending_codes: Arc<Mutex<HashMap<String, (String, u32)>>> =
+        Arc::new(Mutex::new(HashMap::new()));
 
     while let Some(msg) = signaling.recv().await {
         let (from, data) = match msg {
@@ -186,6 +192,7 @@ pub async fn answer_streaming(
                 let consent = consent.clone();
                 let sender = sender.clone();
                 let approved = approved.clone();
+                let pending_codes = pending_codes.clone();
                 let tag = tag.clone();
                 tokio::spawn(async move {
                     match consent(ConnectRequest {
@@ -200,6 +207,14 @@ pub async fn answer_streaming(
                             sender.signal(
                                 &from,
                                 json!({ "kind": "consent", "accepted": true, "code": code }),
+                            );
+                        }
+                        Consent::AskCode { code } => {
+                            pending_codes.lock().await.insert(from.clone(), (code, 0));
+                            println!("[{tag}] {from}: waiting for the caller to enter the code");
+                            sender.signal(
+                                &from,
+                                json!({ "kind": "consent", "accepted": true, "require_code": true }),
                             );
                         }
                         Consent::Decline { reason } => {
@@ -217,6 +232,40 @@ pub async fn answer_streaming(
             _ => continue,
         };
         match data.get("kind").and_then(|k| k.as_str()).unwrap_or("") {
+            "code" => {
+                let got = data.get("code").and_then(|c| c.as_str()).unwrap_or("");
+                let mut codes = pending_codes.lock().await;
+                // Some(true) = correct, Some(false) = wrong, None = nothing pending.
+                let matched = match codes.get_mut(&from) {
+                    Some((expected, attempts)) => {
+                        if got == expected {
+                            Some(true)
+                        } else {
+                            *attempts += 1;
+                            Some(false)
+                        }
+                    }
+                    None => None,
+                };
+                match matched {
+                    Some(true) => {
+                        codes.remove(&from);
+                        drop(codes);
+                        approved.lock().await.insert(from.clone());
+                        println!("[{tag}] {from}: correct code — admitted");
+                        sender.signal(&from, json!({ "kind": "code_ok" }));
+                    }
+                    Some(false) => {
+                        let exhausted = codes.get(&from).map(|(_, a)| *a >= 3).unwrap_or(true);
+                        if exhausted {
+                            codes.remove(&from);
+                        }
+                        println!("[{tag}] {from}: wrong code (final={exhausted})");
+                        sender.signal(&from, json!({ "kind": "code_bad", "final": exhausted }));
+                    }
+                    None => {}
+                }
+            }
             "offer" => {
                 if !approved.lock().await.contains(&from) {
                     println!("[{tag}] ignoring offer from unapproved peer {from}");
@@ -236,6 +285,7 @@ pub async fn answer_streaming(
                 {
                     let sessions = sessions.clone();
                     let approved = approved.clone();
+                    let pending_codes = pending_codes.clone();
                     let peer = from.clone();
                     let tag = tag.clone();
                     pc.on_peer_connection_state_change(Box::new(
@@ -243,6 +293,7 @@ pub async fn answer_streaming(
                             println!("[{tag}] {peer}: {s}");
                             let sessions = sessions.clone();
                             let approved = approved.clone();
+                            let pending_codes = pending_codes.clone();
                             let peer = peer.clone();
                             Box::pin(async move {
                                 if matches!(
@@ -253,6 +304,7 @@ pub async fn answer_streaming(
                                 ) {
                                     sessions.lock().await.remove(&peer);
                                     approved.lock().await.remove(&peer);
+                                    pending_codes.lock().await.remove(&peer);
                                 }
                             })
                         },

@@ -18,6 +18,10 @@ export function useRemote() {
   const errorMessage = ref<string | null>(null);
   /** Coarse error kind so the UI can pick an icon: "offline" | "denied" | null. */
   const errorKind = ref<"offline" | "denied" | null>(null);
+  /** True when the remote PC requires the caller to type the operator's code. */
+  const awaitingCode = ref(false);
+  /** Error shown under the code field (wrong code). */
+  const codeError = ref("");
   /** Whether files can be sent (the `files` channel is open). */
   const canSendFiles = ref(false);
   /** Current upload progress 0..1 (0 when idle). */
@@ -42,6 +46,15 @@ export function useRemote() {
   let inputCh: RTCDataChannel | null = null;
   let filesCh: RTCDataChannel | null = null;
   let chatCh: RTCDataChannel | null = null;
+  let currentAgentId: string | null = null;
+
+  /** Submit the operator's code (require-code consent mode). */
+  function submitCode(code: string) {
+    const c = code.trim();
+    if (!ws || !currentAgentId || !c) return;
+    codeError.value = "";
+    ws.send(JSON.stringify({ type: "signal", to: currentAgentId, data: { kind: "code", code: c } }));
+  }
 
   /** Send an input event to the agent (no-op until the control channel is open). */
   function sendInput(event: Record<string, unknown>) {
@@ -123,6 +136,7 @@ export function useRemote() {
   function connect(backendUrl: string, agentId: string, ticket?: string) {
     disconnect();
     active.value = true;
+    currentAgentId = agentId;
     const myId = "viewer-" + Math.floor(Math.random() * 1e6);
 
     ws = new WebSocket(backendUrl);
@@ -161,12 +175,28 @@ export function useRemote() {
       } else if (m.type === "signal") {
         const d = m.data;
         if (d.kind === "consent") {
-          if (d.accepted) {
+          if (d.accepted && d.require_code) {
+            // The operator must read you a code; show the entry prompt.
+            awaitingCode.value = true;
+            codeError.value = "";
+            status.value = "enter the code shown on the other PC";
+          } else if (d.accepted) {
             sessionCode.value = d.code ?? null;
             status.value = "accepted — connecting";
             offer(agentId);
           } else {
             fail(d.reason ? `The remote PC declined: ${d.reason}.` : "The remote PC declined the connection.", "denied");
+          }
+        } else if (d.kind === "code_ok") {
+          awaitingCode.value = false;
+          status.value = "accepted — connecting";
+          offer(agentId);
+        } else if (d.kind === "code_bad") {
+          if (d.final) {
+            awaitingCode.value = false;
+            fail("Wrong code too many times — connection refused.", "denied");
+          } else {
+            codeError.value = "That code didn't match — try again.";
           }
         } else if (d.kind === "answer") {
           await pc!.setRemoteDescription({ type: "answer", sdp: d.sdp });
@@ -285,6 +315,9 @@ export function useRemote() {
     unread.value = 0;
     errorMessage.value = null;
     errorKind.value = null;
+    awaitingCode.value = false;
+    codeError.value = "";
+    currentAgentId = null;
     inputCh = null;
     filesCh = null;
     chatCh = null;
@@ -312,6 +345,9 @@ export function useRemote() {
     sessionCode,
     errorMessage,
     errorKind,
+    awaitingCode,
+    codeError,
+    submitCode,
     canSendFiles,
     uploadProgress,
     uploadStatus,
