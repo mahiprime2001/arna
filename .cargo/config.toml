@@ -1,0 +1,4 @@
+# Project-local cargo aliases. `cargo dev` runs the xtask dev runner, which
+# brings up the backend + the Arna app together (see xtask/src/main.rs).
+[alias]
+dev = "run --quiet --package xtask --"

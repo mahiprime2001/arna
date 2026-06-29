@@ -66,9 +66,18 @@ address configurable. See [PLAN.md](PLAN.md) §0.
 | later | Deploy backend + coturn (cross-internet test); SSH/FTP, fleet, meet | ⏳ |
 
 ## Run it locally (Windows)
+
+**One command** from the repo root brings up the whole stack (backend + the Arna
+app), each in its own terminal window:
 ```bash
 cd d:\Siri-apps\arna-remote
-cargo build --release -p arna-agent
+cargo dev            # backend + Arna app together (cargo dev backend / cargo dev app for one)
+```
+`cargo dev` is an alias (`.cargo/config.toml`) for the `xtask` dev runner
+(`xtask/src/main.rs`). First time, run `cd console && npm install` once.
+
+Or start the pieces by hand:
+```bash
 # 1) backend
 cargo run --manifest-path backend/Cargo.toml          # ws://127.0.0.1:8081/ws , GET /health
 # 2) be-controlled side — headless agent (auto-consent, fast for 2-machine testing) ...

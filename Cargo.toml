@@ -4,5 +4,5 @@
 # excluded because the Tauri CLI manages them as their own crates.
 [workspace]
 resolver = "2"
-members = ["core", "poc", "agent"]
+members = ["core", "poc", "agent", "xtask"]
 exclude = ["backend", "console/src-tauri"]

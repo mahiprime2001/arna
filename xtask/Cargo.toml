@@ -1,0 +1,8 @@
+[package]
+name = "xtask"
+version = "0.1.0"
+edition = "2021"
+description = "Dev runner for Arna — `cargo dev` brings up the whole local stack"
+publish = false
+
+[dependencies]
