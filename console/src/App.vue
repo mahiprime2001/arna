@@ -101,6 +101,7 @@ const loginEmail = ref("");
 const loginPassword = ref("");
 const isSignup = ref(false);
 const showManual = ref(false); // signed-out: connect without an account (self-host)
+const showServer = ref(false); // signed-out: reveal the server address field
 
 async function submitAuth() {
   const fn = isSignup.value ? authSignup : authLogin;
@@ -907,6 +908,20 @@ function onKeyUp(e: KeyboardEvent) {
               {{ isSignup ? "Already have an account?" : "New here?" }}
               <button class="font-medium text-accent2 hover:underline" @click="isSignup = !isSignup">{{ isSignup ? "Sign in" : "Create one" }}</button>
             </p>
+
+            <!-- Server (point at a LAN / self-hosted / VPS backend) -->
+            <div class="mt-5 border-t border-edge/70 pt-4">
+              <button class="flex w-full items-center gap-1.5 text-xs font-medium text-slate-500 transition hover:text-slate-300" @click="showServer = !showServer">
+                <Icon name="shield" class="h-3.5 w-3.5" /> Server
+                <span class="ml-auto font-mono text-[11px] text-slate-600">{{ showServer ? "▾" : "▸" }}</span>
+              </button>
+              <input
+                v-if="showServer"
+                v-model="backend"
+                spellcheck="false"
+                class="mt-2 w-full rounded-lg border border-edge bg-ink px-3 py-2 font-mono text-xs text-slate-300 outline-none transition focus:border-accent focus:ring-2 focus:ring-accent/30"
+              />
+            </div>
           </div>
           <p class="mt-4 text-center text-xs">
             <button class="text-slate-500 underline-offset-2 hover:text-slate-300 hover:underline" @click="showManual = true">Connect without an account</button>
