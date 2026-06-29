@@ -64,7 +64,7 @@ address configurable. See [PLAN.md](PLAN.md) §0.
 | 5g | **Bundle** — MSI + NSIS installers (`tauri build`) | ✅ built |
 | 5h | **Unify** — one "Arna" app does both sides (console UI + agent loop + tray) | ✅ built; agent-registers + views route verified |
 | 5i | **Accounts UX** — short Arna IDs, device **access passwords** (unattended), connect-by-ID with name lookup, **sidebar dashboard + profile (ID/QR/links)** | ✅ verified in Chrome |
-| 5j | **App bubble** (Windows) — open one curated app on a hidden desktop, stream + control just it while the owner keeps working (no VM); Apps menu + exit chip | ✅ e2e verified (consent popup TODO) |
+| 5j | **App bubble** (Windows) — open one curated app on a hidden desktop, stream + control just it while the owner keeps working (no VM); Apps menu + exit chip + **operator consent popup** | ✅ e2e verified |
 | later | Deploy backend + coturn (cross-internet test); SSH/FTP, fleet, meet | ⏳ |
 
 ## Run it locally (Windows)
