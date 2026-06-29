@@ -59,7 +59,8 @@ address configurable. See [PLAN.md](PLAN.md) §0.
 | 5c | **Agent pairing window** — paste device id + token (no env vars); saved to disk | ✅ built |
 | 5d | **TURN/ICE config** from backend (single source; `GET /ice` + WS `registered`) | ✅ verified |
 | 5e | **Multi-monitor** — pick which screen to view + correct input (Win32 `winmon`) | ✅ built; enum + e2e verified |
-| later | SSH/FTP, fleet, meet; clipboard sync; deploy coturn | ⏳ |
+| 5f | **Clipboard sync** both ways (`clip` channel; agent watches OS clipboard) | ✅ console→agent verified |
+| later | SSH/FTP, fleet, meet; deploy coturn | ⏳ |
 
 ## Run it locally (Windows)
 ```bash
@@ -142,9 +143,9 @@ Website: `cd d:\Siri-apps\arna-website && npm run dev` (port 4300).
    (hosted default + custom), `tauri build` installers, then deploy backend +
    **coturn** (TURN config is wired — set `ARNA_TURN*` on the backend — just needs
    a relay running). ICE config is now backend-driven and LAN-reliable on STUN.
-3. **More features:** ~~multi-monitor~~ ✅ (pick which screen; Win32 `winmon` for
-   correct cross-monitor input). Next: clipboard sync, fleet health + remote
-   commands, SSH/FTP, meet.
+3. **More features:** ~~multi-monitor~~ ✅ (Win32 `winmon` for correct
+   cross-monitor input), ~~clipboard sync~~ ✅ (both ways via the `clip` channel).
+   Next: fleet health + remote commands, SSH/FTP, meet.
 4. **App / extended-screen sharing** (researched): share one app or a separate
    desktop in a sandbox so the remote person controls it independently while the
    owner keeps working. Plain-language plan in [APP-SHARING.md](APP-SHARING.md).
