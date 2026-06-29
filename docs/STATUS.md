@@ -129,16 +129,18 @@ Website: `cd d:\Siri-apps\arna-website && npm run dev` (port 4300).
   mode) or `SSO=1 node scripts/smoke-consent.mjs` against an SSO-enabled backend.
 
 ## Next steps
-1. **Security — finish hardening:** optional **require-code** consent mode; then the
-   big one — **accounts + device ownership** (sign in, your devices belong to you,
-   connect only to your own/shared devices). See [SECURITY.md](SECURITY.md).
-2. **Accounts/identity backend:** SQLite, users, device registry, pairing — replaces
-   the shared-secret tokens with per-user authorization.
-3. **Bundle + ship:** configurable/remembered server address (hosted default +
+1. **Security — accounts + device ownership** (the big one): sign in, your devices
+   belong to you, connect only to your own/shared devices — replaces shared-secret
+   tokens with per-user authorization. Backend gets SQLite + users + device registry
+   + pairing. See [SECURITY.md](SECURITY.md). (Hardening already done.)
+2. **Bundle + ship:** configurable/remembered server address (hosted default +
    custom), `tauri build` installers, deploy backend + **coturn** so two machines
    across the internet connect reliably (current P2P/STUN is LAN-reliable only).
-4. **More features:** fleet health + remote commands, clipboard sync, multi-monitor,
+3. **More features:** fleet health + remote commands, clipboard sync, multi-monitor,
    SSH/FTP, meet.
+4. **App / extended-screen sharing** (researched): share one app or a separate
+   desktop in a sandbox so the remote person controls it independently while the
+   owner keeps working. Plain-language plan in [APP-SHARING.md](APP-SHARING.md).
 5. **Phase 5 polish:** reconnect, run-as-service/SYSTEM (UAC), signed installers,
    deep link (`arnaremote://`), audit log.
 
