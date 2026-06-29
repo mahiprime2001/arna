@@ -11,8 +11,10 @@ Commits are authored as `mahiprime2001` (noreply email) + `Co-Authored-By: Claud
 
 ## What Arna is
 A self-hosted, all-in-one remote platform: **Remote control, Fleet, Chat, Meet,
-Files, SSH/FTP** — built on one WebRTC engine. v1 focus = remote control. Later
-wraps into **Tauri** desktop apps (Agent on machines, Console for the controller).
+Files, SSH/FTP** — built on one WebRTC engine. v1 focus = remote control. Ships as
+**one Tauri desktop app, "Arna"**, that does both sides like AnyDesk/TeamViewer:
+control others (console UI) *and* be controlled (agent loop in the background +
+tray + consent popup), in a single install.
 
 **Audience & distribution:** general-purpose, **for everyone** (personal +
 enterprise) — like TeamViewer/AnyDesk. **Open source + hosted:** we host it so
@@ -28,17 +30,17 @@ address configurable. See [PLAN.md](PLAN.md) §0.
 | `backend/` | Rust **axum** signaling hub (WS: register / signal / ice) | ✅ works, dockerized |
 | `core/` | Rust lib: signaling client + **webrtc-rs** P2P (`p2p` module) | ✅ verified |
 | `poc/` | CLI to test signaling + P2P | ✅ verified |
-| `agent/` | Rust **lib + headless bin**: capture (`scrap`) → **H.264** (`openh264`) → WebRTC video; input (`enigo`); consent | ✅ verified |
-| `agent-desktop/` | **Tauri v2** wrap of `agent`: tray + **consent popup window** (Vue) | ✅ builds + runs |
-| `console/` | **Vue 3 + Vite** app, wrapped in **Tauri v2** (`console/src-tauri/`) | ✅ desktop wrap builds + launches |
+| `agent/` | Rust **lib + headless bin** (the engine): capture (`scrap`) → **H.264** (`openh264`) → WebRTC video; input (`enigo`); consent; clipboard; multi-monitor | ✅ verified |
+| `console/` | **The unified Arna app**: Vue 3 + Vite console UI + the agent loop, in **Tauri v2** (`console/src-tauri/`) — control others *and* be controlled | ✅ builds + runs |
+| `agent-desktop/` | *Legacy* standalone tray-only agent app — **superseded** by the unified `console/` app; kept only as a basis for a future unattended Enterprise agent | 🗄️ legacy |
 | `infra/` | docker-compose (Caddy + backend + coturn), `.env.example` | scaffold |
 | `.github/workflows/` | `backend`, `core`, `console`, `release` (tag-driven) | ✅ green |
 | `docs/` | `PLAN.md`, `PROTOCOL.md`, `RELEASING.md`, this file | — |
 
-> `backend` and the Tauri shells (`console/src-tauri`, `agent-desktop/src-tauri`)
-> are **excluded** from the Cargo workspace (`members = core, poc, agent`): backend
-> builds standalone in Docker, and the Tauri CLI manages the shells as their own
-> crates. `agent-desktop/src-tauri` depends on the `agent` crate by path.
+> `backend` and the Tauri shell (`console/src-tauri`) are **excluded** from the
+> Cargo workspace (`members = core, poc, agent`): backend builds standalone in
+> Docker, and the Tauri CLI manages the shell as its own crate. `console/src-tauri`
+> depends on the `agent` crate by path (it runs the agent loop in-process).
 
 ## Phase progress
 | Phase | What | Status |
@@ -60,7 +62,8 @@ address configurable. See [PLAN.md](PLAN.md) §0.
 | 5d | **TURN/ICE config** from backend (single source; `GET /ice` + WS `registered`) | ✅ verified |
 | 5e | **Multi-monitor** — pick which screen to view + correct input (Win32 `winmon`) | ✅ built; enum + e2e verified |
 | 5f | **Clipboard sync** both ways (`clip` channel; agent watches OS clipboard) | ✅ console→agent verified |
-| 5g | **Bundle** — Console + Agent build MSI + NSIS installers (`tauri build`) | ✅ both built |
+| 5g | **Bundle** — MSI + NSIS installers (`tauri build`) | ✅ built |
+| 5h | **Unify** — one "Arna" app does both sides (console UI + agent loop + tray) | ✅ built; agent-registers + views route verified |
 | later | Deploy backend + coturn (cross-internet test); SSH/FTP, fleet, meet | ⏳ |
 
 ## Run it locally (Windows)
@@ -69,11 +72,12 @@ cd d:\Siri-apps\arna-remote
 cargo build --release -p arna-agent
 # 1) backend
 cargo run --manifest-path backend/Cargo.toml          # ws://127.0.0.1:8081/ws , GET /health
-# 2) agent — headless (auto-consent, fast for 2-machine testing) ...
+# 2) be-controlled side — headless agent (auto-consent, fast for 2-machine testing) ...
 cargo run -p arna-agent --release -- ws://127.0.0.1:8081/ws agent-1
-#    ... OR the desktop app: tray + a real Accept/Decline consent popup
-cd agent-desktop && npm install && npm run tauri:dev
-# 3) console — browser (fast dev) OR desktop app
+#    ... OR the unified Arna desktop app, which also runs the agent loop (tray +
+#    a real Accept/Decline consent popup). Pair via the tray, or set env:
+#    ARNA_AGENT_ID + ARNA_BACKEND. Same app as the console below.
+# 3) console — browser (fast dev) OR the unified Arna desktop app
 cd console && npm install && npm run dev              # http://localhost:4310  (Agent id = agent-1)
 cd console && npm run tauri:dev                       #   or the Tauri desktop window
 ```
@@ -96,7 +100,7 @@ Website: `cd d:\Siri-apps\arna-website && npm run dev` (port 4300).
   "Download" button → the operator picks a file (native dialog; `ARNA_DOWNLOAD_FILE`
   for the headless agent) → streams back → browser saves it.
 - **chat** data channel (both ways): console chat panel ↔ agent. The headless
-  agent chats via the terminal; `agent-desktop` opens a chat window on the first
+  agent chats via the terminal; the unified Arna app opens a chat window on the first
   message. `node scripts/chat-check.mjs` verifies both directions.
 - Domains (planned): `arna.ifleon.com` site · `api.arna.ifleon.com` backend ·
   `turn.arna.ifleon.com` coturn. Console launch deep link: `arnaremote://`.
@@ -122,8 +126,9 @@ Website: `cd d:\Siri-apps\arna-website && npm run dev` (port 4300).
 
 ## Consent + auth config (Phase 3a)
 - **Headless agent** `ARNA_CONSENT` = `accept` (default) · `prompt` (terminal y/N)
-  · `decline`. The **desktop agent** (`agent-desktop`) ignores this and shows the
-  real Accept/Decline popup instead (`ARNA_BACKEND` / `ARNA_AGENT_ID` configure it).
+  · `decline`. The **unified Arna app** ignores this and shows the real
+  Accept/Decline popup instead (paired via the tray, or `ARNA_BACKEND` /
+  `ARNA_AGENT_ID` / `ARNA_AGENT_TOKEN` for dev).
 - **Backend** `ARNA_SSO_SECRET` (HS256 secret; unset = open dev mode). When set:
   agents must present a token (`ARNA_AGENT_TOKEN`) to register, and consoles need a
   ticket to connect. For testing, `ARNA_DEV_TICKETS=1` →

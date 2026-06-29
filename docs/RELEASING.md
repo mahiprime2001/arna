@@ -23,20 +23,22 @@ The `release` workflow then:
 Use a tag containing a hyphen — e.g. `v0.1.0-beta.1`. The release is marked as a
 **pre-release** and the Docker image is **not** tagged `latest`.
 
-## Desktop apps (Agent + Console)
+## Desktop app (Arna)
 
-Both are real Tauri v2 apps. Build installers locally with `tauri build`:
+There's **one** app — `console/` builds the unified "Arna" (console UI + the
+agent loop, so it both controls others and can be controlled). Build installers
+locally with `tauri build`:
 
 ```bash
-# Console (the viewer app)
 cd console && npm install && npm run tauri:build
-# Agent (the app that runs on the PC being controlled)
-cd agent-desktop && npm install && npm run tauri:build
 ```
 
-On Windows this produces, under `*/src-tauri/target/release/bundle/`:
-- `msi/Arna <App>_<ver>_x64_en-US.msi` (WiX)
-- `nsis/Arna <App>_<ver>_x64-setup.exe` (NSIS)
+On Windows this produces, under `console/src-tauri/target/release/bundle/`:
+- `msi/Arna_<ver>_x64_en-US.msi` (WiX)
+- `nsis/Arna_<ver>_x64-setup.exe` (NSIS)
+
+(`agent-desktop/` is legacy and no longer shipped; the headless `agent` binary
+is still built for unattended/CI use.)
 
 (macOS → `.dmg`/`.app`; Linux → `.AppImage`/`.deb` when built on those OSes.)
 
@@ -45,14 +47,15 @@ On Windows this produces, under `*/src-tauri/target/release/bundle/`:
 By default a build talks to `ws://127.0.0.1:8081/ws` (LAN/dev). The server is
 also editable in-app (the console remembers it; the agent's pairing window has a
 Server field), so unconfigured installers still work — users just type the URL.
-To bake your hosted backend into a build so it "just works", set, **at build
-time**:
+To bake your hosted backend into a build so it "just works", set both **at build
+time** (in `console/`): `VITE_ARNA_BACKEND` for the console UI and
+`ARNA_DEFAULT_BACKEND` for the agent loop (compile-time `option_env!`):
 
 ```bash
-# Console (Vite env)
-VITE_ARNA_BACKEND=wss://api.your-domain.com/ws npm run tauri:build   # in console/
-# Agent (compile-time, via option_env!)
-ARNA_DEFAULT_BACKEND=wss://api.your-domain.com/ws npm run tauri:build # in agent-desktop/
+cd console
+VITE_ARNA_BACKEND=wss://api.your-domain.com/ws \
+ARNA_DEFAULT_BACKEND=wss://api.your-domain.com/ws \
+  npm run tauri:build
 ```
 
 Pair this with a deployed backend that has TURN configured (`ARNA_TURN*`, see
