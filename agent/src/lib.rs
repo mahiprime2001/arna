@@ -36,6 +36,8 @@ use std::time::{Duration as StdDuration, SystemTime, UNIX_EPOCH};
 use tokio::io::AsyncWriteExt;
 use tokio::sync::{watch, Mutex as AsyncMutex};
 
+mod winmon;
+
 // Re-export the consent types so the apps can build a `ConsentFn` without a
 // direct dependency on `arna-core`.
 pub use arna_core::p2p::{Consent, ConnectRequest, ConsentFn};
@@ -68,6 +70,26 @@ fn even(n: u32) -> u32 {
     n & !1
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn print_screens() {
+        winmon::make_dpi_aware();
+        let screens = enumerate_screens();
+        println!("found {} screen(s):", screens.len());
+        for (i, s) in screens.iter().enumerate() {
+            println!(
+                "  [{i}] {}x{} at ({},{}) primary={}",
+                s.width, s.height, s.ox, s.oy, s.primary
+            );
+        }
+        println!("announce: {}", monitors_announce());
+        assert!(!screens.is_empty());
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Screen capture
 // ---------------------------------------------------------------------------
@@ -88,49 +110,153 @@ fn bgra_to_rgb(frame: &[u8], w: usize, h: usize) -> Vec<u8> {
     rgb
 }
 
-fn capture_loop(tx: watch::Sender<Frame>) {
-    let display = match Display::primary() {
-        Ok(d) => d,
-        Err(e) => {
-            eprintln!("agent: no primary display: {e}");
-            return;
-        }
-    };
-    let mut capturer = match Capturer::new(display) {
-        Ok(c) => c,
-        Err(e) => {
-            eprintln!("agent: failed to start capturer: {e}");
-            return;
-        }
-    };
-    let (w, h) = (capturer.width(), capturer.height());
-    let tw = even((w.min(TARGET_WIDTH as usize)) as u32);
-    let th = even((h as u32 * tw) / w as u32);
-    println!("agent: capturing {w}x{h} -> encoding {tw}x{th}");
+/// A capturable screen: scrap's `all()` order defines the index, enriched with
+/// each monitor's desktop origin + primary flag (from Win32, matched by
+/// resolution since scrap doesn't expose monitor positions).
+#[derive(Clone, Copy)]
+struct ScreenInfo {
+    ox: i32,
+    oy: i32,
+    width: i32,
+    height: i32,
+    primary: bool,
+}
 
+/// Enumerate capturable screens. scrap defines order/index (so a chosen index
+/// maps to the right `Capturer`); Win32 supplies the origin + primary flag,
+/// joined by matching resolution (greedy; two identical monitors may swap, which
+/// only matters for input on the rarer of the two).
+fn enumerate_screens() -> Vec<ScreenInfo> {
+    let wins = winmon::monitors();
+    let mut used = vec![false; wins.len()];
+    let displays = Display::all().unwrap_or_default();
+    let mut out = Vec::new();
+    for (i, d) in displays.iter().enumerate() {
+        let (w, h) = (d.width() as i32, d.height() as i32);
+        let matched = wins
+            .iter()
+            .enumerate()
+            .find(|(j, m)| !used[*j] && m.width == w && m.height == h);
+        let (ox, oy, primary) = match matched {
+            Some((j, m)) => {
+                used[j] = true;
+                (m.x, m.y, m.primary)
+            }
+            None => (0, 0, i == 0),
+        };
+        out.push(ScreenInfo {
+            ox,
+            oy,
+            width: w,
+            height: h,
+            primary,
+        });
+    }
+    if out.is_empty() {
+        let (w, h) = primary_size();
+        out.push(ScreenInfo {
+            ox: 0,
+            oy: 0,
+            width: w,
+            height: h,
+            primary: true,
+        });
+    }
+    out
+}
+
+/// JSON sent to the console on the input channel listing the screens it can pick
+/// from: `{ "t":"monitors", "list":[{ index, label, width, height, primary }] }`.
+fn monitors_announce() -> String {
+    let list: Vec<serde_json::Value> = enumerate_screens()
+        .iter()
+        .enumerate()
+        .map(|(i, s)| {
+            serde_json::json!({
+                "index": i,
+                "label": format!("Screen {}", i + 1),
+                "width": s.width,
+                "height": s.height,
+                "primary": s.primary,
+            })
+        })
+        .collect();
+    serde_json::json!({ "t": "monitors", "list": list }).to_string()
+}
+
+/// Capture the *selected* screen, downscale, and publish frames. Switching the
+/// selection (via `sel`) rebuilds the capturer on the new display; the active
+/// screen's origin + full size is published on `active` so input maps correctly.
+fn capture_loop(
+    tx: watch::Sender<Frame>,
+    mut sel: watch::Receiver<usize>,
+    active: watch::Sender<(i32, i32, i32, i32)>,
+) {
     loop {
-        match capturer.frame() {
-            Ok(frame) => {
-                let rgb_full = bgra_to_rgb(&frame, w, h);
-                let img = match image::RgbImage::from_raw(w as u32, h as u32, rgb_full) {
-                    Some(i) => i,
-                    None => continue,
-                };
-                let scaled =
-                    image::imageops::resize(&img, tw, th, image::imageops::FilterType::Triangle);
-                let f = Frame {
-                    rgb: Arc::new(scaled.into_raw()),
-                    w: tw as usize,
-                    h: th as usize,
-                };
-                if tx.send(f).is_err() {
+        let screens = enumerate_screens();
+        let idx = (*sel.borrow_and_update()).min(screens.len().saturating_sub(1));
+        let info = screens[idx];
+
+        // Re-fetch owned displays to build the capturer for the chosen index.
+        let displays = match Display::all() {
+            Ok(d) => d,
+            Err(e) => {
+                eprintln!("agent: cannot list displays: {e}");
+                return;
+            }
+        };
+        let display = match displays.into_iter().nth(idx).or_else(|| Display::primary().ok()) {
+            Some(d) => d,
+            None => {
+                eprintln!("agent: no display to capture");
+                return;
+            }
+        };
+        let mut capturer = match Capturer::new(display) {
+            Ok(c) => c,
+            Err(e) => {
+                eprintln!("agent: failed to start capturer: {e}");
+                return;
+            }
+        };
+        let (w, h) = (capturer.width(), capturer.height());
+        let tw = even((w.min(TARGET_WIDTH as usize)) as u32);
+        let th = even((h as u32 * tw) / w as u32);
+        let _ = active.send((info.ox, info.oy, w as i32, h as i32));
+        println!("agent: capturing screen {idx} {w}x{h} -> encoding {tw}x{th}");
+
+        loop {
+            // Selection changed → drop this capturer and rebuild on the new screen.
+            if sel.has_changed().unwrap_or(false) {
+                break;
+            }
+            match capturer.frame() {
+                Ok(frame) => {
+                    let rgb_full = bgra_to_rgb(&frame, w, h);
+                    let img = match image::RgbImage::from_raw(w as u32, h as u32, rgb_full) {
+                        Some(i) => i,
+                        None => continue,
+                    };
+                    let scaled = image::imageops::resize(
+                        &img,
+                        tw,
+                        th,
+                        image::imageops::FilterType::Triangle,
+                    );
+                    let f = Frame {
+                        rgb: Arc::new(scaled.into_raw()),
+                        w: tw as usize,
+                        h: th as usize,
+                    };
+                    if tx.send(f).is_err() {
+                        return;
+                    }
+                }
+                Err(ref e) if e.kind() == WouldBlock => thread::sleep(Duration::from_millis(30)),
+                Err(e) => {
+                    eprintln!("agent: capture error: {e}");
                     break;
                 }
-            }
-            Err(ref e) if e.kind() == WouldBlock => thread::sleep(Duration::from_millis(30)),
-            Err(e) => {
-                eprintln!("agent: capture error: {e}");
-                break;
             }
         }
     }
@@ -140,23 +266,35 @@ fn capture_loop(tx: watch::Sender<Frame>) {
 // H.264 video track (one encoder per viewer)
 // ---------------------------------------------------------------------------
 
+/// Build a fresh H.264 encoder. Called again whenever the frame resolution
+/// changes (e.g. the operator switches to a differently-sized monitor) — OpenH264
+/// fixes its dimensions from the first frame, so a size change needs a new one.
+fn new_encoder() -> Option<Encoder> {
+    let cfg = EncoderConfig::new()
+        .usage_type(UsageType::ScreenContentRealTime)
+        .rate_control_mode(RateControlMode::Bitrate)
+        .set_bitrate_bps(BITRATE_BPS)
+        .max_frame_rate(30.0)
+        .enable_skip_frame(true);
+    match Encoder::with_api_config(OpenH264API::from_source(), cfg) {
+        Ok(e) => Some(e),
+        Err(e) => {
+            eprintln!("agent: H.264 encoder init failed: {e}");
+            None
+        }
+    }
+}
+
 /// Encode the shared capture stream to H.264 for one viewer and push samples to
 /// its WebRTC track until the connection ends.
 fn spawn_video_encoder(track: Arc<TrackLocalStaticSample>, mut rx: watch::Receiver<Frame>) {
     tokio::spawn(async move {
-        let cfg = EncoderConfig::new()
-            .usage_type(UsageType::ScreenContentRealTime)
-            .rate_control_mode(RateControlMode::Bitrate)
-            .set_bitrate_bps(BITRATE_BPS)
-            .max_frame_rate(30.0)
-            .enable_skip_frame(true);
-        let mut encoder = match Encoder::with_api_config(OpenH264API::from_source(), cfg) {
-            Ok(e) => e,
-            Err(e) => {
-                eprintln!("agent: H.264 encoder init failed: {e}");
-                return;
-            }
+        let mut encoder = match new_encoder() {
+            Some(e) => e,
+            None => return,
         };
+        // Dimensions the current encoder was built for; a change rebuilds it.
+        let mut dims = (0usize, 0usize);
 
         let mut n: u64 = 0;
         loop {
@@ -166,6 +304,16 @@ fn spawn_video_encoder(track: Arc<TrackLocalStaticSample>, mut rx: watch::Receiv
             let frame = rx.borrow_and_update().clone();
             if frame.rgb.is_empty() {
                 continue;
+            }
+
+            // Resolution changed (monitor switch) → rebuild; first frame is an IDR.
+            if (frame.w, frame.h) != dims {
+                match new_encoder() {
+                    Some(e) => encoder = e,
+                    None => continue,
+                }
+                dims = (frame.w, frame.h);
+                n = 0;
             }
 
             if n > 0 && n % KEYFRAME_INTERVAL == 0 {
@@ -276,20 +424,47 @@ fn map_key(k: &str) -> Option<Key> {
     })
 }
 
-/// Apply one input event (JSON) to the local machine.
-fn handle_input(json: &str, enigo: &Mutex<Enigo>, screen_w: i32, screen_h: i32) {
+/// Apply one input event (JSON) to the local machine. `active` carries the
+/// streamed screen's `(origin_x, origin_y, width, height)` so normalized mouse
+/// coords land on the right monitor; `select` lets the console switch monitors.
+fn handle_input(
+    json: &str,
+    enigo: &Mutex<Enigo>,
+    active: &watch::Receiver<(i32, i32, i32, i32)>,
+    select: &watch::Sender<usize>,
+) {
     let v: serde_json::Value = match serde_json::from_str(json) {
         Ok(v) => v,
         Err(_) => return,
     };
     let t = v.get("t").and_then(|t| t.as_str()).unwrap_or("");
+
+    // Monitor switch: no enigo lock needed.
+    if t == "display" {
+        if let Some(i) = v.get("i").and_then(|n| n.as_u64()) {
+            let _ = select.send(i as usize);
+        }
+        return;
+    }
+
     let Ok(mut e) = enigo.lock() else { return };
 
     match t {
         "m" => {
-            let x = (v.get("x").and_then(|n| n.as_f64()).unwrap_or(0.0) * screen_w as f64) as i32;
-            let y = (v.get("y").and_then(|n| n.as_f64()).unwrap_or(0.0) * screen_h as f64) as i32;
-            let _ = e.move_mouse(x, y, Coordinate::Abs);
+            let (ox, oy, w, h) = *active.borrow();
+            let nx = v.get("x").and_then(|n| n.as_f64()).unwrap_or(0.0);
+            let ny = v.get("y").and_then(|n| n.as_f64()).unwrap_or(0.0);
+            // Map the normalized point onto the active monitor in global
+            // virtual-desktop pixels.
+            let gx = ox + (nx * w as f64) as i32;
+            let gy = oy + (ny * h as f64) as i32;
+            if winmon::CAN_TARGET_ANY_MONITOR {
+                winmon::move_to_global(gx, gy);
+            } else {
+                // Fallback (non-Windows): enigo's absolute path; correct on the
+                // primary monitor (origin 0,0).
+                let _ = e.move_mouse(gx, gy, Coordinate::Abs);
+            }
         }
         "d" => {
             let _ = e.button(
@@ -594,11 +769,26 @@ pub async fn run(
     chat: ChatBridge,
     download: DownloadProvider,
 ) {
-    let (screen_w, screen_h) = primary_size();
+    // Per-monitor DPI aware so scrap capture sizes and Win32 monitor rects agree.
+    winmon::make_dpi_aware();
 
-    // Capture thread publishes the latest downscaled RGB frame.
+    // Default to the primary screen; the console can switch via the input channel.
+    let screens = enumerate_screens();
+    let default_idx = screens.iter().position(|s| s.primary).unwrap_or(0);
+    let init = screens.get(default_idx).copied().unwrap_or(ScreenInfo {
+        ox: 0,
+        oy: 0,
+        width: 1920,
+        height: 1080,
+        primary: true,
+    });
+
+    // Capture thread publishes the latest downscaled RGB frame for the selected
+    // screen; `sel` switches screens and `active` reports the live origin+size.
     let (tx, rx) = watch::channel(Frame::default());
-    thread::spawn(move || capture_loop(tx));
+    let (sel_tx, sel_rx) = watch::channel(default_idx);
+    let (active_tx, active_rx) = watch::channel((init.ox, init.oy, init.width, init.height));
+    thread::spawn(move || capture_loop(tx, sel_rx, active_tx));
 
     // One shared input injector.
     let enigo = Arc::new(Mutex::new(
@@ -625,11 +815,24 @@ pub async fn run(
             "input" => {
                 println!("agent: control channel open");
                 let enigo = enigo.clone();
+                let active = active_rx.clone();
+                let select = sel_tx.clone();
+                // Announce the available monitors so the console can offer a picker.
+                let dc_open = dc.clone();
+                dc.on_open(Box::new(move || {
+                    let dc = dc_open.clone();
+                    let announce = monitors_announce();
+                    Box::pin(async move {
+                        let _ = dc.send(&Bytes::from(announce)).await;
+                    })
+                }));
                 dc.on_message(Box::new(move |msg| {
                     let enigo = enigo.clone();
+                    let active = active.clone();
+                    let select = select.clone();
                     let text = String::from_utf8_lossy(&msg.data).to_string();
                     Box::pin(async move {
-                        handle_input(&text, &enigo, screen_w, screen_h);
+                        handle_input(&text, &enigo, &active, &select);
                     })
                 }));
             }

@@ -40,6 +40,10 @@ export function useRemote() {
   const messages = ref<{ mine: boolean; text: string; ts: number }[]>([]);
   /** Unread incoming messages (reset via markChatRead). */
   const unread = ref(0);
+  /** Monitors on the remote PC, announced by the agent on the input channel. */
+  const monitors = ref<{ index: number; label: string; width: number; height: number; primary: boolean }[]>([]);
+  /** Index of the monitor currently being streamed. */
+  const currentMonitor = ref(0);
 
   let ws: WebSocket | null = null;
   let pc: RTCPeerConnection | null = null;
@@ -246,10 +250,23 @@ export function useRemote() {
         status.value = "streaming";
       };
 
-      // Control channel: we send mouse/keyboard events to the agent.
+      // Control channel: we send mouse/keyboard events to the agent, and the
+      // agent sends back the list of monitors we can switch between.
       inputCh = pc.createDataChannel("input");
       inputCh.onopen = () => (canControl.value = true);
       inputCh.onclose = () => (canControl.value = false);
+      inputCh.onmessage = (ev) => {
+        try {
+          const m = JSON.parse(ev.data);
+          if (m.t === "monitors" && Array.isArray(m.list)) {
+            monitors.value = m.list;
+            const primary = m.list.find((s: any) => s.primary);
+            currentMonitor.value = primary ? primary.index : m.list[0]?.index ?? 0;
+          }
+        } catch {
+          /* ignore non-JSON */
+        }
+      };
 
       // Files channel: upload to (text + binary) and download from the remote PC.
       filesCh = pc.createDataChannel("files");
@@ -323,6 +340,8 @@ export function useRemote() {
     canChat.value = false;
     messages.value = [];
     unread.value = 0;
+    monitors.value = [];
+    currentMonitor.value = 0;
     errorMessage.value = null;
     errorKind.value = null;
     awaitingCode.value = false;
@@ -342,6 +361,12 @@ export function useRemote() {
     videoStream.value = null;
     sessionCode.value = null;
     status.value = "idle";
+  }
+
+  /** Ask the remote PC to stream a different monitor. */
+  function selectMonitor(i: number) {
+    currentMonitor.value = i;
+    sendInput({ t: "display", i });
   }
 
   onUnmounted(disconnect);
@@ -366,6 +391,9 @@ export function useRemote() {
     canChat,
     messages,
     unread,
+    monitors,
+    currentMonitor,
+    selectMonitor,
     connect,
     disconnect,
     sendInput,

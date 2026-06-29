@@ -61,6 +61,9 @@ const {
   canChat,
   messages,
   unread,
+  monitors,
+  currentMonitor,
+  selectMonitor,
   connect,
   disconnect,
   sendInput,
@@ -352,6 +355,23 @@ function onKeyUp(e: KeyboardEvent) {
         </span>
 
         <template v-if="phase === 'live'">
+          <div
+            v-if="monitors.length > 1"
+            class="flex items-center gap-0.5 rounded-lg border border-edge bg-ink/50 p-0.5"
+            title="Choose which screen to view"
+          >
+            <Icon name="monitor" class="ml-1 mr-0.5 h-3.5 w-3.5 text-slate-500" />
+            <button
+              v-for="m in monitors"
+              :key="m.index"
+              class="rounded-md px-2 py-1 text-xs font-semibold transition"
+              :class="m.index === currentMonitor ? 'bg-accent text-white' : 'text-slate-300 hover:bg-ink hover:text-slate-100'"
+              :title="`${m.label} — ${m.width}×${m.height}${m.primary ? ' (primary)' : ''}`"
+              @click="selectMonitor(m.index)"
+            >
+              {{ m.index + 1 }}
+            </button>
+          </div>
           <button
             v-if="canChat"
             class="relative grid h-8 w-8 place-items-center rounded-lg border bg-ink/50 transition focus-visible:ring-2 focus-visible:ring-accent"

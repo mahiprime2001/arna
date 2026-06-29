@@ -15,3 +15,9 @@ openh264 = "0.6"
 enigo = "0.2"
 serde_json = "1"
 rand = "0.8"
+
+# Multi-monitor: enumerate monitors (origin/size/primary) and move the pointer
+# across the whole virtual desktop — enigo's absolute path only reaches the
+# primary monitor. Windows only; other platforms get a primary-only fallback.
+[target.'cfg(windows)'.dependencies]
+winapi = { version = "0.3", features = ["winuser", "windef", "minwindef"] }
