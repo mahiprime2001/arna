@@ -50,6 +50,9 @@ export function useRemote() {
   let inputCh: RTCDataChannel | null = null;
   let filesCh: RTCDataChannel | null = null;
   let chatCh: RTCDataChannel | null = null;
+  let clipCh: RTCDataChannel | null = null;
+  /** Last clipboard text synced either way, to suppress echo loops. */
+  let lastClip = "";
   let currentAgentId: string | null = null;
 
   /** Submit the operator's code (require-code consent mode). */
@@ -305,6 +308,21 @@ export function useRemote() {
         }
       };
 
+      // Clipboard channel: keep both clipboards in sync. Inbound text is written
+      // to the local clipboard; the local clipboard is pushed via pushClipboard().
+      clipCh = pc.createDataChannel("clip");
+      clipCh.onmessage = (ev) => {
+        try {
+          const m = JSON.parse(ev.data);
+          if (m.t === "clip" && typeof m.text === "string" && m.text !== lastClip) {
+            lastClip = m.text;
+            navigator.clipboard?.writeText(m.text).catch(() => {});
+          }
+        } catch {
+          /* ignore non-JSON */
+        }
+      };
+
       // Chat channel: live text both ways during the session.
       chatCh = pc.createDataChannel("chat");
       chatCh.onopen = () => (canChat.value = true);
@@ -350,6 +368,8 @@ export function useRemote() {
     inputCh = null;
     filesCh = null;
     chatCh = null;
+    clipCh = null;
+    lastClip = "";
     if (pc) {
       pc.close();
       pc = null;
@@ -367,6 +387,24 @@ export function useRemote() {
   function selectMonitor(i: number) {
     currentMonitor.value = i;
     sendInput({ t: "display", i });
+  }
+
+  /**
+   * Read the local clipboard and push it to the remote PC (so you can paste
+   * what you copied here over there). Best-effort: the browser only allows the
+   * read while the page is focused, so call this on focus. Errors are ignored.
+   */
+  async function pushClipboard() {
+    if (!clipCh || clipCh.readyState !== "open" || !navigator.clipboard) return;
+    try {
+      const text = await navigator.clipboard.readText();
+      if (text && text !== lastClip) {
+        lastClip = text;
+        clipCh.send(JSON.stringify({ t: "clip", text }));
+      }
+    } catch {
+      /* clipboard read blocked (no focus/permission) — fine */
+    }
   }
 
   onUnmounted(disconnect);
@@ -394,6 +432,7 @@ export function useRemote() {
     monitors,
     currentMonitor,
     selectMonitor,
+    pushClipboard,
     connect,
     disconnect,
     sendInput,

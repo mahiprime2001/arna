@@ -753,6 +753,116 @@ impl ChatBridge {
 }
 
 // ---------------------------------------------------------------------------
+// Clipboard sync (both ways) — bridges the OS clipboard to the `clip` channel
+// ---------------------------------------------------------------------------
+
+/// Keeps the remote PC's clipboard in sync with the console over a `clip` data
+/// channel. A background thread watches the OS clipboard and pushes changes to
+/// viewers; inbound `{t:"clip",text}` messages set the OS clipboard. `last`
+/// (the most recently synced text) suppresses echo loops in both directions.
+#[derive(Clone)]
+struct ClipSync {
+    channels: Arc<Mutex<Vec<Arc<RTCDataChannel>>>>,
+    last: Arc<Mutex<String>>,
+}
+
+impl ClipSync {
+    /// Create the bridge and start watching the OS clipboard.
+    fn new() -> Self {
+        let me = Self {
+            channels: Arc::new(Mutex::new(Vec::new())),
+            last: Arc::new(Mutex::new(String::new())),
+        };
+        me.start_watch();
+        me
+    }
+
+    /// Write text to the OS clipboard, recording it as `last` first so the watch
+    /// thread doesn't bounce it straight back to the console.
+    fn set_os_clipboard(&self, text: &str) {
+        if let Ok(mut g) = self.last.lock() {
+            *g = text.to_string();
+        }
+        if let Ok(mut cb) = arboard::Clipboard::new() {
+            let _ = cb.set_text(text.to_string());
+            println!("agent: clipboard updated from console ({} chars)", text.len());
+        }
+    }
+
+    /// Attach a freshly-opened `clip` channel: apply inbound clipboard text and
+    /// keep the channel for outbound updates.
+    fn attach(&self, dc: Arc<RTCDataChannel>) {
+        let me = self.clone();
+        dc.on_message(Box::new(move |msg| {
+            let me = me.clone();
+            Box::pin(async move {
+                if !msg.is_string {
+                    return;
+                }
+                let text = String::from_utf8_lossy(&msg.data);
+                if let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) {
+                    if v.get("t").and_then(|t| t.as_str()) == Some("clip") {
+                        if let Some(body) = v.get("text").and_then(|t| t.as_str()) {
+                            me.set_os_clipboard(body);
+                        }
+                    }
+                }
+            })
+        }));
+        if let Ok(mut chans) = self.channels.lock() {
+            chans.push(dc);
+        }
+    }
+
+    /// Background watcher: poll the OS clipboard (`arboard` isn't `Send` across
+    /// awaits, so it lives on its own thread) and forward changes to a tokio task
+    /// that broadcasts them to all connected viewers.
+    fn start_watch(&self) {
+        let channels = self.channels.clone();
+        let last = self.last.clone();
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+
+        std::thread::spawn(move || {
+            let mut cb = match arboard::Clipboard::new() {
+                Ok(c) => c,
+                Err(e) => {
+                    eprintln!("agent: clipboard unavailable: {e}");
+                    return;
+                }
+            };
+            loop {
+                if let Ok(text) = cb.get_text() {
+                    let changed = match last.lock() {
+                        Ok(mut g) if *g != text => {
+                            *g = text.clone();
+                            true
+                        }
+                        _ => false,
+                    };
+                    if changed && !text.is_empty() {
+                        let _ = tx.send(text);
+                    }
+                }
+                std::thread::sleep(StdDuration::from_millis(700));
+            }
+        });
+
+        tokio::spawn(async move {
+            while let Some(text) = rx.recv().await {
+                let payload = serde_json::json!({ "t": "clip", "text": text }).to_string();
+                let chans: Vec<Arc<RTCDataChannel>> = match channels.lock() {
+                    Ok(c) => c.clone(),
+                    Err(_) => continue,
+                };
+                for ch in chans {
+                    let _ = ch.send_text(payload.clone()).await;
+                }
+            }
+        });
+    }
+}
+
+// ---------------------------------------------------------------------------
 // The agent loop
 // ---------------------------------------------------------------------------
 
@@ -794,6 +904,9 @@ pub async fn run(
     let enigo = Arc::new(Mutex::new(
         Enigo::new(&Settings::default()).expect("failed to init input injector"),
     ));
+
+    // Two-way clipboard sync (watches the OS clipboard from here on).
+    let clip = ClipSync::new();
 
     let signaling = match Signaling::connect(&url).await {
         Ok(s) => s,
@@ -840,6 +953,10 @@ pub async fn run(
             "chat" => {
                 println!("agent: chat channel open");
                 chat.attach(dc);
+            }
+            "clip" => {
+                println!("agent: clipboard channel open");
+                clip.attach(dc);
             }
             other => println!("agent: ignoring unknown channel '{other}'"),
         });

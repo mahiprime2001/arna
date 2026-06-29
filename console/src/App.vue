@@ -64,6 +64,7 @@ const {
   monitors,
   currentMonitor,
   selectMonitor,
+  pushClipboard,
   connect,
   disconnect,
   sendInput,
@@ -428,6 +429,8 @@ function onKeyUp(e: KeyboardEvent) {
       :class="{ 'cursor-none': canControl && videoStream, 'stage-grid': phase !== 'live' }"
       @keydown="onKeyDown"
       @keyup="onKeyUp"
+      @focus="pushClipboard"
+      @pointerdown="pushClipboard"
       @contextmenu="onContextMenu"
       @dragover.prevent="onDragOver"
       @dragleave="dragOver = false"
