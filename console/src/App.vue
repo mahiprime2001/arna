@@ -16,7 +16,11 @@ function loadStore(): Store {
 }
 const saved = loadStore();
 
-const backend = ref(saved.backend || "ws://127.0.0.1:8081/ws");
+// Default server: a build can bake in the hosted backend via VITE_ARNA_BACKEND
+// (set for production bundles); dev falls back to localhost. A saved value the
+// user entered always wins.
+const DEFAULT_BACKEND = import.meta.env.VITE_ARNA_BACKEND || "ws://127.0.0.1:8081/ws";
+const backend = ref(saved.backend || DEFAULT_BACKEND);
 const agentId = ref(saved.agentId || "agent-1");
 const ticket = ref("");
 const recents = ref<string[]>(saved.recents || []);

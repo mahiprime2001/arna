@@ -48,9 +48,15 @@ struct Pairing {
     token: String,
 }
 
-/// Default signaling URL (env-overridable), used when pairing leaves it blank.
+/// Default signaling URL used when pairing leaves it blank. A production bundle
+/// bakes in the hosted backend at build time via `ARNA_DEFAULT_BACKEND`
+/// (`option_env!`); the `ARNA_BACKEND` runtime var still overrides for dev.
 fn default_backend() -> String {
-    std::env::var("ARNA_BACKEND").unwrap_or_else(|_| "ws://127.0.0.1:8081/ws".to_string())
+    std::env::var("ARNA_BACKEND")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .or_else(|| option_env!("ARNA_DEFAULT_BACKEND").map(str::to_string))
+        .unwrap_or_else(|| "ws://127.0.0.1:8081/ws".to_string())
 }
 
 /// `<app config dir>/agent.json` — created on demand.
