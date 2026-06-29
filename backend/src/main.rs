@@ -24,9 +24,15 @@
 //! backend verifies it before forwarding `incoming_request` to the agent; when
 //! unset, auth is **open** (dev mode) and the console is shown as "Console (id)".
 
+mod store;
+
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use argon2::password_hash::{
+    rand_core::OsRng, PasswordHash, PasswordHasher, PasswordVerifier, SaltString,
+};
+use argon2::Argon2;
 use axum::{
     extract::{
         ws::{Message, WebSocket, WebSocketUpgrade},
@@ -34,15 +40,32 @@ use axum::{
     },
     http::StatusCode,
     response::IntoResponse,
-    routing::get,
+    routing::{get, post},
     Json, Router,
 };
 use dashmap::DashMap;
 use futures_util::{SinkExt, StreamExt};
 use jsonwebtoken::{decode, DecodingKey, EncodingKey, Header, Validation};
 use serde::{Deserialize, Serialize};
+use store::{Store, StoreError};
 use tokio::sync::mpsc;
 use tracing::{info, warn};
+
+/// Hash a password with Argon2 (slow by design — call off the async runtime).
+fn hash_password(pw: &str) -> Result<String, String> {
+    let salt = SaltString::generate(&mut OsRng);
+    Argon2::default()
+        .hash_password(pw.as_bytes(), &salt)
+        .map(|h| h.to_string())
+        .map_err(|e| e.to_string())
+}
+
+/// Verify a password against a stored Argon2 hash.
+fn verify_password(pw: &str, hash: &str) -> bool {
+    PasswordHash::new(hash)
+        .and_then(|ph| Argon2::default().verify_password(pw.as_bytes(), &ph))
+        .is_ok()
+}
 
 type Tx = mpsc::UnboundedSender<Message>;
 
@@ -60,10 +83,13 @@ struct Hub {
     sso_secret: Option<String>,
     /// Whether the `/dev/ticket` minting helper is enabled.
     dev_tickets: bool,
+    /// Accounts + device registry.
+    db: Store,
 }
 
 /// HS256 claims. For a **console ticket**: `sub` = admin name, `agent` pins it to
-/// one target. For an **agent token**: `sub` = the agent id, `role` = "agent".
+/// one target. For an **agent token**: `sub` = the agent id, `role` = "agent". For
+/// a **session token** (from login): `sub` = user id, `typ` = "session".
 /// `exp` is a Unix timestamp enforced by `jsonwebtoken`.
 #[derive(Serialize, Deserialize)]
 struct Claims {
@@ -72,7 +98,26 @@ struct Claims {
     agent: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     role: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    typ: Option<String>,
     exp: usize,
+}
+
+/// Issue a session token for a logged-in user (valid 7 days).
+fn issue_session(secret: &str, user_id: i64) -> Result<String, String> {
+    let claims = Claims {
+        sub: user_id.to_string(),
+        agent: None,
+        role: None,
+        typ: Some("session".into()),
+        exp: unix_in(7 * 24 * 3600),
+    };
+    jsonwebtoken::encode(
+        &Header::default(),
+        &claims,
+        &EncodingKey::from_secret(secret.as_bytes()),
+    )
+    .map_err(|e| e.to_string())
 }
 
 /// Verify an agent's registration token: a valid JWT whose `sub` is the agent id
@@ -115,8 +160,8 @@ fn verify_ticket(
     validation.set_required_spec_claims(&["exp"]);
     let data = decode::<Claims>(ticket, &DecodingKey::from_secret(secret.as_bytes()), &validation)
         .map_err(|e| format!("invalid ticket: {e}"))?;
-    // An agent token must not double as a console connect ticket.
-    if data.claims.role.as_deref() == Some("agent") {
+    // An agent or session token must not double as a console connect ticket.
+    if data.claims.role.as_deref() == Some("agent") || data.claims.typ.as_deref() == Some("session") {
         return Err("not a console ticket".into());
     }
     if let Some(a) = &data.claims.agent {
@@ -191,14 +236,21 @@ async fn main() {
         info!("SSO ticket verification enabled");
     }
 
+    let db_path = std::env::var("ARNA_DB").unwrap_or_else(|_| "arna.db".to_string());
+    let db = Store::open(&db_path).expect("failed to open database");
+    info!("accounts database at {db_path}");
+
     let hub = Arc::new(Hub {
         peers: DashMap::new(),
         sso_secret,
         dev_tickets,
+        db,
     });
 
     let app = Router::new()
         .route("/health", get(|| async { "ok" }))
+        .route("/auth/signup", post(signup))
+        .route("/auth/login", post(login))
         .route("/dev/ticket", get(dev_ticket))
         .route("/ws", get(ws_handler))
         .with_state(hub);
@@ -393,6 +445,71 @@ fn encode(out: &Outgoing) -> Message {
 }
 
 #[derive(Deserialize)]
+struct AuthReq {
+    email: String,
+    password: String,
+}
+
+/// Create an account; returns a 7-day session token.
+async fn signup(State(hub): State<Arc<Hub>>, Json(req): Json<AuthReq>) -> impl IntoResponse {
+    let Some(secret) = hub.sso_secret.clone() else {
+        return (StatusCode::SERVICE_UNAVAILABLE, "accounts disabled (set ARNA_SSO_SECRET)").into_response();
+    };
+    let email = req.email.trim().to_lowercase();
+    if email.is_empty() || !email.contains('@') {
+        return (StatusCode::BAD_REQUEST, "a valid email is required").into_response();
+    }
+    if req.password.len() < 8 {
+        return (StatusCode::BAD_REQUEST, "password must be at least 8 characters").into_response();
+    }
+    let pw = req.password.clone();
+    let hash = match tokio::task::spawn_blocking(move || hash_password(&pw)).await {
+        Ok(Ok(h)) => h,
+        _ => return (StatusCode::INTERNAL_SERVER_ERROR, "could not hash password").into_response(),
+    };
+    match hub.db.create_user(&email, &hash) {
+        Ok(uid) => match issue_session(&secret, uid) {
+            Ok(token) => Json(serde_json::json!({ "token": token, "user_id": uid })).into_response(),
+            Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, "token error").into_response(),
+        },
+        Err(StoreError::Duplicate) => (StatusCode::CONFLICT, "email already registered").into_response(),
+        Err(e) => {
+            warn!(%e, "signup failed");
+            (StatusCode::INTERNAL_SERVER_ERROR, "signup failed").into_response()
+        }
+    }
+}
+
+/// Log in; returns a 7-day session token. Same vague error for unknown email and
+/// wrong password (don't reveal which emails exist).
+async fn login(State(hub): State<Arc<Hub>>, Json(req): Json<AuthReq>) -> impl IntoResponse {
+    let Some(secret) = hub.sso_secret.clone() else {
+        return (StatusCode::SERVICE_UNAVAILABLE, "accounts disabled").into_response();
+    };
+    let email = req.email.trim().to_lowercase();
+    let user = match hub.db.user_by_email(&email) {
+        Ok(Some(u)) => u,
+        Ok(None) => return (StatusCode::UNAUTHORIZED, "invalid email or password").into_response(),
+        Err(e) => {
+            warn!(%e, "login lookup failed");
+            return (StatusCode::INTERNAL_SERVER_ERROR, "login failed").into_response();
+        }
+    };
+    let pw = req.password.clone();
+    let hash = user.password_hash.clone();
+    let ok = tokio::task::spawn_blocking(move || verify_password(&pw, &hash))
+        .await
+        .unwrap_or(false);
+    if !ok {
+        return (StatusCode::UNAUTHORIZED, "invalid email or password").into_response();
+    }
+    match issue_session(&secret, user.id) {
+        Ok(token) => Json(serde_json::json!({ "token": token, "user_id": user.id })).into_response(),
+        Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, "token error").into_response(),
+    }
+}
+
+#[derive(Deserialize)]
 struct TicketQuery {
     /// "agent" to mint an agent registration token; otherwise a console ticket.
     #[serde(default)]
@@ -440,6 +557,7 @@ async fn dev_ticket(
             sub: id,
             agent: None,
             role: Some("agent".into()),
+            typ: None,
             exp: unix_in(365 * 24 * 3600), // long-lived provisioning token
         }
     } else {
@@ -450,6 +568,7 @@ async fn dev_ticket(
             sub: q.name.unwrap_or_else(|| "Dev Admin".into()),
             agent: Some(agent),
             role: None,
+            typ: None,
             exp: unix_in(300),
         }
     };

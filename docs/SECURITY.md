@@ -47,10 +47,18 @@ How Arna keeps remote sessions safe, and how to deploy it securely. This is the
 5. **Short-lived console tickets.** Issue per-session, agent-scoped tickets (your
    identity service / the SSO handoff), not long-lived ones.
 
-## Known gaps (next: accounts phase)
+## Accounts (in progress)
 
-- No user accounts / device ownership yet — authorization is by shared-secret token,
-  not per-user. (Accounts, device pairing, "only your devices" come next.)
+- Backend now has a SQLite store and **email/password accounts**: `POST /auth/signup`
+  and `POST /auth/login` (Argon2 hashing) return a 7-day session token. Requires
+  `ARNA_SSO_SECRET`. Verify: `node scripts/smoke-accounts.mjs`.
+- **Next:** device ownership/pairing wired into `connect_request` (a console can only
+  reach devices its user owns or has been shared), then login UIs in the apps.
+
+## Known gaps
+
+- Device ownership not yet enforced in the connect flow (still shared-secret tokens
+  during the transition).
 - No audit log of who connected to what, when.
 - coturn not deployed yet (P2P/STUN only; LAN-reliable).
 
