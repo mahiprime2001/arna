@@ -47,18 +47,25 @@ How Arna keeps remote sessions safe, and how to deploy it securely. This is the
 5. **Short-lived console tickets.** Issue per-session, agent-scoped tickets (your
    identity service / the SSO handoff), not long-lived ones.
 
-## Accounts (in progress)
+## Accounts & device ownership (implemented, backend)
 
-- Backend now has a SQLite store and **email/password accounts**: `POST /auth/signup`
-  and `POST /auth/login` (Argon2 hashing) return a 7-day session token. Requires
-  `ARNA_SSO_SECRET`. Verify: `node scripts/smoke-accounts.mjs`.
-- **Next:** device ownership/pairing wired into `connect_request` (a console can only
-  reach devices its user owns or has been shared), then login UIs in the apps.
+- **Accounts.** SQLite store + email/password: `POST /auth/signup` / `POST /auth/login`
+  (Argon2 hashing) return a 7-day **session token**. Requires `ARNA_SSO_SECRET`.
+- **Device registry.** A logged-in user registers a device — `POST /devices`
+  (Bearer session) records it under the user and returns the **agent token** that
+  device uses to come online. `GET /devices` lists the user's devices.
+- **Ownership enforced on connect.** A `connect_request` carrying a **session token**
+  is allowed only if that user **owns** the target device (checked against the
+  registry); otherwise it's denied ("you don't have access" / "device not
+  registered"). The legacy agent-scoped SSO ticket still works for the handoff path.
+- Verify: `node scripts/smoke-accounts.mjs` and `node scripts/smoke-devices.mjs`.
 
 ## Known gaps
 
-- Device ownership not yet enforced in the connect flow (still shared-secret tokens
-  during the transition).
+- **Apps don't have the login/device UIs yet** — the backend enforces ownership, but
+  the desktop apps still use env-provided tokens; login + a device list come next.
+- No device **sharing** between users yet (only the owner can connect).
+- No audit log; coturn not deployed.
 - No audit log of who connected to what, when.
 - coturn not deployed yet (P2P/STUN only; LAN-reliable).
 

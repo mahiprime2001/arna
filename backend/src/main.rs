@@ -100,16 +100,19 @@ struct Claims {
     role: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     typ: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    email: Option<String>,
     exp: usize,
 }
 
 /// Issue a session token for a logged-in user (valid 7 days).
-fn issue_session(secret: &str, user_id: i64) -> Result<String, String> {
+fn issue_session(secret: &str, user_id: i64, email: &str) -> Result<String, String> {
     let claims = Claims {
         sub: user_id.to_string(),
         agent: None,
         role: None,
         typ: Some("session".into()),
+        email: Some(email.to_string()),
         exp: unix_in(7 * 24 * 3600),
     };
     jsonwebtoken::encode(
@@ -144,32 +147,83 @@ fn verify_agent_token(
     Ok(())
 }
 
-/// Verify a `connect_request` ticket, returning the display name to show the
-/// agent. In open mode (no secret) any request is admitted as "Console (id)".
-fn verify_ticket(
-    secret: &Option<String>,
+/// Authorize a `connect_request` and return the name to show the agent.
+///
+/// - Open mode (no secret): admit anyone as "Console (id)".
+/// - **Session token** (from login): the user must **own** the target device
+///   (checked against the registry). Shown as the user's email.
+/// - **Legacy console ticket** (agent-scoped SSO handoff): admit if the ticket is
+///   pinned to this agent.
+fn authorize_connect(
+    hub: &Hub,
     ticket: Option<&str>,
-    agent: &str,
+    target: &str,
     console_id: &str,
 ) -> Result<String, String> {
-    let Some(secret) = secret else {
+    let Some(secret) = &hub.sso_secret else {
         return Ok(format!("Console ({console_id})"));
     };
     let ticket = ticket.ok_or("authentication required")?;
     let mut validation = Validation::new(jsonwebtoken::Algorithm::HS256);
     validation.set_required_spec_claims(&["exp"]);
-    let data = decode::<Claims>(ticket, &DecodingKey::from_secret(secret.as_bytes()), &validation)
-        .map_err(|e| format!("invalid ticket: {e}"))?;
-    // An agent or session token must not double as a console connect ticket.
-    if data.claims.role.as_deref() == Some("agent") || data.claims.typ.as_deref() == Some("session") {
-        return Err("not a console ticket".into());
+    let claims = decode::<Claims>(ticket, &DecodingKey::from_secret(secret.as_bytes()), &validation)
+        .map_err(|e| format!("invalid ticket: {e}"))?
+        .claims;
+
+    // An agent token is never a console credential.
+    if claims.role.as_deref() == Some("agent") {
+        return Err("not a console credential".into());
     }
-    if let Some(a) = &data.claims.agent {
-        if a != agent {
+
+    if claims.typ.as_deref() == Some("session") {
+        // Account session: enforce device ownership.
+        let user_id: i64 = claims.sub.parse().map_err(|_| "bad session token".to_string())?;
+        return match hub.db.device(target) {
+            Ok(Some(dev)) if dev.owner == user_id => {
+                Ok(claims.email.unwrap_or_else(|| format!("user {user_id}")))
+            }
+            Ok(Some(_)) => Err("you don't have access to this device".into()),
+            Ok(None) => Err("device not registered".into()),
+            Err(e) => {
+                warn!(%e, "device lookup failed");
+                Err("authorization failed".into())
+            }
+        };
+    }
+
+    // Legacy agent-scoped console ticket (SSO handoff).
+    if let Some(a) = &claims.agent {
+        if a != target {
             return Err("ticket not valid for this agent".into());
         }
     }
-    Ok(data.claims.sub)
+    Ok(claims.sub)
+}
+
+/// Verify a session token from an `Authorization: Bearer` header; returns the
+/// user id + email.
+fn session_user(
+    hub: &Hub,
+    headers: &axum::http::HeaderMap,
+) -> Result<(i64, String), (StatusCode, &'static str)> {
+    let Some(secret) = &hub.sso_secret else {
+        return Err((StatusCode::SERVICE_UNAVAILABLE, "accounts disabled"));
+    };
+    let token = headers
+        .get("authorization")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|h| h.strip_prefix("Bearer "))
+        .ok_or((StatusCode::UNAUTHORIZED, "missing token"))?;
+    let mut validation = Validation::new(jsonwebtoken::Algorithm::HS256);
+    validation.set_required_spec_claims(&["exp"]);
+    let claims = decode::<Claims>(token, &DecodingKey::from_secret(secret.as_bytes()), &validation)
+        .map_err(|_| (StatusCode::UNAUTHORIZED, "invalid token"))?
+        .claims;
+    if claims.typ.as_deref() != Some("session") {
+        return Err((StatusCode::UNAUTHORIZED, "not a session token"));
+    }
+    let uid = claims.sub.parse().map_err(|_| (StatusCode::UNAUTHORIZED, "bad session"))?;
+    Ok((uid, claims.email.unwrap_or_default()))
 }
 
 #[derive(Deserialize)]
@@ -251,6 +305,7 @@ async fn main() {
         .route("/health", get(|| async { "ok" }))
         .route("/auth/signup", post(signup))
         .route("/auth/login", post(login))
+        .route("/devices", post(register_device).get(list_devices))
         .route("/dev/ticket", get(dev_ticket))
         .route("/ws", get(ws_handler))
         .with_state(hub);
@@ -378,7 +433,7 @@ async fn handle_socket(socket: WebSocket, hub: Arc<Hub>) {
                     }));
                     continue;
                 }
-                match verify_ticket(&hub.sso_secret, ticket.as_deref(), &to, &from) {
+                match authorize_connect(&hub, ticket.as_deref(), &to, &from) {
                     Ok(name) => match hub.peers.get(&to) {
                         // Only route to a peer that actually registered as an agent.
                         Some(agent) if agent.is_agent => {
@@ -468,7 +523,7 @@ async fn signup(State(hub): State<Arc<Hub>>, Json(req): Json<AuthReq>) -> impl I
         _ => return (StatusCode::INTERNAL_SERVER_ERROR, "could not hash password").into_response(),
     };
     match hub.db.create_user(&email, &hash) {
-        Ok(uid) => match issue_session(&secret, uid) {
+        Ok(uid) => match issue_session(&secret, uid, &email) {
             Ok(token) => Json(serde_json::json!({ "token": token, "user_id": uid })).into_response(),
             Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, "token error").into_response(),
         },
@@ -503,9 +558,76 @@ async fn login(State(hub): State<Arc<Hub>>, Json(req): Json<AuthReq>) -> impl In
     if !ok {
         return (StatusCode::UNAUTHORIZED, "invalid email or password").into_response();
     }
-    match issue_session(&secret, user.id) {
+    match issue_session(&secret, user.id, &email) {
         Ok(token) => Json(serde_json::json!({ "token": token, "user_id": user.id })).into_response(),
         Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, "token error").into_response(),
+    }
+}
+
+#[derive(Deserialize)]
+struct DeviceReq {
+    id: String,
+    #[serde(default)]
+    name: Option<String>,
+}
+
+/// Register (or rename) a device under the logged-in user, returning the **agent
+/// token** the device uses to connect. Auth: `Authorization: Bearer <session>`.
+async fn register_device(
+    State(hub): State<Arc<Hub>>,
+    headers: axum::http::HeaderMap,
+    Json(req): Json<DeviceReq>,
+) -> impl IntoResponse {
+    let (uid, _) = match session_user(&hub, &headers) {
+        Ok(u) => u,
+        Err((s, m)) => return (s, m).into_response(),
+    };
+    let secret = hub.sso_secret.clone().expect("session_user requires a secret");
+    let id = req.id.trim().to_string();
+    if id.is_empty() {
+        return (StatusCode::BAD_REQUEST, "device id required").into_response();
+    }
+    let name = req.name.unwrap_or_else(|| id.clone());
+    if let Err(e) = hub.db.upsert_device(&id, &name, uid) {
+        warn!(%e, "device upsert failed");
+        return (StatusCode::INTERNAL_SERVER_ERROR, "could not register device").into_response();
+    }
+    let claims = Claims {
+        sub: id.clone(),
+        agent: None,
+        role: Some("agent".into()),
+        typ: None,
+        email: None,
+        exp: unix_in(365 * 24 * 3600),
+    };
+    match jsonwebtoken::encode(
+        &Header::default(),
+        &claims,
+        &EncodingKey::from_secret(secret.as_bytes()),
+    ) {
+        Ok(token) => Json(serde_json::json!({ "id": id, "name": name, "token": token })).into_response(),
+        Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, "token error").into_response(),
+    }
+}
+
+/// List the logged-in user's devices.
+async fn list_devices(
+    State(hub): State<Arc<Hub>>,
+    headers: axum::http::HeaderMap,
+) -> impl IntoResponse {
+    let (uid, _) = match session_user(&hub, &headers) {
+        Ok(u) => u,
+        Err((s, m)) => return (s, m).into_response(),
+    };
+    match hub.db.devices_of(uid) {
+        Ok(list) => {
+            let out: Vec<_> = list
+                .iter()
+                .map(|d| serde_json::json!({ "id": d.id, "name": d.name }))
+                .collect();
+            Json(out).into_response()
+        }
+        Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, "could not list devices").into_response(),
     }
 }
 
@@ -558,6 +680,7 @@ async fn dev_ticket(
             agent: None,
             role: Some("agent".into()),
             typ: None,
+            email: None,
             exp: unix_in(365 * 24 * 3600), // long-lived provisioning token
         }
     } else {
@@ -569,6 +692,7 @@ async fn dev_ticket(
             agent: Some(agent),
             role: None,
             typ: None,
+            email: None,
             exp: unix_in(300),
         }
     };

@@ -4,9 +4,6 @@
 //! Operations are synchronous (rusqlite) behind a `Mutex`; callers keep them off
 //! the hot path. Password *hashing* (the slow part) happens in the handlers, not
 //! here.
-//!
-//! The device methods are wired into the connect flow in the next step.
-#![allow(dead_code)]
 
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
