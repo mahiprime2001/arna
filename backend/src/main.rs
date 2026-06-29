@@ -36,7 +36,7 @@ use argon2::Argon2;
 use axum::{
     extract::{
         ws::{Message, WebSocket, WebSocketUpgrade},
-        Query, State,
+        Path, Query, State,
     },
     http::StatusCode,
     response::IntoResponse,
@@ -190,57 +190,89 @@ fn verify_agent_token(
     Ok(())
 }
 
-/// Authorize a `connect_request` and return the name to show the agent.
+/// Decode a console ticket and return the display name it implies, or `None` if
+/// absent/invalid/an agent token (never a console credential).
+fn ticket_name(hub: &Hub, ticket: Option<&str>) -> Option<String> {
+    let secret = hub.sso_secret.as_ref()?;
+    let ticket = ticket?;
+    let mut validation = Validation::new(jsonwebtoken::Algorithm::HS256);
+    validation.set_required_spec_claims(&["exp"]);
+    let claims = decode::<Claims>(ticket, &DecodingKey::from_secret(secret.as_bytes()), &validation)
+        .ok()?
+        .claims;
+    if claims.role.as_deref() == Some("agent") {
+        return None;
+    }
+    Some(claims.email.unwrap_or(claims.sub))
+}
+
+/// Authorize a `connect_request`. Returns `(name_to_show, authorized)` where
+/// `authorized` means "skip operator consent" (the access password matched).
 ///
-/// - Open mode (no secret): admit anyone as "Console (id)".
-/// - **Session token** (from login): the user must **own** the target device
-///   (checked against the registry). Shown as the user's email.
-/// - **Legacy console ticket** (agent-scoped SSO handoff): admit if the ticket is
-///   pinned to this agent.
-fn authorize_connect(
+/// Paths, in order:
+/// - **Device password**: if the caller supplies the device's access password and
+///   it matches, admit them **auto-accepted** — works for anyone (unattended
+///   access). A supplied-but-wrong password is rejected outright.
+/// - Otherwise the caller may still **request** a session that the operator must
+///   accept: open mode admits anyone; in SSO mode a valid console ticket / login
+///   session is required (the operator's Accept is the real gate). Ownership
+///   scopes the "your devices" list, not who may knock.
+async fn authorize_connect(
     hub: &Hub,
     ticket: Option<&str>,
+    password: Option<&str>,
     target: &str,
     console_id: &str,
-) -> Result<String, String> {
+) -> Result<(String, bool), String> {
+    // 1. Unattended-access password path.
+    if let Some(pw) = password.filter(|p| !p.is_empty()) {
+        return match hub.db.device_access_hash(target) {
+            Ok(Some(hash)) => {
+                let pw = pw.to_string();
+                let ok = tokio::task::spawn_blocking(move || verify_password(&pw, &hash))
+                    .await
+                    .unwrap_or(false);
+                if ok {
+                    let name = ticket_name(hub, ticket)
+                        .unwrap_or_else(|| format!("Guest ({console_id})"));
+                    Ok((name, true))
+                } else {
+                    Err("wrong device password".into())
+                }
+            }
+            Ok(None) => Err("this device has no access password set".into()),
+            Err(e) => {
+                warn!(%e, "device hash lookup failed");
+                Err("authorization failed".into())
+            }
+        };
+    }
+
+    // 2. Request-and-wait path (operator consents).
     let Some(secret) = &hub.sso_secret else {
-        return Ok(format!("Console ({console_id})"));
+        return Ok((format!("Console ({console_id})"), false)); // open mode
     };
-    let ticket = ticket.ok_or("authentication required")?;
+    let ticket = ticket.ok_or("sign in (or enter the device password) to connect")?;
     let mut validation = Validation::new(jsonwebtoken::Algorithm::HS256);
     validation.set_required_spec_claims(&["exp"]);
     let claims = decode::<Claims>(ticket, &DecodingKey::from_secret(secret.as_bytes()), &validation)
         .map_err(|e| format!("invalid ticket: {e}"))?
         .claims;
 
-    // An agent token is never a console credential.
     if claims.role.as_deref() == Some("agent") {
         return Err("not a console credential".into());
     }
-
+    // A logged-in session may request any device by id; the operator decides.
     if claims.typ.as_deref() == Some("session") {
-        // Account session: enforce device ownership.
-        let user_id: i64 = claims.sub.parse().map_err(|_| "bad session token".to_string())?;
-        return match hub.db.device(target) {
-            Ok(Some(dev)) if dev.owner == user_id => {
-                Ok(claims.email.unwrap_or_else(|| format!("user {user_id}")))
-            }
-            Ok(Some(_)) => Err("you don't have access to this device".into()),
-            Ok(None) => Err("device not registered".into()),
-            Err(e) => {
-                warn!(%e, "device lookup failed");
-                Err("authorization failed".into())
-            }
-        };
+        return Ok((claims.email.unwrap_or_else(|| format!("user {}", claims.sub)), false));
     }
-
     // Legacy agent-scoped console ticket (SSO handoff).
     if let Some(a) = &claims.agent {
         if a != target {
             return Err("ticket not valid for this agent".into());
         }
     }
-    Ok(claims.sub)
+    Ok((claims.sub, false))
 }
 
 /// Verify a session token from an `Authorization: Bearer` header; returns the
@@ -282,6 +314,10 @@ enum Incoming {
         to: String,
         #[serde(default)]
         ticket: Option<String>,
+        /// Optional unattended-access password for the target device. If correct,
+        /// the connection is auto-accepted (no operator consent needed).
+        #[serde(default)]
+        password: Option<String>,
     },
     Signal {
         to: String,
@@ -300,6 +336,10 @@ enum Outgoing {
     IncomingRequest {
         from: String,
         name: String,
+        /// True when the console proved the device's access password — the agent
+        /// admits it without prompting the operator.
+        #[serde(default)]
+        authorized: bool,
     },
     RequestDenied {
         to: String,
@@ -356,7 +396,10 @@ async fn main() {
         .route("/health", get(|| async { "ok" }))
         .route("/auth/signup", post(signup))
         .route("/auth/login", post(login))
+        .route("/me", get(me))
         .route("/devices", post(register_device).get(list_devices))
+        .route("/devices/:id/password", post(set_device_password))
+        .route("/device/:id", get(device_info))
         .route("/ice", get(ice_servers))
         .route("/dev/ticket", get(dev_ticket))
         .route("/ws", get(ws_handler))
@@ -466,7 +509,7 @@ async fn handle_socket(socket: WebSocket, hub: Arc<Hub>) {
                     ice_servers: hub.ice_servers.clone(),
                 }));
             }
-            Incoming::ConnectRequest { to, ticket } => {
+            Incoming::ConnectRequest { to, ticket, password } => {
                 let from = match &my_id {
                     Some(id) => id.clone(),
                     None => {
@@ -491,12 +534,12 @@ async fn handle_socket(socket: WebSocket, hub: Arc<Hub>) {
                     }));
                     continue;
                 }
-                match authorize_connect(&hub, ticket.as_deref(), &to, &from) {
-                    Ok(name) => match hub.peers.get(&to) {
+                match authorize_connect(&hub, ticket.as_deref(), password.as_deref(), &to, &from).await {
+                    Ok((name, authorized)) => match hub.peers.get(&to) {
                         // Only route to a peer that actually registered as an agent.
                         Some(agent) if agent.is_agent => {
-                            info!(console = %from, agent = %to, %name, "connect_request -> incoming_request");
-                            let _ = agent.tx.send(encode(&Outgoing::IncomingRequest { from, name }));
+                            info!(console = %from, agent = %to, %name, authorized, "connect_request -> incoming_request");
+                            let _ = agent.tx.send(encode(&Outgoing::IncomingRequest { from, name, authorized }));
                         }
                         Some(_) => {
                             let _ = tx.send(encode(&Outgoing::RequestDenied {
@@ -581,8 +624,8 @@ async fn signup(State(hub): State<Arc<Hub>>, Json(req): Json<AuthReq>) -> impl I
         _ => return (StatusCode::INTERNAL_SERVER_ERROR, "could not hash password").into_response(),
     };
     match hub.db.create_user(&email, &hash) {
-        Ok(uid) => match issue_session(&secret, uid, &email) {
-            Ok(token) => Json(serde_json::json!({ "token": token, "user_id": uid })).into_response(),
+        Ok((uid, short_id)) => match issue_session(&secret, uid, &email) {
+            Ok(token) => Json(serde_json::json!({ "token": token, "user_id": short_id, "email": email })).into_response(),
             Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, "token error").into_response(),
         },
         Err(StoreError::Duplicate) => (StatusCode::CONFLICT, "email already registered").into_response(),
@@ -617,8 +660,20 @@ async fn login(State(hub): State<Arc<Hub>>, Json(req): Json<AuthReq>) -> impl In
         return (StatusCode::UNAUTHORIZED, "invalid email or password").into_response();
     }
     match issue_session(&secret, user.id, &email) {
-        Ok(token) => Json(serde_json::json!({ "token": token, "user_id": user.id })).into_response(),
+        Ok(token) => Json(serde_json::json!({ "token": token, "user_id": user.short_id, "email": email })).into_response(),
         Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, "token error").into_response(),
+    }
+}
+
+/// The logged-in user's profile: short account ID + email. Auth: Bearer session.
+async fn me(State(hub): State<Arc<Hub>>, headers: axum::http::HeaderMap) -> impl IntoResponse {
+    let (uid, email) = match session_user(&hub, &headers) {
+        Ok(u) => u,
+        Err((s, m)) => return (s, m).into_response(),
+    };
+    match hub.db.user_by_id(uid) {
+        Ok(Some(u)) => Json(serde_json::json!({ "user_id": u.short_id, "email": u.email })).into_response(),
+        _ => Json(serde_json::json!({ "user_id": "", "email": email })).into_response(),
     }
 }
 
@@ -681,11 +736,66 @@ async fn list_devices(
         Ok(list) => {
             let out: Vec<_> = list
                 .iter()
-                .map(|d| serde_json::json!({ "id": d.id, "name": d.name }))
+                .map(|d| serde_json::json!({ "id": d.id, "name": d.name, "has_password": d.has_password }))
                 .collect();
             Json(out).into_response()
         }
         Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, "could not list devices").into_response(),
+    }
+}
+
+#[derive(Deserialize)]
+struct DevicePasswordReq {
+    /// New access password; `null` or empty clears it (back to consent-only).
+    #[serde(default)]
+    password: Option<String>,
+}
+
+/// Set or clear a device's unattended-access password. Owner only (Bearer
+/// session). With a password set, anyone who knows it connects without the
+/// operator having to Accept.
+async fn set_device_password(
+    State(hub): State<Arc<Hub>>,
+    headers: axum::http::HeaderMap,
+    Path(id): Path<String>,
+    Json(req): Json<DevicePasswordReq>,
+) -> impl IntoResponse {
+    let (uid, _) = match session_user(&hub, &headers) {
+        Ok(u) => u,
+        Err((s, m)) => return (s, m).into_response(),
+    };
+    let hash = match req.password.as_deref().filter(|p| !p.is_empty()) {
+        Some(pw) => {
+            if pw.len() < 4 {
+                return (StatusCode::BAD_REQUEST, "password must be at least 4 characters").into_response();
+            }
+            let pw = pw.to_string();
+            match tokio::task::spawn_blocking(move || hash_password(&pw)).await {
+                Ok(Ok(h)) => Some(h),
+                _ => return (StatusCode::INTERNAL_SERVER_ERROR, "could not hash password").into_response(),
+            }
+        }
+        None => None, // clear
+    };
+    match hub.db.set_device_access(&id, uid, hash.as_deref()) {
+        Ok(true) => Json(serde_json::json!({ "id": id, "has_password": hash.is_some() })).into_response(),
+        Ok(false) => (StatusCode::NOT_FOUND, "device not found or not yours").into_response(),
+        Err(e) => {
+            warn!(%e, "set device password failed");
+            (StatusCode::INTERNAL_SERVER_ERROR, "could not update device").into_response()
+        }
+    }
+}
+
+/// Public lookup so the connect-by-ID screen can show a device's name and whether
+/// it takes a password, before connecting. Returns 404 for unknown ids.
+async fn device_info(State(hub): State<Arc<Hub>>, Path(id): Path<String>) -> impl IntoResponse {
+    match hub.db.device(&id) {
+        Ok(Some(d)) => {
+            Json(serde_json::json!({ "id": d.id, "name": d.name, "has_password": d.has_password })).into_response()
+        }
+        Ok(None) => (StatusCode::NOT_FOUND, "no such device").into_response(),
+        Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, "lookup failed").into_response(),
     }
 }
 

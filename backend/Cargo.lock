@@ -44,6 +44,7 @@ dependencies = [
  "dashmap",
  "futures-util",
  "jsonwebtoken",
+ "rand",
  "rusqlite",
  "serde",
  "serde_json",

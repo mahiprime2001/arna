@@ -222,14 +222,25 @@ pub async fn answer_streaming(
                 }
                 continue;
             }
-            ServerMsg::IncomingRequest { from, name } => {
-                println!("[{tag}] connection request from {name} ({from})");
+            ServerMsg::IncomingRequest { from, name, authorized } => {
+                println!("[{tag}] connection request from {name} ({from}){}",
+                    if authorized { " [password ok — auto-admit]" } else { "" });
                 let consent = consent.clone();
                 let sender = sender.clone();
                 let approved = approved.clone();
                 let pending_codes = pending_codes.clone();
                 let tag = tag.clone();
                 tokio::spawn(async move {
+                    // Correct device password → admit without prompting the operator.
+                    if authorized {
+                        approved.lock().await.insert(from.clone());
+                        println!("[{tag}] admitted {from} (device password)");
+                        sender.signal(
+                            &from,
+                            json!({ "kind": "consent", "accepted": true, "code": null }),
+                        );
+                        return;
+                    }
                     match consent(ConnectRequest {
                         from: from.clone(),
                         name,

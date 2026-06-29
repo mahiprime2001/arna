@@ -32,11 +32,15 @@ pub enum ClientMsg {
         token: Option<String>,
     },
     /// Ask to start a session with `to`. The backend verifies `ticket` (when SSO
-    /// is enabled) and forwards an `incoming_request` to the agent.
+    /// is enabled) and forwards an `incoming_request` to the agent. An optional
+    /// `password` is the target device's unattended-access password — if correct,
+    /// the connection is auto-accepted (no operator consent).
     ConnectRequest {
         to: String,
         #[serde(skip_serializing_if = "Option::is_none")]
         ticket: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        password: Option<String>,
     },
     Signal {
         to: String,
@@ -70,9 +74,13 @@ pub enum ServerMsg {
     },
     /// A console wants to connect (delivered to the agent after the backend has
     /// verified the SSO ticket). `name` is the verified admin identity to show.
+    /// `authorized` = the console proved the device's access password, so the
+    /// agent admits it without prompting the operator.
     IncomingRequest {
         from: String,
         name: String,
+        #[serde(default)]
+        authorized: bool,
     },
     /// The backend refused a `connect_request` (bad/expired ticket, agent
     /// offline). Delivered to the console that asked.
@@ -195,11 +203,12 @@ impl Signaling {
     }
 
     /// Ask the backend to broker a session with agent `to`, presenting an
-    /// optional SSO `ticket` for verification.
-    pub fn connect_request(&self, to: &str, ticket: Option<String>) {
+    /// optional SSO `ticket` and/or the device's access `password`.
+    pub fn connect_request(&self, to: &str, ticket: Option<String>, password: Option<String>) {
         self.send(&ClientMsg::ConnectRequest {
             to: to.to_string(),
             ticket,
+            password,
         });
     }
 
