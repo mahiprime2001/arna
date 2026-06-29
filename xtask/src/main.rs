@@ -52,7 +52,13 @@ fn main() {
 
 fn start_backend() {
     println!("→ starting backend  (ws://127.0.0.1:8081/ws,  GET /health)");
-    open_terminal("Arna Backend", &root().join("backend"), "cargo run");
+    // Accounts (sign up / log in) require an SSO secret; set a dev one so the
+    // login form works locally. ARNA_DEV_TICKETS enables the /dev/ticket helper.
+    open_terminal(
+        "Arna Backend",
+        &root().join("backend"),
+        "set ARNA_SSO_SECRET=arna-dev-secret && set ARNA_DEV_TICKETS=1 && cargo run",
+    );
 }
 
 fn start_app() {
@@ -60,13 +66,10 @@ fn start_app() {
     // doesn't fail with "Port 4310 is already in use".
     free_port(4310);
     println!("→ starting Arna app (npm run tauri:dev — opens the window + logs)");
-    // ARNA_BACKEND points the app at the local backend, so it also comes online
-    // as an agent ("agent-1") and you can exercise both sides on one machine.
-    open_terminal(
-        "Arna App",
-        &root().join("console"),
-        "set ARNA_BACKEND=ws://127.0.0.1:8081/ws && npm run tauri:dev",
-    );
+    // No ARNA_* env: the console UI defaults to the local backend, and with
+    // accounts enabled this PC becomes reachable by pairing through the UI (sign
+    // up → Add a device → tray "Pair this device"), not a token-less auto-start.
+    open_terminal("Arna App", &root().join("console"), "npm run tauri:dev");
 }
 
 /// Kill whatever is listening on `port` (a leftover dev server from a prior run).
@@ -91,7 +94,12 @@ fn free_port(port: u16) {
 }
 
 fn done() {
-    println!("\nLaunched. Close those terminal windows (or Ctrl+C in them) to stop.");
+    println!("\nLaunched. In the Arna window:");
+    println!("  1. Sign up — any email + a password of 8+ characters (no preset account).");
+    println!("  2. Add a device, then tray → \"Pair this device…\" and paste the id + token");
+    println!("     to make THIS PC reachable. It then shows up under \"Your devices\".");
+    println!("  (Backend runs with a dev SSO secret so accounts work locally.)");
+    println!("\nClose those terminal windows (or Ctrl+C in them) to stop.");
 }
 
 /// Open a new terminal window that `cd`s into `dir` and runs `command`.
