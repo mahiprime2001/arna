@@ -63,6 +63,7 @@ address configurable. See [PLAN.md](PLAN.md) §0.
 | 5f | **Clipboard sync** both ways (`clip` channel; agent watches OS clipboard) | ✅ console→agent verified |
 | 5g | **Bundle** — MSI + NSIS installers (`tauri build`) | ✅ built |
 | 5h | **Unify** — one "Arna" app does both sides (console UI + agent loop + tray) | ✅ built; agent-registers + views route verified |
+| 5i | **Accounts UX** — short Arna IDs, device **access passwords** (unattended), connect-by-ID with name lookup, **sidebar dashboard + profile (ID/QR/links)** | ✅ verified in Chrome |
 | later | Deploy backend + coturn (cross-internet test); SSH/FTP, fleet, meet | ⏳ |
 
 ## Run it locally (Windows)
