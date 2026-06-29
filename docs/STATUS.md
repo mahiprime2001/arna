@@ -60,7 +60,8 @@ address configurable. See [PLAN.md](PLAN.md) §0.
 | 5d | **TURN/ICE config** from backend (single source; `GET /ice` + WS `registered`) | ✅ verified |
 | 5e | **Multi-monitor** — pick which screen to view + correct input (Win32 `winmon`) | ✅ built; enum + e2e verified |
 | 5f | **Clipboard sync** both ways (`clip` channel; agent watches OS clipboard) | ✅ console→agent verified |
-| later | SSH/FTP, fleet, meet; deploy coturn | ⏳ |
+| 5g | **Bundle** — Console + Agent build MSI + NSIS installers (`tauri build`) | ✅ both built |
+| later | Deploy backend + coturn (cross-internet test); SSH/FTP, fleet, meet | ⏳ |
 
 ## Run it locally (Windows)
 ```bash
@@ -139,10 +140,12 @@ Website: `cd d:\Siri-apps\arna-website && npm run dev` (port 4300).
    SQLite + Argon2), device registry + ownership enforced on connect, **console
    accounts UI** (login → your devices → add device → token), **agent pairing
    window** (paste id + token, saved to disk — no env vars). See [SECURITY.md](SECURITY.md).
-2. **Bundle + ship:** configurable/**remembered** server address in the console
-   (hosted default + custom), `tauri build` installers, then deploy backend +
-   **coturn** (TURN config is wired — set `ARNA_TURN*` on the backend — just needs
-   a relay running). ICE config is now backend-driven and LAN-reliable on STUN.
+2. **Bundle + ship:** ✅ both desktop apps build MSI + NSIS installers
+   (`npm run tauri:build`; bake the hosted URL with `VITE_ARNA_BACKEND` /
+   `ARNA_DEFAULT_BACKEND` — see [RELEASING.md](RELEASING.md)). Server address is
+   configurable/remembered in-app. **Remaining for cross-internet test:** deploy
+   the backend + **coturn** (TURN config is wired — set `ARNA_TURN*`; `infra/`
+   has the docker-compose). ICE config is backend-driven, LAN-reliable on STUN.
 3. **More features:** ~~multi-monitor~~ ✅ (Win32 `winmon` for correct
    cross-monitor input), ~~clipboard sync~~ ✅ (both ways via the `clip` channel).
    Next: fleet health + remote commands, SSH/FTP, meet.
