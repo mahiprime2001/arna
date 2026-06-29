@@ -54,7 +54,11 @@ address configurable. See [PLAN.md](PLAN.md) §0.
 | 4b | **File transfer** console → agent (drag-drop → `~/ArnaRemote/Incoming`) | ✅ verified (byte-identical) |
 | 4c | **Live chat** both ways (console panel ↔ agent terminal / desktop chat window) | ✅ verified two-way |
 | 4d | **File download** agent → console (operator picks via native dialog) | ✅ verified (byte-identical) |
-| later | SSH/FTP, fleet, meet; multi-monitor; coturn | ⏳ |
+| 5a | **Accounts** (signup/login, SQLite, Argon2) + **device ownership** enforced on connect | ✅ built + smoke-tested |
+| 5b | **Console accounts UI** (login → your-devices → add device → token) + backend CORS | ✅ verified in Chrome |
+| 5c | **Agent pairing window** — paste device id + token (no env vars); saved to disk | ✅ built |
+| 5d | **TURN/ICE config** from backend (single source; `GET /ice` + WS `registered`) | ✅ verified |
+| later | SSH/FTP, fleet, meet; multi-monitor; clipboard sync; deploy coturn | ⏳ |
 
 ## Run it locally (Windows)
 ```bash
@@ -129,14 +133,15 @@ Website: `cd d:\Siri-apps\arna-website && npm run dev` (port 4300).
   mode) or `SSO=1 node scripts/smoke-consent.mjs` against an SSO-enabled backend.
 
 ## Next steps
-1. **Security — accounts + device ownership** (the big one): sign in, your devices
-   belong to you, connect only to your own/shared devices — replaces shared-secret
-   tokens with per-user authorization. Backend gets SQLite + users + device registry
-   + pairing. See [SECURITY.md](SECURITY.md). (Hardening already done.)
-2. **Bundle + ship:** configurable/remembered server address (hosted default +
-   custom), `tauri build` installers, deploy backend + **coturn** so two machines
-   across the internet connect reliably (current P2P/STUN is LAN-reliable only).
-3. **More features:** fleet health + remote commands, clipboard sync, multi-monitor,
+1. ~~**Security — accounts + device ownership**~~ ✅ done: accounts (signup/login,
+   SQLite + Argon2), device registry + ownership enforced on connect, **console
+   accounts UI** (login → your devices → add device → token), **agent pairing
+   window** (paste id + token, saved to disk — no env vars). See [SECURITY.md](SECURITY.md).
+2. **Bundle + ship:** configurable/**remembered** server address in the console
+   (hosted default + custom), `tauri build` installers, then deploy backend +
+   **coturn** (TURN config is wired — set `ARNA_TURN*` on the backend — just needs
+   a relay running). ICE config is now backend-driven and LAN-reliable on STUN.
+3. **More features:** clipboard sync, multi-monitor, fleet health + remote commands,
    SSH/FTP, meet.
 4. **App / extended-screen sharing** (researched): share one app or a separate
    desktop in a sandbox so the remote person controls it independently while the
@@ -144,7 +149,7 @@ Website: `cd d:\Siri-apps\arna-website && npm run dev` (port 4300).
 5. **Phase 5 polish:** reconnect, run-as-service/SYSTEM (UAC), signed installers,
    deep link (`arnaremote://`), audit log.
 
-Known limitations: view+control + files (both ways) + chat work. Security: device
-auth + role routing + rate limiting + require-code consent done; **no user accounts
-yet** (token-based); no audit log. Two-machine Accept→stream best confirmed on real
-machines; coturn not deployed (P2P/STUN, LAN-reliable).
+Known limitations: view+control + files (both ways) + chat work; accounts + device
+ownership + console login + agent pairing done; ICE config backend-driven. No device
+**sharing** between users yet, no audit log; coturn config wired but a relay still
+needs deploying (P2P/STUN is LAN-reliable). Two-machine Accept→stream best on real PCs.
