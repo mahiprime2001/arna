@@ -25,9 +25,45 @@ Use a tag containing a hyphen — e.g. `v0.1.0-beta.1`. The release is marked as
 
 ## Desktop apps (Agent + Console)
 
-Installer builds (Windows / macOS / Linux) are wired into `release.yml` as the
-commented `desktop-apps` job. Uncomment it once `agent/` and `console/` are real
-Tauri projects; `tauri-action` will attach the installers to the same Release.
+Both are real Tauri v2 apps. Build installers locally with `tauri build`:
+
+```bash
+# Console (the viewer app)
+cd console && npm install && npm run tauri:build
+# Agent (the app that runs on the PC being controlled)
+cd agent-desktop && npm install && npm run tauri:build
+```
+
+On Windows this produces, under `*/src-tauri/target/release/bundle/`:
+- `msi/Arna <App>_<ver>_x64_en-US.msi` (WiX)
+- `nsis/Arna <App>_<ver>_x64-setup.exe` (NSIS)
+
+(macOS → `.dmg`/`.app`; Linux → `.AppImage`/`.deb` when built on those OSes.)
+
+### Point a build at your hosted server
+
+By default a build talks to `ws://127.0.0.1:8081/ws` (LAN/dev). The server is
+also editable in-app (the console remembers it; the agent's pairing window has a
+Server field), so unconfigured installers still work — users just type the URL.
+To bake your hosted backend into a build so it "just works", set, **at build
+time**:
+
+```bash
+# Console (Vite env)
+VITE_ARNA_BACKEND=wss://api.your-domain.com/ws npm run tauri:build   # in console/
+# Agent (compile-time, via option_env!)
+ARNA_DEFAULT_BACKEND=wss://api.your-domain.com/ws npm run tauri:build # in agent-desktop/
+```
+
+Pair this with a deployed backend that has TURN configured (`ARNA_TURN*`, see
+[SECURITY.md](SECURITY.md) deploy step 6) for reliable cross-internet sessions.
+
+### CI
+
+The commented `desktop-apps` job in `release.yml` uses `tauri-action` to build
+and attach these installers to the same GitHub Release — uncomment it to ship
+installers per tag. Code-signing is not set up yet, so installers are unsigned
+(Windows SmartScreen will warn until signed).
 
 ## Versioning
 
