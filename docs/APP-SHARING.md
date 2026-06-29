@@ -31,7 +31,7 @@ shared app needs **its own separate set of controls**.
 | Mode | What it is | Sandbox? | Status |
 |---|---|---|---|
 | **1. Whole-screen share** | They see/drive your real desktop (what we have today). One mouse — you step back while they drive. | No | ✅ built |
-| **2. Share an app** | Pick from a **curated list** of sandbox-friendly apps → owner accepts → the app opens in a **bubble** → they control it, owner keeps working. | Yes | 🔜 plan |
+| **2. Share an app** | Pick from a **curated list** of apps → the app opens in a **bubble** (hidden desktop) → they control it, owner keeps working. | Yes (hidden desktop) | ✅ **built** (Windows; classic apps) — consent popup TODO |
 | **3. Extended screen** | A whole **extra desktop** in a bubble → they work there, owner works on the real screen. | Yes | 🔜 plan (same engine as #2, bigger) |
 
 Modes 2 and 3 are the **same machinery** — a bubble with its own controls — just a
