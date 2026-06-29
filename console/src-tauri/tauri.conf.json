@@ -1,8 +1,8 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
-  "productName": "Arna Console",
+  "productName": "Arna",
   "version": "0.1.0",
-  "identifier": "com.arna.console",
+  "identifier": "com.arna.app",
   "build": {
     "frontendDist": "../dist",
     "devUrl": "http://localhost:4310",
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "Arna Console",
+        "title": "Arna",
         "width": 1200,
         "height": 800,
         "minWidth": 900,
