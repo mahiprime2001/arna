@@ -45,12 +45,28 @@ pub enum ClientMsg {
     Ping,
 }
 
+/// One ICE (STUN/TURN) server, as configured on the backend and handed to every
+/// peer at registration so the whole deployment shares one relay config.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct IceServer {
+    #[serde(default)]
+    pub urls: Vec<String>,
+    #[serde(default)]
+    pub username: Option<String>,
+    #[serde(default)]
+    pub credential: Option<String>,
+}
+
 /// Messages the backend sends back.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ServerMsg {
     Registered {
         id: String,
+        /// STUN/TURN servers to use for this session (backend-configured). Empty
+        /// when the backend doesn't set any — peers fall back to a public STUN.
+        #[serde(default)]
+        ice_servers: Vec<IceServer>,
     },
     /// A console wants to connect (delivered to the agent after the backend has
     /// verified the SSO ticket). `name` is the verified admin identity to show.

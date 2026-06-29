@@ -85,6 +85,49 @@ struct Hub {
     dev_tickets: bool,
     /// Accounts + device registry.
     db: Store,
+    /// STUN/TURN servers handed to every peer at registration (JSON array), so a
+    /// self-hoster configures the relay once and console + agents both use it.
+    ice_servers: serde_json::Value,
+}
+
+/// Build the ICE (STUN/TURN) config from the environment, once at startup.
+///
+/// - `ARNA_ICE_SERVERS` — a full JSON array override (advanced).
+/// - else `ARNA_STUN` (comma-separated, defaults to a public Google STUN) plus
+///   optional `ARNA_TURN` + `ARNA_TURN_USER` + `ARNA_TURN_PASS` for a relay.
+fn ice_config_from_env() -> serde_json::Value {
+    use serde_json::json;
+    if let Ok(raw) = std::env::var("ARNA_ICE_SERVERS") {
+        match serde_json::from_str::<serde_json::Value>(&raw) {
+            Ok(v) if v.is_array() => return v,
+            _ => warn!("ARNA_ICE_SERVERS is not a valid JSON array — ignoring"),
+        }
+    }
+    let split = |s: String| -> Vec<String> {
+        s.split(',')
+            .map(|p| p.trim().to_string())
+            .filter(|p| !p.is_empty())
+            .collect()
+    };
+
+    let mut servers = Vec::new();
+    let stun = split(
+        std::env::var("ARNA_STUN").unwrap_or_else(|_| "stun:stun.l.google.com:19302".to_string()),
+    );
+    if !stun.is_empty() {
+        servers.push(json!({ "urls": stun }));
+    }
+    if let Ok(turn) = std::env::var("ARNA_TURN") {
+        let turn = split(turn);
+        if !turn.is_empty() {
+            servers.push(json!({
+                "urls": turn,
+                "username": std::env::var("ARNA_TURN_USER").unwrap_or_default(),
+                "credential": std::env::var("ARNA_TURN_PASS").unwrap_or_default(),
+            }));
+        }
+    }
+    serde_json::Value::Array(servers)
 }
 
 /// HS256 claims. For a **console ticket**: `sub` = admin name, `agent` pins it to
@@ -252,6 +295,7 @@ enum Incoming {
 enum Outgoing {
     Registered {
         id: String,
+        ice_servers: serde_json::Value,
     },
     IncomingRequest {
         from: String,
@@ -294,11 +338,18 @@ async fn main() {
     let db = Store::open(&db_path).expect("failed to open database");
     info!("accounts database at {db_path}");
 
+    let ice_cfg = ice_config_from_env();
+    info!(
+        "ICE: {} server(s) configured (set ARNA_TURN for cross-internet relay)",
+        ice_cfg.as_array().map(|a| a.len()).unwrap_or(0)
+    );
+
     let hub = Arc::new(Hub {
         peers: DashMap::new(),
         sso_secret,
         dev_tickets,
         db,
+        ice_servers: ice_cfg,
     });
 
     let app = Router::new()
@@ -306,6 +357,7 @@ async fn main() {
         .route("/auth/signup", post(signup))
         .route("/auth/login", post(login))
         .route("/devices", post(register_device).get(list_devices))
+        .route("/ice", get(ice_servers))
         .route("/dev/ticket", get(dev_ticket))
         .route("/ws", get(ws_handler))
         // Browsers (the console at another origin, the desktop app's webview) call
@@ -409,7 +461,10 @@ async fn handle_socket(socket: WebSocket, hub: Arc<Hub>) {
                 );
                 my_id = Some(id.clone());
                 info!(role = %role, id = %id, "peer registered");
-                let _ = tx.send(encode(&Outgoing::Registered { id }));
+                let _ = tx.send(encode(&Outgoing::Registered {
+                    id,
+                    ice_servers: hub.ice_servers.clone(),
+                }));
             }
             Incoming::ConnectRequest { to, ticket } => {
                 let from = match &my_id {
@@ -663,6 +718,12 @@ fn unix_in(secs: usize) -> usize {
 ///
 /// - `?role=agent&id=<agent-id>` → a long-lived **agent registration token**.
 /// - `?agent=<agent-id>&name=<n>` → a short-lived **console connect ticket**.
+/// Public ICE config, so a browser console (or any client) can fetch the
+/// configured STUN/TURN servers over HTTP as `{ "iceServers": [...] }`.
+async fn ice_servers(State(hub): State<Arc<Hub>>) -> impl IntoResponse {
+    axum::Json(serde_json::json!({ "iceServers": hub.ice_servers.clone() }))
+}
+
 async fn dev_ticket(
     State(hub): State<Arc<Hub>>,
     Query(q): Query<TicketQuery>,

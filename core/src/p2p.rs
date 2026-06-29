@@ -95,12 +95,36 @@ fn make_api() -> Result<API, Error> {
         .build())
 }
 
-fn rtc_config() -> RTCConfiguration {
-    RTCConfiguration {
-        ice_servers: vec![RTCIceServer {
-            urls: vec!["stun:stun.l.google.com:19302".to_owned()],
+/// Fallback STUN when the backend configures no ICE servers of its own.
+fn default_ice() -> Vec<RTCIceServer> {
+    vec![RTCIceServer {
+        urls: vec!["stun:stun.l.google.com:19302".to_owned()],
+        ..Default::default()
+    }]
+}
+
+/// Translate the backend's ICE config into webrtc-rs servers (dropping entries
+/// with no urls).
+fn to_rtc_ice(servers: &[crate::IceServer]) -> Vec<RTCIceServer> {
+    servers
+        .iter()
+        .filter(|s| !s.urls.is_empty())
+        .map(|s| RTCIceServer {
+            urls: s.urls.clone(),
+            username: s.username.clone().unwrap_or_default(),
+            credential: s.credential.clone().unwrap_or_default(),
             ..Default::default()
-        }],
+        })
+        .collect()
+}
+
+fn rtc_config(ice: &[RTCIceServer]) -> RTCConfiguration {
+    RTCConfiguration {
+        ice_servers: if ice.is_empty() {
+            default_ice()
+        } else {
+            ice.to_vec()
+        },
         ..Default::default()
     }
 }
@@ -184,9 +208,20 @@ pub async fn answer_streaming(
     // Consoles awaiting code entry (require-code mode): peer -> (expected, attempts).
     let pending_codes: Arc<Mutex<HashMap<String, (String, u32)>>> =
         Arc::new(Mutex::new(HashMap::new()));
+    // STUN/TURN servers, learned from the backend's `registered` reply (sent
+    // before any offer arrives). Empty until then → default STUN.
+    let mut ice: Vec<RTCIceServer> = Vec::new();
 
     while let Some(msg) = signaling.recv().await {
         let (from, data) = match msg {
+            ServerMsg::Registered { ice_servers, .. } => {
+                let conv = to_rtc_ice(&ice_servers);
+                if !conv.is_empty() {
+                    println!("[{tag}] using {} ICE server(s) from backend", conv.len());
+                    ice = conv;
+                }
+                continue;
+            }
             ServerMsg::IncomingRequest { from, name } => {
                 println!("[{tag}] connection request from {name} ({from})");
                 let consent = consent.clone();
@@ -277,7 +312,7 @@ pub async fn answer_streaming(
                     .unwrap_or_default()
                     .to_string();
 
-                let pc = Arc::new(api.new_peer_connection(rtc_config()).await?);
+                let pc = Arc::new(api.new_peer_connection(rtc_config(&ice)).await?);
                 wire_ice(&pc, sender.clone(), from.clone());
 
                 // Drop the session — and revoke approval — when it ends, so a
@@ -395,7 +430,7 @@ pub async fn run(
 ) -> Result<(), Error> {
     let api = make_api()?;
     let sender = signaling.sender();
-    let pc = Arc::new(api.new_peer_connection(rtc_config()).await?);
+    let pc = Arc::new(api.new_peer_connection(rtc_config(&[])).await?);
     let peer_cell: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(target.clone()));
 
     // ICE candidates -> the (possibly not-yet-known) peer.

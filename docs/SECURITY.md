@@ -46,6 +46,13 @@ How Arna keeps remote sessions safe, and how to deploy it securely. This is the
    `ARNA_DEV_TICKETS=1` — leave it off in production.
 5. **Short-lived console tickets.** Issue per-session, agent-scoped tickets (your
    identity service / the SSO handoff), not long-lived ones.
+6. **Configure a TURN relay** for connections across the internet. Set on the
+   backend: `ARNA_TURN=turn:your-host:3478`, `ARNA_TURN_USER`, `ARNA_TURN_PASS`
+   (and `ARNA_STUN` to override the default public STUN, or `ARNA_ICE_SERVERS`
+   for a full JSON override). The backend hands this config to every console and
+   agent at registration (and over `GET /ice`), so the relay is configured once
+   in one place — the bundled agent needs no ICE env of its own. Without TURN,
+   STUN-only works on the same LAN but fails across many home/office NATs.
 
 ## Accounts & device ownership (implemented, backend)
 
@@ -62,12 +69,10 @@ How Arna keeps remote sessions safe, and how to deploy it securely. This is the
 
 ## Known gaps
 
-- **Apps don't have the login/device UIs yet** — the backend enforces ownership, but
-  the desktop apps still use env-provided tokens; login + a device list come next.
 - No device **sharing** between users yet (only the owner can connect).
-- No audit log; coturn not deployed.
 - No audit log of who connected to what, when.
-- coturn not deployed yet (P2P/STUN only; LAN-reliable).
+- TURN is **configurable** (see deploy step 6) but a relay still has to be
+  deployed/run for cross-internet use; STUN-only is LAN-reliable.
 
 ## Verify it
 

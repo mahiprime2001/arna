@@ -139,6 +139,10 @@ export function useRemote() {
     currentAgentId = agentId;
     const myId = "viewer-" + Math.floor(Math.random() * 1e6);
 
+    // STUN/TURN servers; replaced by the backend's `registered` reply (which
+    // arrives before we send the offer) so the whole deployment shares one relay.
+    let iceServers: RTCIceServer[] = [{ urls: "stun:stun.l.google.com:19302" }];
+
     ws = new WebSocket(backendUrl);
     ws.onopen = () => {
       ws!.send(JSON.stringify({ type: "register", role: "console", id: myId }));
@@ -163,7 +167,13 @@ export function useRemote() {
     };
     ws.onmessage = async (ev) => {
       const m = JSON.parse(ev.data);
-      if (m.type === "request_denied") {
+      if (m.type === "registered") {
+        if (Array.isArray(m.ice_servers) && m.ice_servers.length) {
+          iceServers = m.ice_servers
+            .filter((s: any) => Array.isArray(s.urls) && s.urls.length)
+            .map((s: any) => ({ urls: s.urls, username: s.username, credential: s.credential }));
+        }
+      } else if (m.type === "request_denied") {
         const reason = String(m.reason ?? "");
         if (reason.includes("offline")) {
           fail(`"${agentId}" is offline. Make sure the agent app is running on that PC.`, "offline");
@@ -215,7 +225,7 @@ export function useRemote() {
     };
 
     async function offer(agentId: string) {
-      pc = new RTCPeerConnection({ iceServers: [{ urls: "stun:stun.l.google.com:19302" }] });
+      pc = new RTCPeerConnection({ iceServers });
       pc.onicecandidate = (e) => {
         if (e.candidate) {
           ws!.send(
