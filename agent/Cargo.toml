@@ -21,4 +21,13 @@ arboard = "3"
 # across the whole virtual desktop — enigo's absolute path only reaches the
 # primary monitor. Windows only; other platforms get a primary-only fallback.
 [target.'cfg(windows)'.dependencies]
-winapi = { version = "0.3", features = ["winuser", "windef", "minwindef"] }
+winapi = { version = "0.3", features = [
+    "winuser",
+    "windef",
+    "minwindef",
+    "wingdi",
+    "processthreadsapi",
+    "winbase",
+    "handleapi",
+    "errhandlingapi",
+] }

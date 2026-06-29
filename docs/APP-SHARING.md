@@ -108,6 +108,39 @@ crowd), then the heavier Windows version, then macOS if it's worth it.
   `waypipe` maturity and the PipeWire screen-capture rules.
 - Licensing if we lean on existing streaming tech (e.g. Sunshine is GPL-3.0).
 
+## ✅ Validated: a VM-less Windows bubble (hidden desktop) — works on Home
+
+We proved a **bubble without a VM or Windows Sandbox** on Windows 11 **Home**
+(where Sandbox/Hyper-V aren't even offered). PoC: `agent/examples/bubble_poc.rs`
+(`cargo run -p arna-agent --example bubble_poc -- charmap.exe <out_dir>`).
+
+The trick is the Windows **desktop object** (`CreateDesktopW`): a second, hidden
+desktop within the same session. The owner's real desktop keeps receiving the
+physical mouse/keyboard; the bubble lives off to the side, unseen.
+
+Proven end-to-end on this machine:
+1. **Isolated run** — launch an app on the hidden desktop with `CreateProcessW`
+   + `STARTUPINFOW.lpDesktop`. It never appears on the owner's desktop.
+2. **Capture** — `PrintWindow(hwnd, …, PW_RENDERFULLCONTENT)` returns the app's
+   real pixels (94% non-black for Character Map — a clean shot, not a black
+   frame). Feeds straight into our existing H.264 pipeline.
+3. **Input** — `PostMessage(WM_CHAR / WM_MOUSE*)` to the window (or its child
+   Edit control) drives it with **no global cursor** — so it doesn't fight the
+   owner's mouse. Typed text landed in the field; the Copy button enabled.
+
+**Honest limits (this is why the app list is curated):**
+- Great for **classic Win32 apps** (Explorer windows, Office classics, utilities).
+- **Unreliable for Chromium/Electron/DirectX/games** — `PrintWindow` can come
+  back black and `PostMessage` doesn't reach their input. Those need the heavier
+  VM/Sunshine path. So the curated list ships only apps tested on this technique.
+- It's **isolation-from-view + a separate input channel, not a security sandbox**
+  (the app runs as the same user). Real security isolation still wants a VM.
+
+So Mode 2 ("share one app") is **buildable today on stock Windows** for curated
+classic apps. Remaining work to ship it: drive `PrintWindow` in a ~30fps capture
+loop into the video track, translate remote pointer/keys → window messages,
+add the curated app picker + consent, and clean up the desktop/app on exit.
+
 ## When we build it — technical building blocks (from research)
 
 - **Linux:** `Xpra` ("screen for X11") forwards individual app windows as native
