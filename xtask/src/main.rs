@@ -56,6 +56,9 @@ fn start_backend() {
 }
 
 fn start_app() {
+    // A stale Vite from a previous run holds the dev port; free it so the app
+    // doesn't fail with "Port 4310 is already in use".
+    free_port(4310);
     println!("→ starting Arna app (npm run tauri:dev — opens the window + logs)");
     // ARNA_BACKEND points the app at the local backend, so it also comes online
     // as an agent ("agent-1") and you can exercise both sides on one machine.
@@ -64,6 +67,27 @@ fn start_app() {
         &root().join("console"),
         "set ARNA_BACKEND=ws://127.0.0.1:8081/ws && npm run tauri:dev",
     );
+}
+
+/// Kill whatever is listening on `port` (a leftover dev server from a prior run).
+#[cfg(windows)]
+fn free_port(port: u16) {
+    let ps = format!(
+        "Get-NetTCPConnection -LocalPort {port} -State Listen -ErrorAction SilentlyContinue | \
+         ForEach-Object {{ Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue }}"
+    );
+    let _ = Command::new("powershell")
+        .args(["-NoProfile", "-Command", &ps])
+        .status();
+}
+
+#[cfg(not(windows))]
+fn free_port(port: u16) {
+    // Best-effort: kill the listener via fuser if available.
+    let _ = Command::new("sh")
+        .arg("-c")
+        .arg(format!("fuser -k {port}/tcp 2>/dev/null || true"))
+        .status();
 }
 
 fn done() {
