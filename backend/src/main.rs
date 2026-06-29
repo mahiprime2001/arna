@@ -308,6 +308,9 @@ async fn main() {
         .route("/devices", post(register_device).get(list_devices))
         .route("/dev/ticket", get(dev_ticket))
         .route("/ws", get(ws_handler))
+        // Browsers (the console at another origin, the desktop app's webview) call
+        // the HTTP API cross-origin; allow it (auth uses Bearer tokens, not cookies).
+        .layer(tower_http::cors::CorsLayer::permissive())
         .with_state(hub);
 
     let port = std::env::var("PORT").unwrap_or_else(|_| "8081".to_string());

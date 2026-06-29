@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, ref, watch } from "vue";
 import { useRemote } from "./composables/useRemote";
+import { useAuth } from "./composables/useAuth";
 import Icon from "./components/Icon.vue";
 
 // Remember the server/agent and recent machines so you don't retype them.
@@ -68,6 +69,62 @@ const {
 // Show whichever transfer (upload or download) is active.
 const transferProgress = computed(() => Math.max(uploadProgress.value, downloadProgress.value));
 const transferStatus = computed(() => downloadStatus.value || uploadStatus.value);
+
+// ── Accounts ────────────────────────────────────────────────────────────────
+const {
+  email: accountEmail,
+  devices: myDevices,
+  loggedIn,
+  authError,
+  busy: authBusy,
+  token: sessionToken,
+  login: authLogin,
+  signup: authSignup,
+  logout: authLogout,
+  refreshDevices,
+  addDevice: authAddDevice,
+} = useAuth();
+
+// "account" = sign in + pick a device; "manual" = type a server/agent (self-host).
+const mode = ref<"account" | "manual">("account");
+const loginEmail = ref("");
+const loginPassword = ref("");
+const isSignup = ref(false);
+
+async function submitAuth() {
+  const fn = isSignup.value ? authSignup : authLogin;
+  await fn(backend.value.trim(), loginEmail.value.trim(), loginPassword.value);
+  if (loggedIn.value) loginPassword.value = "";
+}
+function connectDevice(d: { id: string; name: string }) {
+  rememberAgent(d.id);
+  connect(backend.value.trim(), d.id, sessionToken.value || undefined);
+}
+
+// Add-device flow (returns the agent token to paste into the device).
+const showAddDevice = ref(false);
+const newDeviceId = ref("");
+const newDeviceName = ref("");
+const newDeviceToken = ref("");
+async function submitAddDevice() {
+  const id = newDeviceId.value.trim();
+  if (!id) return;
+  const token = await authAddDevice(backend.value.trim(), id, newDeviceName.value.trim() || id);
+  if (token) newDeviceToken.value = token;
+}
+function resetAddDevice() {
+  showAddDevice.value = false;
+  newDeviceId.value = "";
+  newDeviceName.value = "";
+  newDeviceToken.value = "";
+}
+function copyText(t: string) {
+  navigator.clipboard?.writeText(t).catch(() => {});
+}
+
+onMounted(() => {
+  if (loggedIn.value) refreshDevices(backend.value.trim());
+});
 
 const videoEl = ref<HTMLVideoElement | null>(null);
 const screenEl = ref<HTMLDivElement | null>(null);
@@ -501,83 +558,193 @@ function onKeyUp(e: KeyboardEvent) {
         </template>
       </div>
 
-      <!-- IDLE: connection panel -->
+      <!-- IDLE -->
       <div v-else class="w-full max-w-md px-6">
-        <div class="rounded-2xl border border-edge bg-panel/90 p-7 shadow-2xl shadow-black/40">
-          <div class="mb-5 flex items-center gap-3">
-            <span class="grid h-11 w-11 place-items-center rounded-xl bg-accent/10 text-accent2 ring-1 ring-inset ring-accent/20">
-              <Icon name="monitor" class="h-5 w-5" />
-            </span>
-            <div>
-              <h1 class="text-lg font-semibold tracking-tight text-slate-100">Connect to a machine</h1>
-              <p class="text-sm text-slate-500">Enter the agent ID to start a remote session.</p>
+        <!-- ACCOUNT · signed in → your devices -->
+        <template v-if="mode === 'account' && loggedIn">
+          <div class="rounded-2xl border border-edge bg-panel/90 p-7 shadow-2xl shadow-black/40">
+            <div class="mb-5 flex items-center gap-3">
+              <span class="grid h-11 w-11 shrink-0 place-items-center rounded-xl bg-accent/10 text-accent2 ring-1 ring-inset ring-accent/20">
+                <Icon name="monitor" class="h-5 w-5" />
+              </span>
+              <div class="min-w-0 flex-1">
+                <h1 class="text-lg font-semibold tracking-tight text-slate-100">Your devices</h1>
+                <p class="truncate text-sm text-slate-500">{{ accountEmail }}</p>
+              </div>
+              <button class="grid h-8 w-8 shrink-0 place-items-center rounded-lg border border-edge text-slate-400 transition hover:bg-ink hover:text-slate-200" title="Sign out" @click="authLogout()">
+                <Icon name="logout" class="h-4 w-4" />
+              </button>
             </div>
-          </div>
 
-          <div
-            v-if="errorMessage"
-            role="alert"
-            class="mb-4 flex items-start gap-2.5 rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2.5 text-sm text-rose-200"
-          >
-            <Icon :name="errorKind === 'offline' ? 'offline' : 'alert'" class="mt-0.5 h-4 w-4 shrink-0 text-rose-400" />
-            <span>{{ errorMessage }}</span>
-          </div>
+            <div v-if="errorMessage" role="alert" class="mb-4 flex items-start gap-2.5 rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2.5 text-sm text-rose-200">
+              <Icon :name="errorKind === 'offline' ? 'offline' : 'alert'" class="mt-0.5 h-4 w-4 shrink-0 text-rose-400" />
+              <span>{{ errorMessage }}</span>
+            </div>
 
-          <form class="space-y-3.5" @submit.prevent="toggle">
-            <div>
-              <label class="mb-1 block text-xs font-medium text-slate-400">Agent ID</label>
-              <input
-                ref="agentInput"
-                v-model="agentId"
-                placeholder="agent-1"
-                autocomplete="off"
-                spellcheck="false"
-                class="w-full rounded-lg border border-edge bg-ink px-3 py-2.5 text-slate-100 outline-none transition placeholder:text-slate-600 focus:border-accent focus:ring-2 focus:ring-accent/30"
-              />
-              <div v-if="recentOthers.length" class="mt-2 flex flex-wrap items-center gap-1.5">
-                <span class="text-xs text-slate-600">Recent</span>
-                <button
-                  v-for="r in recentOthers"
-                  :key="r"
-                  type="button"
-                  class="rounded-full border border-edge bg-ink px-2.5 py-1 font-mono text-xs text-slate-400 transition hover:border-slate-600 hover:text-slate-200"
-                  @click="agentId = r"
-                >
-                  {{ r }}
-                </button>
+            <div v-if="myDevices.length" class="space-y-2">
+              <button
+                v-for="d in myDevices"
+                :key="d.id"
+                class="group flex w-full items-center gap-3 rounded-lg border border-edge bg-ink px-3 py-2.5 text-left transition hover:border-accent"
+                @click="connectDevice(d)"
+              >
+                <span class="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-panel text-slate-400 group-hover:text-accent2">
+                  <Icon name="monitor" class="h-4 w-4" />
+                </span>
+                <span class="min-w-0 flex-1">
+                  <span class="block truncate text-sm font-medium text-slate-100">{{ d.name }}</span>
+                  <span class="block truncate font-mono text-xs text-slate-500">{{ d.id }}</span>
+                </span>
+                <Icon name="arrowRightShort" class="h-4 w-4 shrink-0 text-slate-600 group-hover:text-accent2" />
+              </button>
+            </div>
+            <p v-else class="rounded-lg border border-dashed border-edge px-3 py-6 text-center text-sm text-slate-500">
+              No devices yet — add one to connect to it.
+            </p>
+
+            <button class="mt-4 flex w-full items-center justify-center gap-2 rounded-lg border border-edge px-4 py-2.5 text-sm font-medium text-slate-200 transition hover:bg-ink" @click="showAddDevice = true">
+              <Icon name="plus" class="h-4 w-4" /> Add a device
+            </button>
+          </div>
+          <p class="mt-4 text-center text-xs">
+            <button class="text-slate-500 underline-offset-2 hover:text-slate-300 hover:underline" @click="mode = 'manual'">Connect manually instead</button>
+          </p>
+        </template>
+
+        <!-- ACCOUNT · not signed in → login / signup -->
+        <template v-else-if="mode === 'account'">
+          <div class="rounded-2xl border border-edge bg-panel/90 p-7 shadow-2xl shadow-black/40">
+            <div class="mb-5 flex items-center gap-3">
+              <span class="grid h-11 w-11 place-items-center rounded-xl bg-gradient-to-br from-accent to-accent2 shadow-lg shadow-accent/25">
+                <Icon name="monitor" class="h-5 w-5 text-white" />
+              </span>
+              <div>
+                <h1 class="text-lg font-semibold tracking-tight text-slate-100">{{ isSignup ? "Create your account" : "Welcome to Arna" }}</h1>
+                <p class="text-sm text-slate-500">{{ isSignup ? "Sign up to manage your devices." : "Sign in to reach your devices." }}</p>
               </div>
             </div>
-            <div>
-              <label class="mb-1 block text-xs font-medium text-slate-400">Signaling server</label>
-              <input
-                v-model="backend"
-                class="w-full rounded-lg border border-edge bg-ink px-3 py-2.5 font-mono text-sm text-slate-300 outline-none transition focus:border-accent focus:ring-2 focus:ring-accent/30"
-              />
+
+            <div v-if="authError" role="alert" class="mb-4 flex items-start gap-2.5 rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2.5 text-sm text-rose-200">
+              <Icon name="alert" class="mt-0.5 h-4 w-4 shrink-0 text-rose-400" />
+              <span>{{ authError }}</span>
             </div>
-            <div>
-              <label class="mb-1 block text-xs font-medium text-slate-400">
-                SSO ticket <span class="text-slate-600">· optional</span>
-              </label>
-              <input
-                v-model="ticket"
-                placeholder="paste a signed ticket if required"
-                class="w-full rounded-lg border border-edge bg-ink px-3 py-2.5 text-sm text-slate-300 outline-none transition placeholder:text-slate-600 focus:border-accent focus:ring-2 focus:ring-accent/30"
-              />
+
+            <form class="space-y-3.5" @submit.prevent="submitAuth">
+              <div>
+                <label class="mb-1 block text-xs font-medium text-slate-400">Email</label>
+                <input v-model="loginEmail" type="email" autocomplete="email" placeholder="you@example.com" class="w-full rounded-lg border border-edge bg-ink px-3 py-2.5 text-slate-100 outline-none transition placeholder:text-slate-600 focus:border-accent focus:ring-2 focus:ring-accent/30" />
+              </div>
+              <div>
+                <label class="mb-1 block text-xs font-medium text-slate-400">Password</label>
+                <input v-model="loginPassword" type="password" :autocomplete="isSignup ? 'new-password' : 'current-password'" placeholder="••••••••" class="w-full rounded-lg border border-edge bg-ink px-3 py-2.5 text-slate-100 outline-none transition placeholder:text-slate-600 focus:border-accent focus:ring-2 focus:ring-accent/30" />
+              </div>
+              <button type="submit" :disabled="authBusy" class="mt-1 w-full rounded-lg bg-accent px-4 py-2.5 text-sm font-semibold text-white shadow-lg shadow-accent/25 transition hover:bg-accent/90 disabled:opacity-50">
+                {{ authBusy ? "…" : isSignup ? "Create account" : "Sign in" }}
+              </button>
+            </form>
+
+            <p class="mt-4 text-center text-sm text-slate-500">
+              {{ isSignup ? "Already have an account?" : "New here?" }}
+              <button class="font-medium text-accent2 hover:underline" @click="isSignup = !isSignup">{{ isSignup ? "Sign in" : "Create one" }}</button>
+            </p>
+          </div>
+          <p class="mt-4 text-center text-xs">
+            <button class="text-slate-500 underline-offset-2 hover:text-slate-300 hover:underline" @click="mode = 'manual'">Connect manually instead</button>
+          </p>
+        </template>
+
+        <!-- MANUAL · type a server + agent id (self-host / advanced) -->
+        <template v-else>
+          <div class="rounded-2xl border border-edge bg-panel/90 p-7 shadow-2xl shadow-black/40">
+            <div class="mb-5 flex items-center gap-3">
+              <span class="grid h-11 w-11 place-items-center rounded-xl bg-accent/10 text-accent2 ring-1 ring-inset ring-accent/20">
+                <Icon name="monitor" class="h-5 w-5" />
+              </span>
+              <div>
+                <h1 class="text-lg font-semibold tracking-tight text-slate-100">Connect manually</h1>
+                <p class="text-sm text-slate-500">Enter the agent ID to start a remote session.</p>
+              </div>
             </div>
-            <button
-              type="submit"
-              class="mt-1 flex w-full items-center justify-center gap-2 rounded-lg bg-accent px-4 py-2.5 text-sm font-semibold text-white shadow-lg shadow-accent/25 transition hover:bg-accent/90 focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-panel"
-            >
-              <Icon name="power" class="h-4 w-4" /> Connect
-              <Icon name="arrowRight" class="h-4 w-4 opacity-70" />
-            </button>
-          </form>
-        </div>
-        <p class="mt-4 text-center text-xs text-slate-600">
-          The remote PC must accept the connection before the screen appears.
-        </p>
+
+            <div v-if="errorMessage" role="alert" class="mb-4 flex items-start gap-2.5 rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2.5 text-sm text-rose-200">
+              <Icon :name="errorKind === 'offline' ? 'offline' : 'alert'" class="mt-0.5 h-4 w-4 shrink-0 text-rose-400" />
+              <span>{{ errorMessage }}</span>
+            </div>
+
+            <form class="space-y-3.5" @submit.prevent="toggle">
+              <div>
+                <label class="mb-1 block text-xs font-medium text-slate-400">Agent ID</label>
+                <input ref="agentInput" v-model="agentId" placeholder="agent-1" autocomplete="off" spellcheck="false" class="w-full rounded-lg border border-edge bg-ink px-3 py-2.5 text-slate-100 outline-none transition placeholder:text-slate-600 focus:border-accent focus:ring-2 focus:ring-accent/30" />
+                <div v-if="recentOthers.length" class="mt-2 flex flex-wrap items-center gap-1.5">
+                  <span class="text-xs text-slate-600">Recent</span>
+                  <button v-for="r in recentOthers" :key="r" type="button" class="rounded-full border border-edge bg-ink px-2.5 py-1 font-mono text-xs text-slate-400 transition hover:border-slate-600 hover:text-slate-200" @click="agentId = r">{{ r }}</button>
+                </div>
+              </div>
+              <div>
+                <label class="mb-1 block text-xs font-medium text-slate-400">Signaling server</label>
+                <input v-model="backend" class="w-full rounded-lg border border-edge bg-ink px-3 py-2.5 font-mono text-sm text-slate-300 outline-none transition focus:border-accent focus:ring-2 focus:ring-accent/30" />
+              </div>
+              <div>
+                <label class="mb-1 block text-xs font-medium text-slate-400">SSO ticket <span class="text-slate-600">· optional</span></label>
+                <input v-model="ticket" placeholder="paste a signed ticket if required" class="w-full rounded-lg border border-edge bg-ink px-3 py-2.5 text-sm text-slate-300 outline-none transition placeholder:text-slate-600 focus:border-accent focus:ring-2 focus:ring-accent/30" />
+              </div>
+              <button type="submit" class="mt-1 flex w-full items-center justify-center gap-2 rounded-lg bg-accent px-4 py-2.5 text-sm font-semibold text-white shadow-lg shadow-accent/25 transition hover:bg-accent/90">
+                <Icon name="power" class="h-4 w-4" /> Connect
+                <Icon name="arrowRight" class="h-4 w-4 opacity-70" />
+              </button>
+            </form>
+          </div>
+          <p class="mt-4 text-center text-xs">
+            <button class="text-slate-500 underline-offset-2 hover:text-slate-300 hover:underline" @click="mode = 'account'">← Back to sign in</button>
+          </p>
+        </template>
       </div>
     </main>
+
+    <!-- Add-device modal -->
+    <div v-if="showAddDevice" class="fixed inset-0 z-50 grid place-items-center bg-black/60 p-6" @click.self="resetAddDevice">
+      <div class="w-full max-w-md rounded-2xl border border-edge bg-panel p-7 shadow-2xl">
+        <h2 class="text-lg font-semibold text-slate-100">Add a device</h2>
+
+        <template v-if="!newDeviceToken">
+          <p class="mt-1 text-sm text-slate-500">Give it an id and a friendly name. You'll get a token to set up the device.</p>
+          <form class="mt-5 space-y-3.5" @submit.prevent="submitAddDevice">
+            <div>
+              <label class="mb-1 block text-xs font-medium text-slate-400">Device id</label>
+              <input v-model="newDeviceId" placeholder="front-desk-pc" autocomplete="off" spellcheck="false" class="w-full rounded-lg border border-edge bg-ink px-3 py-2.5 font-mono text-sm text-slate-100 outline-none focus:border-accent focus:ring-2 focus:ring-accent/30" />
+            </div>
+            <div>
+              <label class="mb-1 block text-xs font-medium text-slate-400">Name</label>
+              <input v-model="newDeviceName" placeholder="Front desk PC" class="w-full rounded-lg border border-edge bg-ink px-3 py-2.5 text-sm text-slate-100 outline-none focus:border-accent focus:ring-2 focus:ring-accent/30" />
+            </div>
+            <div v-if="authError" class="text-xs text-rose-300">{{ authError }}</div>
+            <div class="flex justify-end gap-2 pt-1">
+              <button type="button" class="rounded-lg border border-edge px-4 py-2 text-sm font-medium text-slate-300 hover:bg-ink" @click="resetAddDevice">Cancel</button>
+              <button type="submit" :disabled="!newDeviceId.trim()" class="rounded-lg bg-accent px-4 py-2 text-sm font-semibold text-white hover:bg-accent/90 disabled:opacity-40">Add device</button>
+            </div>
+          </form>
+        </template>
+
+        <template v-else>
+          <p class="mt-1 text-sm text-slate-400">Device added. On <span class="font-mono text-slate-200">{{ newDeviceId }}</span>, set these and start the Arna agent:</p>
+          <div class="mt-4 space-y-2">
+            <div class="rounded-lg border border-edge bg-ink px-3 py-2 font-mono text-xs text-slate-300">
+              ARNA_AGENT_ID=<span class="text-accent2">{{ newDeviceId }}</span>
+            </div>
+            <div class="flex items-center gap-2 rounded-lg border border-edge bg-ink px-3 py-2">
+              <span class="min-w-0 flex-1 truncate font-mono text-xs text-slate-300">ARNA_AGENT_TOKEN={{ newDeviceToken }}</span>
+              <button class="grid h-7 w-7 shrink-0 place-items-center rounded-md border border-edge text-slate-400 hover:text-slate-100" title="Copy token" @click="copyText(newDeviceToken)">
+                <Icon name="copy" class="h-3.5 w-3.5" />
+              </button>
+            </div>
+          </div>
+          <p class="mt-3 text-xs text-slate-500">Keep this token secret — it lets that PC come online as your device.</p>
+          <div class="mt-5 flex justify-end">
+            <button class="rounded-lg bg-accent px-5 py-2 text-sm font-semibold text-white hover:bg-accent/90" @click="resetAddDevice">Done</button>
+          </div>
+        </template>
+      </div>
+    </div>
   </div>
 </template>
 
