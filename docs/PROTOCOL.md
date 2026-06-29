@@ -67,8 +67,8 @@ a reconnect requires fresh consent.
     `{t:"dl_end"}`, or `{t:"dl_cancel",reason}`. The console saves it via the
     browser. Same channel; per-side direction disambiguates the binary frames.
 - `chat` — live text both ways (Phase 4c): `{t:"msg",text,ts}`. The agent bridges
-  it to the host app (terminal for the headless agent; a chat window in
-  `agent-desktop`).
+  it to the host app (terminal for the headless agent; a chat window in the
+  unified Arna desktop app).
 - `control` — monitor list, quality, clipboard, session end. *(later.)*
 
 > **H.264 negotiation notes (webrtc-rs answerer):** the agent registers a

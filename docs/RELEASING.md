@@ -37,8 +37,9 @@ On Windows this produces, under `console/src-tauri/target/release/bundle/`:
 - `msi/Arna_<ver>_x64_en-US.msi` (WiX)
 - `nsis/Arna_<ver>_x64-setup.exe` (NSIS)
 
-(`agent-desktop/` is legacy and no longer shipped; the headless `agent` binary
-is still built for unattended/CI use.)
+(The old standalone `agent-desktop/` app has been removed — its tray/consent
+shell now lives inside this one app. The headless `agent` binary is still built
+for unattended/CI use.)
 
 (macOS → `.dmg`/`.app`; Linux → `.AppImage`/`.deb` when built on those OSes.)
 

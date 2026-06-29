@@ -5,4 +5,4 @@
 [workspace]
 resolver = "2"
 members = ["core", "poc", "agent"]
-exclude = ["backend", "console/src-tauri", "agent-desktop/src-tauri"]
+exclude = ["backend", "console/src-tauri"]

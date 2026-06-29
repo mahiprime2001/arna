@@ -1,7 +1,7 @@
 //! Arna agent core — screen capture + WebRTC video + input injection.
 //!
 //! The reusable agent loop lives here so both the headless binary
-//! (`agent/src/main.rs`) and the Tauri desktop app (`agent-desktop/src-tauri`)
+//! (`agent/src/main.rs`) and the unified Arna desktop app (`console/src-tauri`)
 //! drive the same logic; they differ only in how they answer **consent**
 //! (terminal/policy vs. a popup window). See [`run`].
 //!

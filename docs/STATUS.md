@@ -31,8 +31,7 @@ address configurable. See [PLAN.md](PLAN.md) §0.
 | `core/` | Rust lib: signaling client + **webrtc-rs** P2P (`p2p` module) | ✅ verified |
 | `poc/` | CLI to test signaling + P2P | ✅ verified |
 | `agent/` | Rust **lib + headless bin** (the engine): capture (`scrap`) → **H.264** (`openh264`) → WebRTC video; input (`enigo`); consent; clipboard; multi-monitor | ✅ verified |
-| `console/` | **The unified Arna app**: Vue 3 + Vite console UI + the agent loop, in **Tauri v2** (`console/src-tauri/`) — control others *and* be controlled | ✅ builds + runs |
-| `agent-desktop/` | *Legacy* standalone tray-only agent app — **superseded** by the unified `console/` app; kept only as a basis for a future unattended Enterprise agent | 🗄️ legacy |
+| `console/` | **The unified Arna app**: Vue 3 + Vite console UI + the agent loop, in **Tauri v2** (`console/src-tauri/`) — control others *and* be controlled | ✅ builds installers |
 | `infra/` | docker-compose (Caddy + backend + coturn), `.env.example` | scaffold |
 | `.github/workflows/` | `backend`, `core`, `console`, `release` (tag-driven) | ✅ green |
 | `docs/` | `PLAN.md`, `PROTOCOL.md`, `RELEASING.md`, this file | — |
