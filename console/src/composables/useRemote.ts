@@ -44,6 +44,10 @@ export function useRemote() {
   const monitors = ref<{ index: number; label: string; width: number; height: number; primary: boolean }[]>([]);
   /** Index of the monitor currently being streamed. */
   const currentMonitor = ref(0);
+  /** Apps the remote PC can open in a sandbox bubble (Windows). */
+  const apps = ref<{ id: string; label: string }[]>([]);
+  /** When set, we're viewing an app bubble (not the whole screen). */
+  const bubbleApp = ref<string | null>(null);
 
   let ws: WebSocket | null = null;
   let pc: RTCPeerConnection | null = null;
@@ -266,7 +270,11 @@ export function useRemote() {
       // Control channel: we send mouse/keyboard events to the agent, and the
       // agent sends back the list of monitors we can switch between.
       inputCh = pc.createDataChannel("input");
-      inputCh.onopen = () => (canControl.value = true);
+      inputCh.onopen = () => {
+        canControl.value = true;
+        // Ask the agent for its monitor + app lists now that the channel is open.
+        inputCh?.send(JSON.stringify({ t: "hello" }));
+      };
       inputCh.onclose = () => (canControl.value = false);
       inputCh.onmessage = (ev) => {
         try {
@@ -275,6 +283,8 @@ export function useRemote() {
             monitors.value = m.list;
             const primary = m.list.find((s: any) => s.primary);
             currentMonitor.value = primary ? primary.index : m.list[0]?.index ?? 0;
+          } else if (m.t === "apps" && Array.isArray(m.list)) {
+            apps.value = m.list;
           }
         } catch {
           /* ignore non-JSON */
@@ -370,6 +380,8 @@ export function useRemote() {
     unread.value = 0;
     monitors.value = [];
     currentMonitor.value = 0;
+    apps.value = [];
+    bubbleApp.value = null;
     errorMessage.value = null;
     errorKind.value = null;
     awaitingCode.value = false;
@@ -395,8 +407,21 @@ export function useRemote() {
 
   /** Ask the remote PC to stream a different monitor. */
   function selectMonitor(i: number) {
+    bubbleApp.value = null;
     currentMonitor.value = i;
     sendInput({ t: "display", i });
+  }
+
+  /** Open one of the remote PC's apps in a sandbox bubble and stream just it. */
+  function openApp(id: string) {
+    bubbleApp.value = id;
+    sendInput({ t: "bubble", app: id });
+  }
+
+  /** Close the bubble and go back to viewing the whole screen. */
+  function exitBubble() {
+    bubbleApp.value = null;
+    sendInput({ t: "screen" });
   }
 
   /**
@@ -442,6 +467,10 @@ export function useRemote() {
     monitors,
     currentMonitor,
     selectMonitor,
+    apps,
+    bubbleApp,
+    openApp,
+    exitBubble,
     pushClipboard,
     connect,
     disconnect,

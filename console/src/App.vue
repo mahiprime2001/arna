@@ -64,6 +64,10 @@ const {
   monitors,
   currentMonitor,
   selectMonitor,
+  apps,
+  bubbleApp,
+  openApp,
+  exitBubble,
   pushClipboard,
   connect,
   disconnect,
@@ -332,6 +336,11 @@ function onSubmitCode() {
 }
 
 const chatOpen = ref(false);
+const appsOpen = ref(false);
+function pickApp(id: string) {
+  appsOpen.value = false;
+  openApp(id);
+}
 const draft = ref("");
 const chatLog = ref<HTMLDivElement | null>(null);
 function toggleChat() {
@@ -423,7 +432,7 @@ function onKeyUp(e: KeyboardEvent) {
   <div class="h-full bg-ink text-slate-200">
     <!-- ════════════════ SESSION (connecting / live) ════════════════ -->
     <div v-if="active" class="flex h-full flex-col">
-      <header class="flex h-14 shrink-0 items-center gap-3 border-b border-edge/80 bg-panel/80 px-4 backdrop-blur">
+      <header class="relative z-40 flex h-14 shrink-0 items-center gap-3 border-b border-edge/80 bg-panel/80 px-4 backdrop-blur">
         <div class="flex items-center gap-2.5">
           <span class="grid h-7 w-7 place-items-center rounded-lg bg-gradient-to-br from-accent to-accent2 shadow-[0_2px_10px_-2px] shadow-accent/50">
             <Icon name="monitor" class="h-4 w-4 text-white" />
@@ -456,8 +465,45 @@ function onKeyUp(e: KeyboardEvent) {
           </span>
 
           <template v-if="phase === 'live'">
+            <!-- In a bubble: a chip + exit -->
+            <button
+              v-if="bubbleApp"
+              class="flex items-center gap-1.5 rounded-lg border border-accent/50 bg-accent/15 px-2.5 py-1.5 text-xs font-semibold text-accent2 transition hover:bg-accent/25"
+              title="Close the app and go back to the screen"
+              @click="exitBubble"
+            >
+              <Icon name="layout" class="h-3.5 w-3.5" />
+              {{ apps.find((a) => a.id === bubbleApp)?.label || "App" }}
+              <Icon name="x" class="h-3.5 w-3.5" />
+            </button>
+
+            <!-- Apps menu (open one app in a sandbox bubble) -->
+            <div v-else-if="apps.length" class="relative">
+              <button
+                class="flex items-center gap-1.5 rounded-lg border border-edge bg-ink/50 px-2.5 py-1.5 text-xs font-medium text-slate-200 transition hover:border-slate-600 hover:bg-ink focus-visible:ring-2 focus-visible:ring-accent"
+                title="Open one app in a sandbox (you keep working)"
+                @click="appsOpen = !appsOpen"
+              >
+                <Icon name="layout" class="h-4 w-4" /> Apps
+              </button>
+              <div
+                v-if="appsOpen"
+                class="absolute right-0 top-full z-40 mt-1.5 w-52 overflow-hidden rounded-xl border border-edge bg-panel py-1 shadow-2xl shadow-black/50"
+              >
+                <p class="px-3 pb-1 pt-1.5 text-[10px] font-semibold uppercase tracking-wider text-slate-600">Open in a sandbox</p>
+                <button
+                  v-for="a in apps"
+                  :key="a.id"
+                  class="flex w-full items-center gap-2.5 px-3 py-2 text-left text-sm text-slate-200 transition hover:bg-ink"
+                  @click="pickApp(a.id)"
+                >
+                  <Icon name="layout" class="h-4 w-4 text-slate-500" /> {{ a.label }}
+                </button>
+              </div>
+            </div>
+
             <div
-              v-if="monitors.length > 1"
+              v-if="monitors.length > 1 && !bubbleApp"
               class="flex items-center gap-0.5 rounded-lg border border-edge bg-ink/50 p-0.5"
               title="Choose which screen to view"
             >

@@ -36,6 +36,7 @@ use std::time::{Duration as StdDuration, SystemTime, UNIX_EPOCH};
 use tokio::io::AsyncWriteExt;
 use tokio::sync::{watch, Mutex as AsyncMutex};
 
+mod bubble;
 mod winmon;
 
 // Re-export the consent types so the apps can build a `ConsentFn` without a
@@ -184,82 +185,226 @@ fn monitors_announce() -> String {
     serde_json::json!({ "t": "monitors", "list": list }).to_string()
 }
 
+/// JSON announcing the apps the console may open in a bubble:
+/// `{ "t":"apps", "list":[{ id, label }] }`. Empty on non-Windows (no bubbles).
+fn apps_announce() -> String {
+    let list: Vec<serde_json::Value> = if cfg!(windows) {
+        bubble::curated_apps()
+            .iter()
+            .map(|a| serde_json::json!({ "id": a.id, "label": a.label }))
+            .collect()
+    } else {
+        Vec::new()
+    };
+    serde_json::json!({ "t": "apps", "list": list }).to_string()
+}
+
 /// Capture the *selected* screen, downscale, and publish frames. Switching the
 /// selection (via `sel`) rebuilds the capturer on the new display; the active
 /// screen's origin + full size is published on `active` so input maps correctly.
+/// What the capture thread is streaming right now.
+#[derive(Clone)]
+enum CaptureSource {
+    /// A monitor, by index into `enumerate_screens()`.
+    Screen(usize),
+    /// An app bubble, by launch command.
+    Bubble(String),
+}
+
+impl Default for CaptureSource {
+    fn default() -> Self {
+        CaptureSource::Screen(0)
+    }
+}
+
+/// Shared with the input handler so it can drive the live bubble (and remember
+/// the last pointer position, since button/scroll events carry no coordinates).
+#[derive(Default)]
+struct BubbleCtl {
+    input: Option<bubble::BubbleInput>,
+    last_x: f64,
+    last_y: f64,
+}
+type SharedBubble = Arc<Mutex<BubbleCtl>>;
+
+/// Downscale a tight, top-down BGRA frame to ≤`TARGET_WIDTH` and publish it.
+/// Returns false once the receiver is gone (stop capturing).
+fn publish_frame(tx: &watch::Sender<Frame>, w: usize, h: usize, bgra: &[u8]) -> bool {
+    if w == 0 || h == 0 {
+        return true;
+    }
+    let tw = even((w.min(TARGET_WIDTH as usize)) as u32).max(2);
+    let th = even((h as u32 * tw) / w as u32).max(2);
+    let rgb_full = bgra_to_rgb(bgra, w, h);
+    let img = match image::RgbImage::from_raw(w as u32, h as u32, rgb_full) {
+        Some(i) => i,
+        None => return true,
+    };
+    let scaled = image::imageops::resize(&img, tw, th, image::imageops::FilterType::Triangle);
+    tx.send(Frame {
+        rgb: Arc::new(scaled.into_raw()),
+        w: tw as usize,
+        h: th as usize,
+    })
+    .is_ok()
+}
+
+/// Block (politely) until the capture source changes; used after a fatal/empty
+/// state so we don't busy-loop.
+fn wait_source_change(source: &mut watch::Receiver<CaptureSource>) {
+    loop {
+        match source.has_changed() {
+            Ok(true) | Err(_) => return,
+            Ok(false) => thread::sleep(Duration::from_millis(200)),
+        }
+    }
+}
+
+/// Capture loop: streams whichever [`CaptureSource`] is selected, switching live.
 fn capture_loop(
     tx: watch::Sender<Frame>,
-    mut sel: watch::Receiver<usize>,
+    mut source: watch::Receiver<CaptureSource>,
     active: watch::Sender<(i32, i32, i32, i32)>,
+    bubble_ctl: SharedBubble,
 ) {
     loop {
-        let screens = enumerate_screens();
-        let idx = (*sel.borrow_and_update()).min(screens.len().saturating_sub(1));
-        let info = screens[idx];
+        let src = source.borrow_and_update().clone();
+        match src {
+            CaptureSource::Screen(idx) => {
+                if let Ok(mut c) = bubble_ctl.lock() {
+                    c.input = None;
+                }
+                run_screen(&tx, idx, &active, &mut source);
+            }
+            CaptureSource::Bubble(cmd) => run_bubble(&tx, &cmd, &bubble_ctl, &mut source),
+        }
+    }
+}
 
-        // Re-fetch owned displays to build the capturer for the chosen index.
-        let displays = match Display::all() {
-            Ok(d) => d,
-            Err(e) => {
-                eprintln!("agent: cannot list displays: {e}");
-                return;
-            }
-        };
-        let display = match displays.into_iter().nth(idx).or_else(|| Display::primary().ok()) {
-            Some(d) => d,
-            None => {
-                eprintln!("agent: no display to capture");
-                return;
-            }
-        };
-        let mut capturer = match Capturer::new(display) {
-            Ok(c) => c,
-            Err(e) => {
-                eprintln!("agent: failed to start capturer: {e}");
-                return;
-            }
-        };
-        let (w, h) = (capturer.width(), capturer.height());
-        let tw = even((w.min(TARGET_WIDTH as usize)) as u32);
-        let th = even((h as u32 * tw) / w as u32);
-        let _ = active.send((info.ox, info.oy, w as i32, h as i32));
-        println!("agent: capturing screen {idx} {w}x{h} -> encoding {tw}x{th}");
+/// Capture one monitor until the source changes.
+fn run_screen(
+    tx: &watch::Sender<Frame>,
+    idx: usize,
+    active: &watch::Sender<(i32, i32, i32, i32)>,
+    source: &mut watch::Receiver<CaptureSource>,
+) {
+    let screens = enumerate_screens();
+    let idx = idx.min(screens.len().saturating_sub(1));
+    let info = screens[idx];
+    let displays = match Display::all() {
+        Ok(d) => d,
+        Err(e) => {
+            eprintln!("agent: cannot list displays: {e}");
+            wait_source_change(source);
+            return;
+        }
+    };
+    let display = match displays.into_iter().nth(idx).or_else(|| Display::primary().ok()) {
+        Some(d) => d,
+        None => {
+            eprintln!("agent: no display to capture");
+            wait_source_change(source);
+            return;
+        }
+    };
+    let mut capturer = match Capturer::new(display) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("agent: failed to start capturer: {e}");
+            wait_source_change(source);
+            return;
+        }
+    };
+    let (w, h) = (capturer.width(), capturer.height());
+    let _ = active.send((info.ox, info.oy, w as i32, h as i32));
+    println!("agent: capturing screen {idx} {w}x{h}");
 
-        loop {
-            // Selection changed → drop this capturer and rebuild on the new screen.
-            if sel.has_changed().unwrap_or(false) {
+    loop {
+        if source.has_changed().unwrap_or(true) {
+            break;
+        }
+        match capturer.frame() {
+            Ok(frame) => {
+                if !publish_frame(tx, w, h, &frame) {
+                    return;
+                }
+            }
+            Err(ref e) if e.kind() == WouldBlock => thread::sleep(Duration::from_millis(30)),
+            Err(e) => {
+                eprintln!("agent: capture error: {e}");
                 break;
-            }
-            match capturer.frame() {
-                Ok(frame) => {
-                    let rgb_full = bgra_to_rgb(&frame, w, h);
-                    let img = match image::RgbImage::from_raw(w as u32, h as u32, rgb_full) {
-                        Some(i) => i,
-                        None => continue,
-                    };
-                    let scaled = image::imageops::resize(
-                        &img,
-                        tw,
-                        th,
-                        image::imageops::FilterType::Triangle,
-                    );
-                    let f = Frame {
-                        rgb: Arc::new(scaled.into_raw()),
-                        w: tw as usize,
-                        h: th as usize,
-                    };
-                    if tx.send(f).is_err() {
-                        return;
-                    }
-                }
-                Err(ref e) if e.kind() == WouldBlock => thread::sleep(Duration::from_millis(30)),
-                Err(e) => {
-                    eprintln!("agent: capture error: {e}");
-                    break;
-                }
             }
         }
     }
+}
+
+/// Launch an app in a bubble (hidden desktop) and stream its window until the
+/// source changes or the app exits. The bubble is torn down on return.
+fn run_bubble(
+    tx: &watch::Sender<Frame>,
+    cmd: &str,
+    bubble_ctl: &SharedBubble,
+    source: &mut watch::Receiver<CaptureSource>,
+) {
+    let mut b = match bubble::Bubble::launch(cmd) {
+        Ok(b) => b,
+        Err(e) => {
+            eprintln!("agent: bubble launch failed: {e}");
+            wait_source_change(source);
+            return;
+        }
+    };
+    // Wait for the app to show a window (up to ~6s).
+    let mut located = false;
+    for _ in 0..60 {
+        if source.has_changed().unwrap_or(true) {
+            return;
+        }
+        if b.locate() {
+            located = true;
+            break;
+        }
+        thread::sleep(Duration::from_millis(100));
+    }
+    if !located {
+        eprintln!("agent: bubble window not found for '{cmd}'");
+        wait_source_change(source);
+        return;
+    }
+    if let Ok(mut c) = bubble_ctl.lock() {
+        c.input = Some(b.input());
+    }
+    println!("agent: streaming app bubble '{cmd}'");
+
+    loop {
+        if source.has_changed().unwrap_or(true) {
+            break;
+        }
+        if !b.alive() {
+            println!("agent: bubble app '{cmd}' exited");
+            break;
+        }
+        // Window can be recreated (e.g. dialog → main); re-locate if it vanished.
+        if !b.has_window() && !b.locate() {
+            thread::sleep(Duration::from_millis(200));
+            continue;
+        }
+        match b.capture() {
+            Some((w, h, bgra)) => {
+                if !publish_frame(tx, w as usize, h as usize, &bgra) {
+                    break;
+                }
+            }
+            None => {
+                let _ = b.locate();
+            }
+        }
+        thread::sleep(Duration::from_millis(40));
+    }
+    if let Ok(mut c) = bubble_ctl.lock() {
+        c.input = None;
+    }
+    // `b` drops here → terminates the app and closes the hidden desktop.
 }
 
 // ---------------------------------------------------------------------------
@@ -427,24 +572,103 @@ fn map_key(k: &str) -> Option<Key> {
 /// Apply one input event (JSON) to the local machine. `active` carries the
 /// streamed screen's `(origin_x, origin_y, width, height)` so normalized mouse
 /// coords land on the right monitor; `select` lets the console switch monitors.
+/// Forward one key to a bubble window: named keys → virtual-key codes (down+up),
+/// printable chars → WM_CHAR on key-down.
+fn bubble_key(bi: &bubble::BubbleInput, key: &str, down: bool) {
+    let vk: Option<u16> = match key {
+        "Enter" => Some(0x0D),
+        "Backspace" => Some(0x08),
+        "Tab" => Some(0x09),
+        "Escape" | "Esc" => Some(0x1B),
+        "Delete" | "Del" => Some(0x2E),
+        "ArrowUp" => Some(0x26),
+        "ArrowDown" => Some(0x28),
+        "ArrowLeft" => Some(0x25),
+        "ArrowRight" => Some(0x27),
+        "Home" => Some(0x24),
+        "End" => Some(0x23),
+        _ => None,
+    };
+    if let Some(vk) = vk {
+        bi.key_vk(vk, down);
+    } else if down {
+        let mut chars = key.chars();
+        if let (Some(c), None) = (chars.next(), chars.next()) {
+            bi.key_char(c);
+        }
+    }
+}
+
 fn handle_input(
     json: &str,
     enigo: &Mutex<Enigo>,
     active: &watch::Receiver<(i32, i32, i32, i32)>,
-    select: &watch::Sender<usize>,
+    source: &watch::Sender<CaptureSource>,
+    bubble_ctl: &SharedBubble,
 ) {
     let v: serde_json::Value = match serde_json::from_str(json) {
         Ok(v) => v,
         Err(_) => return,
     };
     let t = v.get("t").and_then(|t| t.as_str()).unwrap_or("");
+    let nx = || v.get("x").and_then(|n| n.as_f64()).unwrap_or(0.0);
+    let ny = || v.get("y").and_then(|n| n.as_f64()).unwrap_or(0.0);
+    let btn = || v.get("b").and_then(|b| b.as_u64()).unwrap_or(0) as u8;
 
-    // Monitor switch: no enigo lock needed.
-    if t == "display" {
-        if let Some(i) = v.get("i").and_then(|n| n.as_u64()) {
-            let _ = select.send(i as usize);
+    // Capture-source switches (no enigo lock needed).
+    match t {
+        "display" => {
+            if let Some(i) = v.get("i").and_then(|n| n.as_u64()) {
+                let _ = source.send(CaptureSource::Screen(i as usize));
+            }
+            return;
         }
-        return;
+        "bubble" => {
+            if let Some(cmd) = v.get("app").and_then(|a| a.as_str()).and_then(bubble::app_cmd) {
+                let _ = source.send(CaptureSource::Bubble(cmd.to_string()));
+            }
+            return;
+        }
+        "screen" => {
+            let idx = enumerate_screens().iter().position(|s| s.primary).unwrap_or(0);
+            let _ = source.send(CaptureSource::Screen(idx));
+            return;
+        }
+        _ => {}
+    }
+
+    // When a bubble is live, input goes to its window (not the real desktop).
+    {
+        let mut c = bubble_ctl.lock().expect("bubble ctl");
+        if let Some(bi) = c.input {
+            match t {
+                "m" => {
+                    c.last_x = nx();
+                    c.last_y = ny();
+                    bi.mouse_move(c.last_x, c.last_y);
+                }
+                "d" => bi.mouse_button(c.last_x, c.last_y, btn(), true),
+                "u" => bi.mouse_button(c.last_x, c.last_y, btn(), false),
+                "w" => {
+                    let dy = v.get("dy").and_then(|n| n.as_f64()).unwrap_or(0.0);
+                    if dy != 0.0 {
+                        bi.wheel(c.last_x, c.last_y, if dy > 0.0 { 1 } else { -1 });
+                    }
+                }
+                "kd" => {
+                    if let Some(k) = v.get("k").and_then(|k| k.as_str()) {
+                        bubble_key(&bi, k, true);
+                    }
+                }
+                "ku" => {
+                    if let Some(k) = v.get("k").and_then(|k| k.as_str()) {
+                        bubble_key(&bi, k, false);
+                    }
+                }
+                _ => {}
+            }
+            return;
+        }
     }
 
     let Ok(mut e) = enigo.lock() else { return };
@@ -894,11 +1118,17 @@ pub async fn run(
     });
 
     // Capture thread publishes the latest downscaled RGB frame for the selected
-    // screen; `sel` switches screens and `active` reports the live origin+size.
+    // source; `source` switches between a monitor and an app bubble, `active`
+    // reports the live screen origin+size, and `bubble_ctl` lets input reach a
+    // live bubble's window.
     let (tx, rx) = watch::channel(Frame::default());
-    let (sel_tx, sel_rx) = watch::channel(default_idx);
+    let (source_tx, source_rx) = watch::channel(CaptureSource::Screen(default_idx));
     let (active_tx, active_rx) = watch::channel((init.ox, init.oy, init.width, init.height));
-    thread::spawn(move || capture_loop(tx, sel_rx, active_tx));
+    let bubble_ctl: SharedBubble = Arc::new(Mutex::new(BubbleCtl::default()));
+    {
+        let bc = bubble_ctl.clone();
+        thread::spawn(move || capture_loop(tx, source_rx, active_tx, bc));
+    }
 
     // One shared input injector.
     let enigo = Arc::new(Mutex::new(
@@ -929,23 +1159,35 @@ pub async fn run(
                 println!("agent: control channel open");
                 let enigo = enigo.clone();
                 let active = active_rx.clone();
-                let select = sel_tx.clone();
-                // Announce the available monitors so the console can offer a picker.
-                let dc_open = dc.clone();
-                dc.on_open(Box::new(move || {
-                    let dc = dc_open.clone();
-                    let announce = monitors_announce();
-                    Box::pin(async move {
-                        let _ = dc.send(&Bytes::from(announce)).await;
-                    })
-                }));
+                let source = source_tx.clone();
+                let bubble_ctl = bubble_ctl.clone();
+                let dc_reply = dc.clone();
+                // Proactively announce monitors + bubble apps once the channel is
+                // surely open (robust vs. the on_open race), and also reply to the
+                // console's `hello` for immediacy.
+                let dc_announce = dc.clone();
+                tokio::spawn(async move {
+                    tokio::time::sleep(Duration::from_millis(700)).await;
+                    // send_text → the console receives a string and can JSON.parse it.
+                    let _ = dc_announce.send_text(monitors_announce()).await;
+                    let _ = dc_announce.send_text(apps_announce()).await;
+                });
                 dc.on_message(Box::new(move |msg| {
                     let enigo = enigo.clone();
                     let active = active.clone();
-                    let select = select.clone();
+                    let source = source.clone();
+                    let bubble_ctl = bubble_ctl.clone();
+                    let dc_reply = dc_reply.clone();
                     let text = String::from_utf8_lossy(&msg.data).to_string();
                     Box::pin(async move {
-                        handle_input(&text, &enigo, &active, &select);
+                        // The console asks once on connect for the monitor + app
+                        // lists (robust: its channel's open event always fires).
+                        if text.contains("\"hello\"") {
+                            let _ = dc_reply.send_text(monitors_announce()).await;
+                            let _ = dc_reply.send_text(apps_announce()).await;
+                            return;
+                        }
+                        handle_input(&text, &enigo, &active, &source, &bubble_ctl);
                     })
                 }));
             }
