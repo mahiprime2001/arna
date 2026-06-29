@@ -16,8 +16,8 @@ export function useRemote() {
   const sessionCode = ref<string | null>(null);
   /** A clear, user-facing failure reason (offline / declined / unreachable), or null. */
   const errorMessage = ref<string | null>(null);
-  /** Coarse error kind so the UI can pick an icon: "offline" | "denied" | null. */
-  const errorKind = ref<"offline" | "denied" | null>(null);
+  /** Coarse error kind so the UI can pick an icon: "offline" | "denied" | "password" | null. */
+  const errorKind = ref<"offline" | "denied" | "password" | null>(null);
   /** True when the remote PC requires the caller to type the operator's code. */
   const awaitingCode = ref(false);
   /** Error shown under the code field (wrong code). */
@@ -140,7 +140,7 @@ export function useRemote() {
     unread.value = 0;
   }
 
-  function connect(backendUrl: string, agentId: string, ticket?: string) {
+  function connect(backendUrl: string, agentId: string, ticket?: string, password?: string) {
     disconnect();
     active.value = true;
     currentAgentId = agentId;
@@ -153,12 +153,20 @@ export function useRemote() {
     ws = new WebSocket(backendUrl);
     ws.onopen = () => {
       ws!.send(JSON.stringify({ type: "register", role: "console", id: myId }));
-      // Ask for consent first; we only send the WebRTC offer once accepted.
-      ws!.send(JSON.stringify({ type: "connect_request", to: agentId, ticket: ticket || undefined }));
-      status.value = "requesting access…";
+      // Ask for consent first; we only send the WebRTC offer once accepted. A
+      // correct device password auto-accepts; otherwise the operator must Accept.
+      ws!.send(
+        JSON.stringify({
+          type: "connect_request",
+          to: agentId,
+          ticket: ticket || undefined,
+          password: password || undefined,
+        }),
+      );
+      status.value = password ? "unlocking…" : "requesting access…";
     };
     /** Record a clear failure and drop back to the idle panel. */
-    function fail(message: string, kind: "offline" | "denied" | null = null) {
+    function fail(message: string, kind: "offline" | "denied" | "password" | null = null) {
       errorMessage.value = message;
       errorKind.value = kind;
       status.value = "idle";
@@ -182,7 +190,9 @@ export function useRemote() {
         }
       } else if (m.type === "request_denied") {
         const reason = String(m.reason ?? "");
-        if (reason.includes("offline")) {
+        if (reason.includes("password")) {
+          fail(reason.charAt(0).toUpperCase() + reason.slice(1) + ".", "password");
+        } else if (reason.includes("offline")) {
           fail(`"${agentId}" is offline. Make sure the agent app is running on that PC.`, "offline");
         } else if (reason.includes("auth") || reason.includes("ticket")) {
           fail(`Access denied — ${reason}.`, "denied");

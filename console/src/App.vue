@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, ref, watch } from "vue";
 import { useRemote } from "./composables/useRemote";
-import { useAuth } from "./composables/useAuth";
+import { useAuth, type Device, type DeviceInfo } from "./composables/useAuth";
 import Icon from "./components/Icon.vue";
+import QrCode from "./components/QrCode.vue";
 
 // Remember the server/agent and recent machines so you don't retype them.
 const STORE_KEY = "arna.console";
@@ -39,8 +40,7 @@ function rememberAgent(id: string) {
   if (!id) return;
   recents.value = [id, ...recents.value.filter((x) => x !== id)].slice(0, 5);
 }
-/** Recently-used agents other than the one currently in the field. */
-const recentOthers = computed(() => recents.value.filter((r) => r !== agentId.value.trim()));
+
 const {
   status,
   active,
@@ -81,6 +81,7 @@ const transferStatus = computed(() => downloadStatus.value || uploadStatus.value
 // ── Accounts ────────────────────────────────────────────────────────────────
 const {
   email: accountEmail,
+  userId,
   devices: myDevices,
   loggedIn,
   authError,
@@ -91,25 +92,93 @@ const {
   logout: authLogout,
   refreshDevices,
   addDevice: authAddDevice,
+  fetchMe,
+  setDevicePassword,
+  lookupDevice,
 } = useAuth();
 
-// "account" = sign in + pick a device; "manual" = type a server/agent (self-host).
-const mode = ref<"account" | "manual">("account");
 const loginEmail = ref("");
 const loginPassword = ref("");
 const isSignup = ref(false);
+const showManual = ref(false); // signed-out: connect without an account (self-host)
 
 async function submitAuth() {
   const fn = isSignup.value ? authSignup : authLogin;
   await fn(backend.value.trim(), loginEmail.value.trim(), loginPassword.value);
-  if (loggedIn.value) loginPassword.value = "";
-}
-function connectDevice(d: { id: string; name: string }) {
-  rememberAgent(d.id);
-  connect(backend.value.trim(), d.id, sessionToken.value || undefined);
+  if (loggedIn.value) {
+    loginPassword.value = "";
+    fetchMe(backend.value.trim());
+  }
 }
 
-// Add-device flow (returns the agent token to paste into the device).
+// ── Sidebar / navigation ──────────────────────────────────────────────────
+const nav = ref<"devices" | "profile">("devices");
+const sidebarOpen = ref(true);
+function go(to: "devices" | "profile") {
+  nav.value = to;
+  errorMessage.value = null;
+}
+
+// ── Connect flow (enter id → resolve name → password / wait) ───────────────
+const connectId = ref("");
+const connectInfo = ref<DeviceInfo | null>(null);
+const connectResolving = ref(false);
+const connectPassword = ref("");
+const connectError = ref("");
+const showConnectDialog = ref(false);
+
+async function openConnect(id: string, known?: Device) {
+  const trimmed = id.trim();
+  if (!trimmed) return;
+  connectId.value = trimmed;
+  connectPassword.value = "";
+  connectError.value = "";
+  errorMessage.value = null;
+  showConnectDialog.value = true;
+  if (known) {
+    connectInfo.value = { id: known.id, name: known.name, has_password: !!known.has_password };
+    return;
+  }
+  connectResolving.value = true;
+  connectInfo.value = null;
+  const info = await lookupDevice(backend.value.trim(), trimmed);
+  connectResolving.value = false;
+  // Unknown id: still allow a request — the operator can accept.
+  connectInfo.value = info ?? { id: trimmed, name: trimmed, has_password: false };
+}
+
+function doConnect(withPassword: boolean) {
+  const id = connectId.value.trim();
+  if (!id) return;
+  rememberAgent(id);
+  persist();
+  showConnectDialog.value = false;
+  connect(
+    backend.value.trim(),
+    id,
+    sessionToken.value || ticket.value.trim() || undefined,
+    withPassword ? connectPassword.value : undefined,
+  );
+}
+
+// A wrong/needed password bounces back here — reopen the dialog with the message.
+watch(active, (a) => {
+  if (!a && errorKind.value === "password") {
+    showConnectDialog.value = true;
+    connectError.value = errorMessage.value || "Wrong password.";
+  }
+});
+
+// Manual connect (self-host, signed out): server + agent id + optional ticket.
+function manualConnect() {
+  const id = agentId.value.trim();
+  if (!id) return;
+  rememberAgent(id);
+  persist();
+  connect(backend.value.trim(), id, ticket.value.trim() || undefined);
+}
+
+// ── Add a device ───────────────────────────────────────────────────────────
 const showAddDevice = ref(false);
 const newDeviceId = ref("");
 const newDeviceName = ref("");
@@ -126,14 +195,78 @@ function resetAddDevice() {
   newDeviceName.value = "";
   newDeviceToken.value = "";
 }
-function copyText(t: string) {
+
+// ── Per-device access password ──────────────────────────────────────────────
+const pwDevice = ref<Device | null>(null);
+const pwInput = ref("");
+const pwBusy = ref(false);
+const pwError = ref("");
+function openPw(d: Device) {
+  pwDevice.value = d;
+  pwInput.value = "";
+  pwError.value = "";
+}
+async function savePw(clear = false) {
+  if (!pwDevice.value) return;
+  pwBusy.value = true;
+  pwError.value = "";
+  const ok = await setDevicePassword(
+    backend.value.trim(),
+    pwDevice.value.id,
+    clear ? null : pwInput.value,
+  );
+  pwBusy.value = false;
+  if (ok) pwDevice.value = null;
+  else pwError.value = "Couldn't update. Try again.";
+}
+
+// ── Profile links + QR ───────────────────────────────────────────────────────
+const linkBase = computed(() => {
+  try {
+    const u = new URL(backend.value);
+    u.protocol = u.protocol === "wss:" ? "https:" : "http:";
+    return u.origin;
+  } catch {
+    return location.origin;
+  }
+});
+const connectLink = computed(() => `${linkBase.value}/?connect=${userId.value ?? ""}`);
+const inviteLink = computed(() => `${linkBase.value}/?invite=${userId.value ?? ""}`);
+
+const copied = ref("");
+function copyText(t: string, label = "") {
   navigator.clipboard?.writeText(t).catch(() => {});
+  copied.value = label || t;
+  setTimeout(() => {
+    if (copied.value === (label || t)) copied.value = "";
+  }, 1500);
+}
+
+// Esc closes whichever modal is open (topmost first).
+function onEsc(e: KeyboardEvent) {
+  if (e.key !== "Escape") return;
+  if (pwDevice.value) pwDevice.value = null;
+  else if (showConnectDialog.value) showConnectDialog.value = false;
+  else if (showAddDevice.value) resetAddDevice();
 }
 
 onMounted(() => {
-  if (loggedIn.value) refreshDevices(backend.value.trim());
+  window.addEventListener("keydown", onEsc);
+  if (loggedIn.value) {
+    refreshDevices(backend.value.trim());
+    fetchMe(backend.value.trim());
+  }
+  // Deep links: ?connect=<id> prefills the connect field; ?invite= opens signup.
+  const params = new URLSearchParams(location.search);
+  const c = params.get("connect");
+  if (c) {
+    nav.value = "devices";
+    connectId.value = c;
+  }
+  if (params.get("invite")) isSignup.value = true;
 });
 
+// ── Live session refs/handlers (unchanged) ─────────────────────────────────
 const videoEl = ref<HTMLVideoElement | null>(null);
 const screenEl = ref<HTMLDivElement | null>(null);
 const fileInput = ref<HTMLInputElement | null>(null);
@@ -159,21 +292,13 @@ function onDragOver() {
   if (canSendFiles.value) dragOver.value = true;
 }
 
-// The <video> is rendered only once a stream arrives, so attach after render.
 watch(videoStream, async (s) => {
   await nextTick();
   if (videoEl.value) videoEl.value.srcObject = s;
 });
 
-function toggle() {
-  if (active.value) {
-    disconnect();
-    return;
-  }
-  const id = agentId.value.trim();
-  rememberAgent(id);
-  persist();
-  connect(backend.value.trim(), id, ticket.value.trim());
+function endSession() {
+  disconnect();
 }
 
 const dotClass = computed(() => {
@@ -184,23 +309,21 @@ const dotClass = computed(() => {
   return "bg-amber-400 animate-pulse";
 });
 
-/** Which screen to show: the connection panel, the connecting state, or the live video. */
 const phase = computed<"idle" | "connecting" | "live">(() => {
   if (videoStream.value) return "live";
   if (active.value) return "connecting";
   return "idle";
 });
 
-/** Friendly one-liner for the connecting state, derived from the raw status. */
 const connectingLabel = computed(() => {
   const s = status.value;
+  if (s.startsWith("unlocking")) return "Unlocking with the device password…";
   if (s.startsWith("requesting")) return "Waiting for the remote PC to accept…";
   if (s.startsWith("accepted")) return "Accepted — starting the video…";
   if (s === "connecting" || s === "checking" || s === "new") return "Establishing a secure connection…";
   return s.charAt(0).toUpperCase() + s.slice(1);
 });
 
-// Chat panel.
 const codeInput = ref("");
 function onSubmitCode() {
   submitCode(codeInput.value);
@@ -219,7 +342,6 @@ function sendDraft() {
   draft.value = "";
   sendChat(text);
 }
-// Auto-scroll to the newest message; clear unread while the panel is open.
 watch(
   messages,
   () => {
@@ -231,7 +353,6 @@ watch(
   { deep: true },
 );
 
-// Fullscreen the remote-screen stage (Esc exits).
 const isFullscreen = ref(false);
 function toggleFullscreen() {
   if (document.fullscreenElement) document.exitFullscreen();
@@ -243,19 +364,6 @@ onMounted(() => {
   });
 });
 
-// Autofocus the Agent field whenever the connection panel is showing.
-const agentInput = ref<HTMLInputElement | null>(null);
-function focusAgent() {
-  nextTick(() => agentInput.value?.focus());
-}
-onMounted(() => {
-  if (phase.value === "idle") focusAgent();
-});
-watch(phase, (p) => {
-  if (p === "idle") focusAgent();
-});
-
-/** Mouse position normalized to the video content (0..1), or null if outside. */
 function norm(e: MouseEvent): { x: number; y: number } | null {
   const v = videoEl.value;
   if (!v || !v.videoWidth || !v.videoHeight) return null;
@@ -274,7 +382,7 @@ function norm(e: MouseEvent): { x: number; y: number } | null {
 function onMouseMove(e: MouseEvent) {
   if (!canControl.value) return;
   const now = performance.now();
-  if (now - lastMove < 16) return; // ~60/s
+  if (now - lastMove < 16) return;
   lastMove = now;
   const p = norm(e);
   if (p) sendInput({ t: "m", x: p.x, y: p.y });
@@ -311,351 +419,477 @@ function onKeyUp(e: KeyboardEvent) {
 </script>
 
 <template>
-  <div class="flex h-full flex-col bg-ink text-slate-200">
-    <!-- ── Top bar ─────────────────────────────────────────────────────── -->
-    <header
-      class="flex h-14 shrink-0 items-center gap-3 border-b border-edge/80 bg-panel/80 px-4 backdrop-blur"
-    >
-      <div class="flex items-center gap-2.5">
-        <span
-          class="grid h-7 w-7 place-items-center rounded-lg bg-gradient-to-br from-accent to-accent2 shadow-[0_2px_10px_-2px] shadow-accent/50"
-        >
-          <Icon name="monitor" class="h-4 w-4 text-white" />
-        </span>
-        <div class="leading-none">
-          <div class="text-[15px] font-semibold tracking-tight text-slate-100">Arna</div>
-          <div class="mt-0.5 text-[10px] font-medium uppercase tracking-[0.15em] text-slate-500">Console</div>
+  <div class="h-full bg-ink text-slate-200">
+    <!-- ════════════════ SESSION (connecting / live) ════════════════ -->
+    <div v-if="active" class="flex h-full flex-col">
+      <header class="flex h-14 shrink-0 items-center gap-3 border-b border-edge/80 bg-panel/80 px-4 backdrop-blur">
+        <div class="flex items-center gap-2.5">
+          <span class="grid h-7 w-7 place-items-center rounded-lg bg-gradient-to-br from-accent to-accent2 shadow-[0_2px_10px_-2px] shadow-accent/50">
+            <Icon name="monitor" class="h-4 w-4 text-white" />
+          </span>
+          <div class="leading-none">
+            <div class="text-[15px] font-semibold tracking-tight text-slate-100">Arna</div>
+            <div class="mt-0.5 text-[10px] font-medium uppercase tracking-[0.15em] text-slate-500">Session</div>
+          </div>
         </div>
-      </div>
-
-      <!-- Live session info -->
-      <template v-if="phase === 'live'">
-        <div class="mx-1 h-6 w-px bg-edge" />
-        <div class="flex items-center gap-2">
-          <span class="h-2 w-2 rounded-full" :class="dotClass" />
-          <span class="font-mono text-sm text-slate-300">{{ agentId }}</span>
-        </div>
-      </template>
-
-      <div class="ml-auto flex items-center gap-2">
-        <span v-if="transferStatus" class="hidden text-xs text-slate-400 sm:inline">{{ transferStatus }}</span>
-
-        <span
-          v-if="sessionCode && phase === 'live'"
-          class="flex items-center gap-1.5 rounded-full border border-edge bg-ink/60 px-2.5 py-1 font-mono text-xs text-slate-300"
-          title="Session code"
-        >
-          <Icon name="shield" class="h-3.5 w-3.5 text-slate-500" />{{ sessionCode }}
-        </span>
-
-        <span
-          v-if="canControl"
-          class="flex items-center gap-1.5 rounded-full bg-accent/15 px-2.5 py-1 text-xs font-semibold text-accent2"
-        >
-          <Icon name="keyboard" class="h-3.5 w-3.5" /> control
-        </span>
 
         <template v-if="phase === 'live'">
-          <div
-            v-if="monitors.length > 1"
-            class="flex items-center gap-0.5 rounded-lg border border-edge bg-ink/50 p-0.5"
-            title="Choose which screen to view"
-          >
-            <Icon name="monitor" class="ml-1 mr-0.5 h-3.5 w-3.5 text-slate-500" />
-            <button
-              v-for="m in monitors"
-              :key="m.index"
-              class="rounded-md px-2 py-1 text-xs font-semibold transition"
-              :class="m.index === currentMonitor ? 'bg-accent text-white' : 'text-slate-300 hover:bg-ink hover:text-slate-100'"
-              :title="`${m.label} — ${m.width}×${m.height}${m.primary ? ' (primary)' : ''}`"
-              @click="selectMonitor(m.index)"
-            >
-              {{ m.index + 1 }}
-            </button>
+          <div class="mx-1 h-6 w-px bg-edge" />
+          <div class="flex items-center gap-2">
+            <span class="h-2 w-2 rounded-full" :class="dotClass" />
+            <span class="font-mono text-sm text-slate-300">{{ connectInfo?.name || agentId }}</span>
           </div>
-          <button
-            v-if="canChat"
-            class="relative grid h-8 w-8 place-items-center rounded-lg border bg-ink/50 transition focus-visible:ring-2 focus-visible:ring-accent"
-            :class="chatOpen ? 'border-accent text-accent2' : 'border-edge text-slate-300 hover:border-slate-600 hover:text-slate-100'"
-            title="Chat"
-            @click="toggleChat"
+        </template>
+
+        <div class="ml-auto flex items-center gap-2">
+          <span v-if="transferStatus" class="hidden text-xs text-slate-400 sm:inline">{{ transferStatus }}</span>
+          <span
+            v-if="sessionCode && phase === 'live'"
+            class="flex items-center gap-1.5 rounded-full border border-edge bg-ink/60 px-2.5 py-1 font-mono text-xs text-slate-300"
+            title="Session code"
           >
-            <Icon name="chat" class="h-4 w-4" />
-            <span
-              v-if="unread > 0"
-              class="absolute -right-1 -top-1 grid h-4 min-w-4 place-items-center rounded-full bg-accent px-1 text-[10px] font-bold text-white"
+            <Icon name="shield" class="h-3.5 w-3.5 text-slate-500" />{{ sessionCode }}
+          </span>
+          <span v-if="canControl" class="flex items-center gap-1.5 rounded-full bg-accent/15 px-2.5 py-1 text-xs font-semibold text-accent2">
+            <Icon name="keyboard" class="h-3.5 w-3.5" /> control
+          </span>
+
+          <template v-if="phase === 'live'">
+            <div
+              v-if="monitors.length > 1"
+              class="flex items-center gap-0.5 rounded-lg border border-edge bg-ink/50 p-0.5"
+              title="Choose which screen to view"
             >
-              {{ unread > 9 ? "9+" : unread }}
-            </span>
-          </button>
-          <button
-            class="grid h-8 w-8 place-items-center rounded-lg border border-edge bg-ink/50 text-slate-300 transition hover:border-slate-600 hover:text-slate-100 focus-visible:ring-2 focus-visible:ring-accent"
-            :title="isFullscreen ? 'Exit fullscreen' : 'Fullscreen'"
-            @click="toggleFullscreen"
-          >
-            <Icon :name="isFullscreen ? 'minimize' : 'maximize'" class="h-4 w-4" />
-          </button>
-          <button
-            v-if="canSendFiles"
-            class="grid h-8 w-8 place-items-center rounded-lg border border-edge bg-ink/50 text-slate-300 transition hover:border-slate-600 hover:text-slate-100 focus-visible:ring-2 focus-visible:ring-accent"
-            title="Download a file from the remote PC"
-            @click="requestDownload"
-          >
-            <Icon name="download" class="h-4 w-4" />
-          </button>
-          <button
-            v-if="canSendFiles"
-            class="flex items-center gap-1.5 rounded-lg border border-edge bg-ink/50 px-3 py-1.5 text-sm font-medium text-slate-200 transition hover:border-slate-600 hover:bg-ink focus-visible:ring-2 focus-visible:ring-accent"
-            @click="pickFile"
-          >
-            <Icon name="upload" class="h-4 w-4" /> Send file
-          </button>
+              <Icon name="monitor" class="ml-1 mr-0.5 h-3.5 w-3.5 text-slate-500" />
+              <button
+                v-for="m in monitors"
+                :key="m.index"
+                class="rounded-md px-2 py-1 text-xs font-semibold transition"
+                :class="m.index === currentMonitor ? 'bg-accent text-white' : 'text-slate-300 hover:bg-ink hover:text-slate-100'"
+                :title="`${m.label} — ${m.width}×${m.height}${m.primary ? ' (primary)' : ''}`"
+                @click="selectMonitor(m.index)"
+              >
+                {{ m.index + 1 }}
+              </button>
+            </div>
+            <button
+              v-if="canChat"
+              class="relative grid h-8 w-8 place-items-center rounded-lg border bg-ink/50 transition focus-visible:ring-2 focus-visible:ring-accent"
+              :class="chatOpen ? 'border-accent text-accent2' : 'border-edge text-slate-300 hover:border-slate-600 hover:text-slate-100'"
+              title="Chat"
+              @click="toggleChat"
+            >
+              <Icon name="chat" class="h-4 w-4" />
+              <span v-if="unread > 0" class="absolute -right-1 -top-1 grid h-4 min-w-4 place-items-center rounded-full bg-accent px-1 text-[10px] font-bold text-white">
+                {{ unread > 9 ? "9+" : unread }}
+              </span>
+            </button>
+            <button
+              class="grid h-8 w-8 place-items-center rounded-lg border border-edge bg-ink/50 text-slate-300 transition hover:border-slate-600 hover:text-slate-100 focus-visible:ring-2 focus-visible:ring-accent"
+              :title="isFullscreen ? 'Exit fullscreen' : 'Fullscreen'"
+              @click="toggleFullscreen"
+            >
+              <Icon :name="isFullscreen ? 'minimize' : 'maximize'" class="h-4 w-4" />
+            </button>
+            <button
+              v-if="canSendFiles"
+              class="grid h-8 w-8 place-items-center rounded-lg border border-edge bg-ink/50 text-slate-300 transition hover:border-slate-600 hover:text-slate-100 focus-visible:ring-2 focus-visible:ring-accent"
+              title="Download a file from the remote PC"
+              @click="requestDownload"
+            >
+              <Icon name="download" class="h-4 w-4" />
+            </button>
+            <button
+              v-if="canSendFiles"
+              class="flex items-center gap-1.5 rounded-lg border border-edge bg-ink/50 px-3 py-1.5 text-sm font-medium text-slate-200 transition hover:border-slate-600 hover:bg-ink focus-visible:ring-2 focus-visible:ring-accent"
+              @click="pickFile"
+            >
+              <Icon name="upload" class="h-4 w-4" /> Send file
+            </button>
+          </template>
           <button
             class="flex items-center gap-1.5 rounded-lg bg-rose-500/90 px-3 py-1.5 text-sm font-semibold text-white transition hover:bg-rose-500 focus-visible:ring-2 focus-visible:ring-rose-400"
-            @click="toggle"
+            @click="endSession"
           >
             <Icon name="x" class="h-4 w-4" /> End
           </button>
+        </div>
+        <input ref="fileInput" type="file" class="hidden" @change="onFileChosen" />
+      </header>
+
+      <main
+        ref="screenEl"
+        tabindex="0"
+        class="relative grid flex-1 place-items-center overflow-hidden bg-ink outline-none"
+        :class="{ 'cursor-none': canControl && videoStream, 'stage-grid': phase !== 'live' }"
+        @keydown="onKeyDown"
+        @keyup="onKeyUp"
+        @focus="pushClipboard"
+        @pointerdown="pushClipboard"
+        @contextmenu="onContextMenu"
+        @dragover.prevent="onDragOver"
+        @dragleave="dragOver = false"
+        @drop.prevent="onDrop"
+      >
+        <div v-if="transferProgress > 0 && transferProgress < 1" class="pointer-events-none absolute inset-x-0 top-0 z-30 h-0.5 bg-edge">
+          <div class="h-full bg-accent transition-[width] duration-150" :style="{ width: transferProgress * 100 + '%' }" />
+        </div>
+
+        <div v-if="dragOver && canSendFiles" class="pointer-events-none absolute inset-4 z-30 grid place-items-center rounded-2xl border-2 border-dashed border-accent/70 bg-ink/80 backdrop-blur-sm">
+          <div class="text-center">
+            <Icon name="upload" class="mx-auto mb-2 h-8 w-8 text-accent2" />
+            <p class="font-medium text-slate-100">Drop to send to the remote PC</p>
+          </div>
+        </div>
+
+        <!-- LIVE -->
+        <template v-if="phase === 'live'">
+          <video
+            ref="videoEl"
+            autoplay
+            playsinline
+            muted
+            class="max-h-full max-w-full object-contain"
+            @mousemove="onMouseMove"
+            @mousedown="onMouseDown"
+            @mouseup="onMouseUp"
+            @wheel="onWheel"
+          />
+          <div class="pointer-events-none absolute right-4 top-4 z-20 flex items-center gap-2 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-3 py-1 text-xs font-semibold text-emerald-300 backdrop-blur">
+            <span class="h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-400" /> LIVE
+          </div>
+          <div v-if="canControl" class="pointer-events-none absolute bottom-4 left-1/2 z-20 -translate-x-1/2 rounded-full border border-edge/80 bg-panel/80 px-3.5 py-1.5 text-xs text-slate-400 backdrop-blur">
+            Click to control · keystrokes are forwarded
+          </div>
+
+          <transition name="slide">
+            <aside v-if="chatOpen" class="absolute bottom-0 right-0 top-0 z-30 flex w-80 flex-col border-l border-edge bg-panel/95 backdrop-blur">
+              <header class="flex items-center gap-2 border-b border-edge px-4 py-3">
+                <Icon name="chat" class="h-4 w-4 text-accent2" />
+                <span class="text-sm font-semibold text-slate-100">Chat</span>
+                <button class="ml-auto grid h-6 w-6 place-items-center rounded-md text-slate-500 transition hover:bg-ink hover:text-slate-200" title="Close" @click="toggleChat">
+                  <Icon name="x" class="h-4 w-4" />
+                </button>
+              </header>
+              <div ref="chatLog" class="flex-1 space-y-2 overflow-y-auto px-3 py-3">
+                <p v-if="!messages.length" class="mt-6 px-3 text-center text-sm text-slate-600">No messages yet. Say hello to the person at the remote PC.</p>
+                <div v-for="(m, i) in messages" :key="i" class="flex" :class="m.mine ? 'justify-end' : 'justify-start'">
+                  <span class="max-w-[85%] whitespace-pre-wrap break-words rounded-2xl px-3 py-1.5 text-sm" :class="m.mine ? 'rounded-br-sm bg-accent text-white' : 'rounded-bl-sm bg-ink text-slate-200'">{{ m.text }}</span>
+                </div>
+              </div>
+              <form class="flex items-center gap-2 border-t border-edge p-3" @submit.prevent="sendDraft">
+                <input
+                  v-model="draft"
+                  placeholder="Type a message…"
+                  autocomplete="off"
+                  @keydown.enter.prevent="sendDraft"
+                  class="min-w-0 flex-1 rounded-lg border border-edge bg-ink px-3 py-2 text-sm text-slate-100 outline-none transition placeholder:text-slate-600 focus:border-accent focus:ring-2 focus:ring-accent/30"
+                />
+                <button type="submit" :disabled="!draft.trim()" class="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-accent text-white transition hover:bg-accent/90 disabled:opacity-40 focus-visible:ring-2 focus-visible:ring-accent">
+                  <Icon name="send" class="h-4 w-4" />
+                </button>
+              </form>
+            </aside>
+          </transition>
         </template>
-      </div>
-      <input ref="fileInput" type="file" class="hidden" @change="onFileChosen" />
-    </header>
 
-    <!-- ── Stage ───────────────────────────────────────────────────────── -->
-    <main
-      ref="screenEl"
-      tabindex="0"
-      class="relative grid flex-1 place-items-center overflow-hidden bg-ink outline-none"
-      :class="{ 'cursor-none': canControl && videoStream, 'stage-grid': phase !== 'live' }"
-      @keydown="onKeyDown"
-      @keyup="onKeyUp"
-      @focus="pushClipboard"
-      @pointerdown="pushClipboard"
-      @contextmenu="onContextMenu"
-      @dragover.prevent="onDragOver"
-      @dragleave="dragOver = false"
-      @drop.prevent="onDrop"
-    >
-      <!-- Transfer progress (upload or download) -->
-      <div
-        v-if="transferProgress > 0 && transferProgress < 1"
-        class="pointer-events-none absolute inset-x-0 top-0 z-30 h-0.5 bg-edge"
-      >
-        <div class="h-full bg-accent transition-[width] duration-150" :style="{ width: transferProgress * 100 + '%' }" />
-      </div>
-
-      <!-- Drag-to-send overlay -->
-      <div
-        v-if="dragOver && canSendFiles"
-        class="pointer-events-none absolute inset-4 z-30 grid place-items-center rounded-2xl border-2 border-dashed border-accent/70 bg-ink/80 backdrop-blur-sm"
-      >
-        <div class="text-center">
-          <Icon name="upload" class="mx-auto mb-2 h-8 w-8 text-accent2" />
-          <p class="font-medium text-slate-100">Drop to send to the remote PC</p>
-        </div>
-      </div>
-
-      <!-- LIVE: the remote screen -->
-      <template v-if="phase === 'live'">
-        <video
-          ref="videoEl"
-          autoplay
-          playsinline
-          muted
-          class="max-h-full max-w-full object-contain"
-          @mousemove="onMouseMove"
-          @mousedown="onMouseDown"
-          @mouseup="onMouseUp"
-          @wheel="onWheel"
-        />
-        <div
-          class="pointer-events-none absolute right-4 top-4 z-20 flex items-center gap-2 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-3 py-1 text-xs font-semibold text-emerald-300 backdrop-blur"
-        >
-          <span class="h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-400" /> LIVE
-        </div>
-        <div
-          v-if="canControl"
-          class="pointer-events-none absolute bottom-4 left-1/2 z-20 -translate-x-1/2 rounded-full border border-edge/80 bg-panel/80 px-3.5 py-1.5 text-xs text-slate-400 backdrop-blur"
-        >
-          Click to control · keystrokes are forwarded
-        </div>
-
-        <!-- Chat panel -->
-        <transition name="slide">
-          <aside
-            v-if="chatOpen"
-            class="absolute bottom-0 right-0 top-0 z-30 flex w-80 flex-col border-l border-edge bg-panel/95 backdrop-blur"
-          >
-            <header class="flex items-center gap-2 border-b border-edge px-4 py-3">
-              <Icon name="chat" class="h-4 w-4 text-accent2" />
-              <span class="text-sm font-semibold text-slate-100">Chat</span>
-              <span class="text-xs text-slate-500">with {{ agentId }}</span>
-              <button
-                class="ml-auto grid h-6 w-6 place-items-center rounded-md text-slate-500 transition hover:bg-ink hover:text-slate-200"
-                title="Close"
-                @click="toggleChat"
-              >
-                <Icon name="x" class="h-4 w-4" />
-              </button>
-            </header>
-
-            <div ref="chatLog" class="flex-1 space-y-2 overflow-y-auto px-3 py-3">
-              <p v-if="!messages.length" class="mt-6 px-3 text-center text-sm text-slate-600">
-                No messages yet. Say hello to the person at the remote PC.
+        <!-- CONNECTING -->
+        <div v-else class="flex flex-col items-center gap-5 px-6 text-center">
+          <template v-if="awaitingCode">
+            <div class="grid h-14 w-14 place-items-center rounded-2xl bg-accent/10 text-accent2 ring-1 ring-inset ring-accent/20">
+              <Icon name="shield" class="h-6 w-6" />
+            </div>
+            <div>
+              <p class="text-base font-medium text-slate-100">Enter the code</p>
+              <p class="mt-1 max-w-xs text-sm text-slate-500">
+                The person at <span class="font-mono text-slate-400">{{ agentId }}</span> will read you a 6-digit code.
               </p>
-              <div v-for="(m, i) in messages" :key="i" class="flex" :class="m.mine ? 'justify-end' : 'justify-start'">
-                <span
-                  class="max-w-[85%] whitespace-pre-wrap break-words rounded-2xl px-3 py-1.5 text-sm"
-                  :class="m.mine ? 'rounded-br-sm bg-accent text-white' : 'rounded-bl-sm bg-ink text-slate-200'"
-                >
-                  {{ m.text }}
-                </span>
-              </div>
             </div>
-
-            <form class="flex items-center gap-2 border-t border-edge p-3" @submit.prevent="sendDraft">
+            <form class="flex flex-col items-center gap-2" @submit.prevent="onSubmitCode">
               <input
-                v-model="draft"
-                placeholder="Type a message…"
-                autocomplete="off"
-                @keydown.enter.prevent="sendDraft"
-                class="min-w-0 flex-1 rounded-lg border border-edge bg-ink px-3 py-2 text-sm text-slate-100 outline-none transition placeholder:text-slate-600 focus:border-accent focus:ring-2 focus:ring-accent/30"
+                v-model="codeInput"
+                inputmode="numeric"
+                maxlength="6"
+                placeholder="000000"
+                class="w-44 rounded-lg border border-edge bg-ink px-3 py-2.5 text-center font-mono text-2xl tracking-[0.3em] text-slate-100 outline-none focus:border-accent focus:ring-2 focus:ring-accent/30"
               />
-              <button
-                type="submit"
-                :disabled="!draft.trim()"
-                class="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-accent text-white transition hover:bg-accent/90 disabled:opacity-40 focus-visible:ring-2 focus-visible:ring-accent"
-              >
-                <Icon name="send" class="h-4 w-4" />
-              </button>
-            </form>
-          </aside>
-        </transition>
-      </template>
-
-      <!-- CONNECTING -->
-      <div v-else-if="phase === 'connecting'" class="flex flex-col items-center gap-5 px-6 text-center">
-        <!-- Require-code: ask the caller for the code the operator reads out -->
-        <template v-if="awaitingCode">
-          <div class="grid h-14 w-14 place-items-center rounded-2xl bg-accent/10 text-accent2 ring-1 ring-inset ring-accent/20">
-            <Icon name="shield" class="h-6 w-6" />
-          </div>
-          <div>
-            <p class="text-base font-medium text-slate-100">Enter the code</p>
-            <p class="mt-1 max-w-xs text-sm text-slate-500">
-              The person at <span class="font-mono text-slate-400">{{ agentId }}</span> will read you a 6-digit code.
-            </p>
-          </div>
-          <form class="flex flex-col items-center gap-2" @submit.prevent="onSubmitCode">
-            <input
-              v-model="codeInput"
-              inputmode="numeric"
-              maxlength="6"
-              placeholder="000000"
-              autofocus
-              class="w-44 rounded-lg border border-edge bg-ink px-3 py-2.5 text-center font-mono text-2xl tracking-[0.3em] text-slate-100 outline-none focus:border-accent focus:ring-2 focus:ring-accent/30"
-            />
-            <p v-if="codeError" class="text-xs text-rose-300">{{ codeError }}</p>
-            <div class="mt-1 flex gap-2">
-              <button type="button" class="rounded-lg border border-edge px-4 py-2 text-sm font-medium text-slate-300 transition hover:bg-panel" @click="toggle">Cancel</button>
-              <button type="submit" :disabled="codeInput.trim().length < 6" class="rounded-lg bg-accent px-5 py-2 text-sm font-semibold text-white transition hover:bg-accent/90 disabled:opacity-40">Connect</button>
-            </div>
-          </form>
-        </template>
-
-        <!-- Normal connecting -->
-        <template v-else>
-          <div class="relative grid h-16 w-16 place-items-center">
-            <span class="absolute inset-0 animate-spin rounded-full border-2 border-edge border-t-accent" />
-            <Icon name="monitor" class="h-6 w-6 text-slate-400" />
-          </div>
-          <div>
-            <p class="text-base font-medium text-slate-100">{{ connectingLabel }}</p>
-            <p class="mt-1 font-mono text-sm text-slate-500">{{ agentId }}</p>
-          </div>
-          <p v-if="sessionCode" class="rounded-lg border border-edge bg-panel px-3 py-2 text-sm text-slate-400">
-            If asked for a code, share <span class="font-mono font-semibold text-accent2">{{ sessionCode }}</span>
-          </p>
-          <button
-            class="rounded-lg border border-edge px-4 py-2 text-sm font-medium text-slate-300 transition hover:bg-panel focus-visible:ring-2 focus-visible:ring-accent"
-            @click="toggle"
-          >
-            Cancel
-          </button>
-        </template>
-      </div>
-
-      <!-- IDLE -->
-      <div v-else class="w-full max-w-md px-6">
-        <!-- ACCOUNT · signed in → your devices -->
-        <template v-if="mode === 'account' && loggedIn">
-          <div class="rounded-2xl border border-edge bg-panel/90 p-7 shadow-2xl shadow-black/40">
-            <div class="mb-5 flex items-center gap-3">
-              <span class="grid h-11 w-11 shrink-0 place-items-center rounded-xl bg-accent/10 text-accent2 ring-1 ring-inset ring-accent/20">
-                <Icon name="monitor" class="h-5 w-5" />
-              </span>
-              <div class="min-w-0 flex-1">
-                <h1 class="text-lg font-semibold tracking-tight text-slate-100">Your devices</h1>
-                <p class="truncate text-sm text-slate-500">{{ accountEmail }}</p>
+              <p v-if="codeError" class="text-xs text-rose-300">{{ codeError }}</p>
+              <div class="mt-1 flex gap-2">
+                <button type="button" class="rounded-lg border border-edge px-4 py-2 text-sm font-medium text-slate-300 transition hover:bg-panel" @click="endSession">Cancel</button>
+                <button type="submit" :disabled="codeInput.trim().length < 6" class="rounded-lg bg-accent px-5 py-2 text-sm font-semibold text-white transition hover:bg-accent/90 disabled:opacity-40">Connect</button>
               </div>
-              <button class="grid h-8 w-8 shrink-0 place-items-center rounded-lg border border-edge text-slate-400 transition hover:bg-ink hover:text-slate-200" title="Sign out" @click="authLogout()">
-                <Icon name="logout" class="h-4 w-4" />
-              </button>
-            </div>
+            </form>
+          </template>
 
-            <div v-if="errorMessage" role="alert" class="mb-4 flex items-start gap-2.5 rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2.5 text-sm text-rose-200">
+          <template v-else>
+            <div class="relative grid h-16 w-16 place-items-center">
+              <span class="absolute inset-0 animate-spin rounded-full border-2 border-edge border-t-accent" />
+              <Icon name="monitor" class="h-6 w-6 text-slate-400" />
+            </div>
+            <div>
+              <p class="text-base font-medium text-slate-100">{{ connectingLabel }}</p>
+              <p class="mt-1 font-mono text-sm text-slate-500">{{ connectInfo?.name || agentId }}</p>
+            </div>
+            <p v-if="sessionCode" class="rounded-lg border border-edge bg-panel px-3 py-2 text-sm text-slate-400">
+              If asked for a code, share <span class="font-mono font-semibold text-accent2">{{ sessionCode }}</span>
+            </p>
+            <button class="rounded-lg border border-edge px-4 py-2 text-sm font-medium text-slate-300 transition hover:bg-panel focus-visible:ring-2 focus-visible:ring-accent" @click="endSession">Cancel</button>
+          </template>
+        </div>
+      </main>
+    </div>
+
+    <!-- ════════════════ HOME (signed in) ════════════════ -->
+    <div v-else-if="loggedIn" class="flex h-full">
+      <!-- Sidebar -->
+      <aside
+        class="flex shrink-0 flex-col overflow-hidden border-r border-edge/80 bg-panel/60 transition-[width] duration-200"
+        :class="sidebarOpen ? 'w-60' : 'w-0'"
+      >
+        <div class="flex h-14 items-center gap-2.5 px-4">
+          <span class="grid h-8 w-8 place-items-center rounded-lg bg-gradient-to-br from-accent to-accent2 shadow-[0_2px_10px_-2px] shadow-accent/50">
+            <Icon name="monitor" class="h-4 w-4 text-white" />
+          </span>
+          <div class="leading-none">
+            <div class="text-[15px] font-semibold tracking-tight text-slate-100">Arna</div>
+            <div class="mt-0.5 text-[10px] font-medium uppercase tracking-[0.15em] text-slate-500">Remote</div>
+          </div>
+        </div>
+
+        <nav class="mt-3 flex flex-1 flex-col gap-1 px-3">
+          <button
+            class="flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition"
+            :class="nav === 'devices' ? 'bg-accent/15 text-accent2' : 'text-slate-400 hover:bg-ink hover:text-slate-200'"
+            @click="go('devices')"
+          >
+            <Icon name="layout" class="h-4 w-4" /> Dashboard
+          </button>
+          <button
+            class="flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition"
+            :class="nav === 'profile' ? 'bg-accent/15 text-accent2' : 'text-slate-400 hover:bg-ink hover:text-slate-200'"
+            @click="go('profile')"
+          >
+            <Icon name="user" class="h-4 w-4" /> Profile
+          </button>
+        </nav>
+
+        <div class="border-t border-edge/80 p-3">
+          <div class="flex items-center gap-2.5 rounded-lg px-2 py-1.5">
+            <span class="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-accent/15 text-xs font-bold text-accent2">
+              {{ (accountEmail || "?").charAt(0).toUpperCase() }}
+            </span>
+            <div class="min-w-0 flex-1">
+              <div class="truncate text-xs font-medium text-slate-300">{{ accountEmail }}</div>
+              <div class="truncate font-mono text-[11px] text-slate-500">ID {{ userId || "…" }}</div>
+            </div>
+            <button class="grid h-7 w-7 shrink-0 place-items-center rounded-md text-slate-500 transition hover:bg-ink hover:text-slate-200" title="Sign out" @click="authLogout()">
+              <Icon name="logout" class="h-4 w-4" />
+            </button>
+          </div>
+        </div>
+      </aside>
+
+      <!-- Content -->
+      <div class="flex min-w-0 flex-1 flex-col">
+        <header class="flex h-14 shrink-0 items-center gap-3 border-b border-edge/80 bg-panel/40 px-4 backdrop-blur">
+          <button class="grid h-9 w-9 place-items-center rounded-lg text-slate-400 transition hover:bg-ink hover:text-slate-200" title="Toggle menu" @click="sidebarOpen = !sidebarOpen">
+            <Icon name="menu" class="h-5 w-5" />
+          </button>
+          <h1 class="text-base font-semibold tracking-tight text-slate-100">{{ nav === "devices" ? "Dashboard" : "Profile" }}</h1>
+        </header>
+
+        <main class="flex-1 overflow-y-auto p-6">
+          <!-- ── DASHBOARD ── -->
+          <div v-if="nav === 'devices'" class="mx-auto max-w-5xl space-y-6">
+            <div v-if="errorMessage" role="alert" class="flex items-start gap-2.5 rounded-xl border border-rose-500/30 bg-rose-500/10 px-4 py-3 text-sm text-rose-200">
               <Icon :name="errorKind === 'offline' ? 'offline' : 'alert'" class="mt-0.5 h-4 w-4 shrink-0 text-rose-400" />
               <span>{{ errorMessage }}</span>
             </div>
 
-            <div v-if="myDevices.length" class="space-y-2">
-              <button
-                v-for="d in myDevices"
-                :key="d.id"
-                class="group flex w-full items-center gap-3 rounded-lg border border-edge bg-ink px-3 py-2.5 text-left transition hover:border-accent"
-                @click="connectDevice(d)"
-              >
-                <span class="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-panel text-slate-400 group-hover:text-accent2">
-                  <Icon name="monitor" class="h-4 w-4" />
-                </span>
-                <span class="min-w-0 flex-1">
-                  <span class="block truncate text-sm font-medium text-slate-100">{{ d.name }}</span>
-                  <span class="block truncate font-mono text-xs text-slate-500">{{ d.id }}</span>
-                </span>
-                <Icon name="arrowRightShort" class="h-4 w-4 shrink-0 text-slate-600 group-hover:text-accent2" />
-              </button>
-            </div>
-            <p v-else class="rounded-lg border border-dashed border-edge px-3 py-6 text-center text-sm text-slate-500">
-              No devices yet — add one to connect to it.
-            </p>
+            <!-- Quick connect module -->
+            <section class="rounded-2xl border border-edge bg-gradient-to-br from-panel to-panel/40 p-6 shadow-xl shadow-black/20">
+              <div class="flex items-center gap-2.5">
+                <span class="grid h-9 w-9 place-items-center rounded-xl bg-accent/15 text-accent2"><Icon name="power" class="h-4.5 w-4.5" /></span>
+                <div>
+                  <h2 class="text-sm font-semibold text-slate-100">Connect to a device</h2>
+                  <p class="text-xs text-slate-500">Enter its ID — we'll look up the name before connecting.</p>
+                </div>
+              </div>
+              <form class="mt-4 flex flex-col gap-2 sm:flex-row" @submit.prevent="openConnect(connectId)">
+                <input
+                  v-model="connectId"
+                  placeholder="device id, e.g. front-desk-pc"
+                  autocomplete="off"
+                  spellcheck="false"
+                  class="min-w-0 flex-1 rounded-lg border border-edge bg-ink px-3.5 py-2.5 font-mono text-sm text-slate-100 outline-none transition placeholder:text-slate-600 focus:border-accent focus:ring-2 focus:ring-accent/30"
+                />
+                <button type="submit" :disabled="!connectId.trim()" class="flex items-center justify-center gap-2 rounded-lg bg-accent px-5 py-2.5 text-sm font-semibold text-white shadow-lg shadow-accent/25 transition hover:bg-accent/90 disabled:opacity-40">
+                  <Icon name="arrowRight" class="h-4 w-4" /> Connect
+                </button>
+              </form>
+            </section>
 
-            <button class="mt-4 flex w-full items-center justify-center gap-2 rounded-lg border border-edge px-4 py-2.5 text-sm font-medium text-slate-200 transition hover:bg-ink" @click="showAddDevice = true">
-              <Icon name="plus" class="h-4 w-4" /> Add a device
-            </button>
+            <!-- Your devices module -->
+            <section>
+              <div class="mb-3 flex items-center justify-between">
+                <h2 class="text-sm font-semibold uppercase tracking-wider text-slate-500">Your devices</h2>
+                <button class="flex items-center gap-1.5 rounded-lg border border-edge px-3 py-1.5 text-xs font-medium text-slate-200 transition hover:bg-panel" @click="showAddDevice = true">
+                  <Icon name="plus" class="h-3.5 w-3.5" /> Add a device
+                </button>
+              </div>
+
+              <div v-if="myDevices.length" class="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                <div
+                  v-for="d in myDevices"
+                  :key="d.id"
+                  class="group flex flex-col rounded-2xl border border-edge bg-panel/70 p-4 transition hover:border-accent/60 hover:bg-panel"
+                >
+                  <div class="flex items-start gap-3">
+                    <span class="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-ink text-slate-400 group-hover:text-accent2"><Icon name="monitor" class="h-5 w-5" /></span>
+                    <div class="min-w-0 flex-1">
+                      <div class="truncate text-sm font-semibold text-slate-100">{{ d.name }}</div>
+                      <div class="truncate font-mono text-xs text-slate-500">{{ d.id }}</div>
+                    </div>
+                    <span
+                      v-if="d.has_password"
+                      class="flex items-center gap-1 rounded-full bg-emerald-500/10 px-2 py-0.5 text-[10px] font-semibold text-emerald-300"
+                      title="Unattended access password is set"
+                    >
+                      <Icon name="lock" class="h-3 w-3" /> PW
+                    </span>
+                  </div>
+                  <div class="mt-4 flex gap-2">
+                    <button class="flex flex-1 items-center justify-center gap-1.5 rounded-lg bg-accent px-3 py-2 text-xs font-semibold text-white transition hover:bg-accent/90" @click="openConnect(d.id, d)">
+                      <Icon name="arrowRight" class="h-3.5 w-3.5" /> Connect
+                    </button>
+                    <button class="grid h-8 w-8 place-items-center rounded-lg border border-edge text-slate-400 transition hover:bg-ink hover:text-slate-200" :title="d.has_password ? 'Change access password' : 'Set access password'" @click="openPw(d)">
+                      <Icon name="lock" class="h-4 w-4" />
+                    </button>
+                  </div>
+                </div>
+              </div>
+              <div v-else class="rounded-2xl border border-dashed border-edge px-4 py-10 text-center">
+                <Icon name="monitor" class="mx-auto h-8 w-8 text-slate-600" />
+                <p class="mt-3 text-sm text-slate-400">No devices yet.</p>
+                <p class="mt-1 text-xs text-slate-600">Add one, then run Arna on that PC and pair it to bring it online.</p>
+              </div>
+            </section>
+          </div>
+
+          <!-- ── PROFILE ── -->
+          <div v-else class="mx-auto max-w-3xl space-y-6">
+            <section class="rounded-2xl border border-edge bg-gradient-to-br from-panel to-panel/40 p-6 shadow-xl shadow-black/20">
+              <div class="flex flex-col items-center gap-5 sm:flex-row sm:items-start">
+                <div class="rounded-xl bg-white p-3 shadow-lg">
+                  <QrCode :value="connectLink" :size="148" />
+                </div>
+                <div class="min-w-0 flex-1 text-center sm:text-left">
+                  <p class="text-xs font-semibold uppercase tracking-wider text-slate-500">Your Arna ID</p>
+                  <div class="mt-1 flex items-center justify-center gap-2 sm:justify-start">
+                    <span class="font-mono text-3xl font-bold tracking-wider text-slate-100">{{ userId || "…" }}</span>
+                    <button class="grid h-8 w-8 place-items-center rounded-lg border border-edge text-slate-400 transition hover:bg-ink hover:text-slate-200" title="Copy ID" @click="copyText(userId || '', 'id')">
+                      <Icon :name="copied === 'id' ? 'check' : 'copy'" class="h-4 w-4" :class="copied === 'id' ? 'text-emerald-400' : ''" />
+                    </button>
+                  </div>
+                  <p class="mt-1 text-sm text-slate-500">{{ accountEmail }}</p>
+                  <p class="mt-3 text-xs text-slate-500">Share your ID or let someone scan the code to reach you.</p>
+                </div>
+              </div>
+            </section>
+
+            <section class="space-y-3">
+              <div class="rounded-xl border border-edge bg-panel/60 p-4">
+                <div class="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-slate-500">
+                  <Icon name="link" class="h-3.5 w-3.5" /> Connect link
+                </div>
+                <div class="mt-2 flex items-center gap-2">
+                  <span class="min-w-0 flex-1 truncate rounded-lg border border-edge bg-ink px-3 py-2 font-mono text-xs text-slate-300">{{ connectLink }}</span>
+                  <button class="grid h-9 w-9 shrink-0 place-items-center rounded-lg border border-edge text-slate-400 transition hover:bg-ink hover:text-slate-200" title="Copy" @click="copyText(connectLink, 'connect')">
+                    <Icon :name="copied === 'connect' ? 'check' : 'copy'" class="h-4 w-4" :class="copied === 'connect' ? 'text-emerald-400' : ''" />
+                  </button>
+                </div>
+              </div>
+
+              <div class="rounded-xl border border-edge bg-panel/60 p-4">
+                <div class="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-slate-500">
+                  <Icon name="user" class="h-3.5 w-3.5" /> Invite link
+                </div>
+                <div class="mt-2 flex items-center gap-2">
+                  <span class="min-w-0 flex-1 truncate rounded-lg border border-edge bg-ink px-3 py-2 font-mono text-xs text-slate-300">{{ inviteLink }}</span>
+                  <button class="grid h-9 w-9 shrink-0 place-items-center rounded-lg border border-edge text-slate-400 transition hover:bg-ink hover:text-slate-200" title="Copy" @click="copyText(inviteLink, 'invite')">
+                    <Icon :name="copied === 'invite' ? 'check' : 'copy'" class="h-4 w-4" :class="copied === 'invite' ? 'text-emerald-400' : ''" />
+                  </button>
+                </div>
+                <p class="mt-2 text-xs text-slate-600">Send this to invite someone to create an Arna account.</p>
+              </div>
+
+              <div class="rounded-xl border border-edge bg-panel/60 p-4">
+                <label class="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-slate-500">
+                  <Icon name="shield" class="h-3.5 w-3.5" /> Server
+                </label>
+                <input v-model="backend" class="mt-2 w-full rounded-lg border border-edge bg-ink px-3 py-2 font-mono text-xs text-slate-300 outline-none transition focus:border-accent focus:ring-2 focus:ring-accent/30" />
+                <p class="mt-2 text-xs text-slate-600">The Arna server this app talks to (self-host friendly).</p>
+              </div>
+            </section>
+          </div>
+        </main>
+      </div>
+    </div>
+
+    <!-- ════════════════ SIGNED OUT (auth) ════════════════ -->
+    <div v-else class="stage-grid grid h-full place-items-center px-6">
+      <div class="w-full max-w-md">
+        <!-- Manual connect (self-host, no account) -->
+        <template v-if="showManual">
+          <div class="rounded-2xl border border-edge bg-panel/90 p-7 shadow-2xl shadow-black/40">
+            <div class="mb-5 flex items-center gap-3">
+              <span class="grid h-11 w-11 place-items-center rounded-xl bg-accent/10 text-accent2 ring-1 ring-inset ring-accent/20"><Icon name="monitor" class="h-5 w-5" /></span>
+              <div>
+                <h1 class="text-lg font-semibold tracking-tight text-slate-100">Connect manually</h1>
+                <p class="text-sm text-slate-500">Enter a server + device ID (no account).</p>
+              </div>
+            </div>
+            <div v-if="errorMessage" role="alert" class="mb-4 flex items-start gap-2.5 rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2.5 text-sm text-rose-200">
+              <Icon :name="errorKind === 'offline' ? 'offline' : 'alert'" class="mt-0.5 h-4 w-4 shrink-0 text-rose-400" />
+              <span>{{ errorMessage }}</span>
+            </div>
+            <form class="space-y-3.5" @submit.prevent="manualConnect">
+              <div>
+                <label class="mb-1 block text-xs font-medium text-slate-400">Device ID</label>
+                <input v-model="agentId" placeholder="agent-1" autocomplete="off" spellcheck="false" class="w-full rounded-lg border border-edge bg-ink px-3 py-2.5 text-slate-100 outline-none transition placeholder:text-slate-600 focus:border-accent focus:ring-2 focus:ring-accent/30" />
+              </div>
+              <div>
+                <label class="mb-1 block text-xs font-medium text-slate-400">Signaling server</label>
+                <input v-model="backend" class="w-full rounded-lg border border-edge bg-ink px-3 py-2.5 font-mono text-sm text-slate-300 outline-none transition focus:border-accent focus:ring-2 focus:ring-accent/30" />
+              </div>
+              <div>
+                <label class="mb-1 block text-xs font-medium text-slate-400">SSO ticket <span class="text-slate-600">· optional</span></label>
+                <input v-model="ticket" placeholder="paste a signed ticket if required" class="w-full rounded-lg border border-edge bg-ink px-3 py-2.5 text-sm text-slate-300 outline-none transition placeholder:text-slate-600 focus:border-accent focus:ring-2 focus:ring-accent/30" />
+              </div>
+              <button type="submit" class="mt-1 flex w-full items-center justify-center gap-2 rounded-lg bg-accent px-4 py-2.5 text-sm font-semibold text-white shadow-lg shadow-accent/25 transition hover:bg-accent/90">
+                <Icon name="power" class="h-4 w-4" /> Connect
+              </button>
+            </form>
           </div>
           <p class="mt-4 text-center text-xs">
-            <button class="text-slate-500 underline-offset-2 hover:text-slate-300 hover:underline" @click="mode = 'manual'">Connect manually instead</button>
+            <button class="text-slate-500 underline-offset-2 hover:text-slate-300 hover:underline" @click="showManual = false">← Back to sign in</button>
           </p>
         </template>
 
-        <!-- ACCOUNT · not signed in → login / signup -->
-        <template v-else-if="mode === 'account'">
+        <!-- Login / signup -->
+        <template v-else>
           <div class="rounded-2xl border border-edge bg-panel/90 p-7 shadow-2xl shadow-black/40">
             <div class="mb-5 flex items-center gap-3">
-              <span class="grid h-11 w-11 place-items-center rounded-xl bg-gradient-to-br from-accent to-accent2 shadow-lg shadow-accent/25">
-                <Icon name="monitor" class="h-5 w-5 text-white" />
-              </span>
+              <span class="grid h-11 w-11 place-items-center rounded-xl bg-gradient-to-br from-accent to-accent2 shadow-lg shadow-accent/25"><Icon name="monitor" class="h-5 w-5 text-white" /></span>
               <div>
                 <h1 class="text-lg font-semibold tracking-tight text-slate-100">{{ isSignup ? "Create your account" : "Welcome to Arna" }}</h1>
                 <p class="text-sm text-slate-500">{{ isSignup ? "Sign up to manage your devices." : "Sign in to reach your devices." }}</p>
               </div>
             </div>
-
             <div v-if="authError" role="alert" class="mb-4 flex items-start gap-2.5 rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2.5 text-sm text-rose-200">
               <Icon name="alert" class="mt-0.5 h-4 w-4 shrink-0 text-rose-400" />
               <span>{{ authError }}</span>
             </div>
-
             <form class="space-y-3.5" @submit.prevent="submitAuth">
               <div>
                 <label class="mb-1 block text-xs font-medium text-slate-400">Email</label>
@@ -669,70 +903,102 @@ function onKeyUp(e: KeyboardEvent) {
                 {{ authBusy ? "…" : isSignup ? "Create account" : "Sign in" }}
               </button>
             </form>
-
             <p class="mt-4 text-center text-sm text-slate-500">
               {{ isSignup ? "Already have an account?" : "New here?" }}
               <button class="font-medium text-accent2 hover:underline" @click="isSignup = !isSignup">{{ isSignup ? "Sign in" : "Create one" }}</button>
             </p>
           </div>
           <p class="mt-4 text-center text-xs">
-            <button class="text-slate-500 underline-offset-2 hover:text-slate-300 hover:underline" @click="mode = 'manual'">Connect manually instead</button>
-          </p>
-        </template>
-
-        <!-- MANUAL · type a server + agent id (self-host / advanced) -->
-        <template v-else>
-          <div class="rounded-2xl border border-edge bg-panel/90 p-7 shadow-2xl shadow-black/40">
-            <div class="mb-5 flex items-center gap-3">
-              <span class="grid h-11 w-11 place-items-center rounded-xl bg-accent/10 text-accent2 ring-1 ring-inset ring-accent/20">
-                <Icon name="monitor" class="h-5 w-5" />
-              </span>
-              <div>
-                <h1 class="text-lg font-semibold tracking-tight text-slate-100">Connect manually</h1>
-                <p class="text-sm text-slate-500">Enter the agent ID to start a remote session.</p>
-              </div>
-            </div>
-
-            <div v-if="errorMessage" role="alert" class="mb-4 flex items-start gap-2.5 rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2.5 text-sm text-rose-200">
-              <Icon :name="errorKind === 'offline' ? 'offline' : 'alert'" class="mt-0.5 h-4 w-4 shrink-0 text-rose-400" />
-              <span>{{ errorMessage }}</span>
-            </div>
-
-            <form class="space-y-3.5" @submit.prevent="toggle">
-              <div>
-                <label class="mb-1 block text-xs font-medium text-slate-400">Agent ID</label>
-                <input ref="agentInput" v-model="agentId" placeholder="agent-1" autocomplete="off" spellcheck="false" class="w-full rounded-lg border border-edge bg-ink px-3 py-2.5 text-slate-100 outline-none transition placeholder:text-slate-600 focus:border-accent focus:ring-2 focus:ring-accent/30" />
-                <div v-if="recentOthers.length" class="mt-2 flex flex-wrap items-center gap-1.5">
-                  <span class="text-xs text-slate-600">Recent</span>
-                  <button v-for="r in recentOthers" :key="r" type="button" class="rounded-full border border-edge bg-ink px-2.5 py-1 font-mono text-xs text-slate-400 transition hover:border-slate-600 hover:text-slate-200" @click="agentId = r">{{ r }}</button>
-                </div>
-              </div>
-              <div>
-                <label class="mb-1 block text-xs font-medium text-slate-400">Signaling server</label>
-                <input v-model="backend" class="w-full rounded-lg border border-edge bg-ink px-3 py-2.5 font-mono text-sm text-slate-300 outline-none transition focus:border-accent focus:ring-2 focus:ring-accent/30" />
-              </div>
-              <div>
-                <label class="mb-1 block text-xs font-medium text-slate-400">SSO ticket <span class="text-slate-600">· optional</span></label>
-                <input v-model="ticket" placeholder="paste a signed ticket if required" class="w-full rounded-lg border border-edge bg-ink px-3 py-2.5 text-sm text-slate-300 outline-none transition placeholder:text-slate-600 focus:border-accent focus:ring-2 focus:ring-accent/30" />
-              </div>
-              <button type="submit" class="mt-1 flex w-full items-center justify-center gap-2 rounded-lg bg-accent px-4 py-2.5 text-sm font-semibold text-white shadow-lg shadow-accent/25 transition hover:bg-accent/90">
-                <Icon name="power" class="h-4 w-4" /> Connect
-                <Icon name="arrowRight" class="h-4 w-4 opacity-70" />
-              </button>
-            </form>
-          </div>
-          <p class="mt-4 text-center text-xs">
-            <button class="text-slate-500 underline-offset-2 hover:text-slate-300 hover:underline" @click="mode = 'account'">← Back to sign in</button>
+            <button class="text-slate-500 underline-offset-2 hover:text-slate-300 hover:underline" @click="showManual = true">Connect without an account</button>
           </p>
         </template>
       </div>
-    </main>
+    </div>
 
-    <!-- Add-device modal -->
+    <!-- ════════════════ Connect dialog ════════════════ -->
+    <div v-if="showConnectDialog" class="fixed inset-0 z-50 grid place-items-center bg-black/60 p-6" @click.self="showConnectDialog = false">
+      <div class="w-full max-w-sm rounded-2xl border border-edge bg-panel p-6 shadow-2xl">
+        <div class="flex items-center gap-3">
+          <span class="grid h-11 w-11 shrink-0 place-items-center rounded-xl bg-accent/10 text-accent2 ring-1 ring-inset ring-accent/20"><Icon name="monitor" class="h-5 w-5" /></span>
+          <div class="min-w-0">
+            <h2 class="truncate text-base font-semibold text-slate-100">
+              {{ connectResolving ? "Looking up…" : connectInfo?.name || connectId }}
+            </h2>
+            <p class="truncate font-mono text-xs text-slate-500">{{ connectId }}</p>
+          </div>
+        </div>
+
+        <div v-if="connectError" class="mt-4 flex items-start gap-2 rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-sm text-rose-200">
+          <Icon name="alert" class="mt-0.5 h-4 w-4 shrink-0 text-rose-400" /><span>{{ connectError }}</span>
+        </div>
+
+        <!-- Password (unattended access) -->
+        <template v-if="connectInfo?.has_password">
+          <form class="mt-5" @submit.prevent="doConnect(true)">
+            <label class="mb-1 flex items-center gap-1.5 text-xs font-medium text-slate-400"><Icon name="lock" class="h-3.5 w-3.5" /> Device password</label>
+            <input
+              v-model="connectPassword"
+              type="password"
+              placeholder="enter to connect instantly"
+              class="w-full rounded-lg border border-edge bg-ink px-3 py-2.5 text-slate-100 outline-none transition placeholder:text-slate-600 focus:border-accent focus:ring-2 focus:ring-accent/30"
+            />
+            <button type="submit" :disabled="!connectPassword" class="mt-3 flex w-full items-center justify-center gap-2 rounded-lg bg-accent px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-accent/90 disabled:opacity-40">
+              <Icon name="power" class="h-4 w-4" /> Connect with password
+            </button>
+          </form>
+          <div class="my-3 flex items-center gap-3 text-[11px] uppercase tracking-wider text-slate-600">
+            <span class="h-px flex-1 bg-edge" /> or <span class="h-px flex-1 bg-edge" />
+          </div>
+          <button class="flex w-full items-center justify-center gap-2 rounded-lg border border-edge px-4 py-2.5 text-sm font-medium text-slate-200 transition hover:bg-ink" @click="doConnect(false)">
+            Ask the operator to accept
+          </button>
+        </template>
+
+        <!-- No password set: just request, operator accepts -->
+        <template v-else>
+          <p class="mt-4 text-sm text-slate-400">The person at this PC will get a request and must <span class="text-slate-200">Accept</span> before you connect.</p>
+          <button class="mt-4 flex w-full items-center justify-center gap-2 rounded-lg bg-accent px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-accent/90" @click="doConnect(false)">
+            <Icon name="arrowRight" class="h-4 w-4" /> Ask to connect
+          </button>
+        </template>
+
+        <button class="mt-3 w-full rounded-lg px-4 py-2 text-sm text-slate-500 transition hover:text-slate-300" @click="showConnectDialog = false">Cancel</button>
+      </div>
+    </div>
+
+    <!-- ════════════════ Set device password ════════════════ -->
+    <div v-if="pwDevice" class="fixed inset-0 z-50 grid place-items-center bg-black/60 p-6" @click.self="pwDevice = null">
+      <div class="w-full max-w-sm rounded-2xl border border-edge bg-panel p-6 shadow-2xl">
+        <h2 class="flex items-center gap-2 text-base font-semibold text-slate-100"><Icon name="lock" class="h-4 w-4 text-accent2" /> Access password</h2>
+        <p class="mt-1 text-sm text-slate-500">
+          For <span class="font-medium text-slate-300">{{ pwDevice.name }}</span>. Anyone with this password connects without the operator accepting.
+        </p>
+        <form class="mt-4" @submit.prevent="savePw(false)">
+          <input
+            v-model="pwInput"
+            type="password"
+            placeholder="new password (4+ characters)"
+            class="w-full rounded-lg border border-edge bg-ink px-3 py-2.5 text-slate-100 outline-none transition placeholder:text-slate-600 focus:border-accent focus:ring-2 focus:ring-accent/30"
+          />
+          <p v-if="pwError" class="mt-2 text-xs text-rose-300">{{ pwError }}</p>
+          <div class="mt-4 flex items-center justify-between gap-2">
+            <button v-if="pwDevice.has_password" type="button" :disabled="pwBusy" class="rounded-lg border border-rose-500/40 px-3 py-2 text-xs font-medium text-rose-300 transition hover:bg-rose-500/10 disabled:opacity-40" @click="savePw(true)">
+              Remove password
+            </button>
+            <span v-else />
+            <div class="flex gap-2">
+              <button type="button" class="rounded-lg border border-edge px-4 py-2 text-sm font-medium text-slate-300 transition hover:bg-ink" @click="pwDevice = null">Cancel</button>
+              <button type="submit" :disabled="pwInput.length < 4 || pwBusy" class="rounded-lg bg-accent px-4 py-2 text-sm font-semibold text-white transition hover:bg-accent/90 disabled:opacity-40">Save</button>
+            </div>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- ════════════════ Add-device modal ════════════════ -->
     <div v-if="showAddDevice" class="fixed inset-0 z-50 grid place-items-center bg-black/60 p-6" @click.self="resetAddDevice">
       <div class="w-full max-w-md rounded-2xl border border-edge bg-panel p-7 shadow-2xl">
         <h2 class="text-lg font-semibold text-slate-100">Add a device</h2>
-
         <template v-if="!newDeviceToken">
           <p class="mt-1 text-sm text-slate-500">Give it an id and a friendly name. You'll get a token to set up the device.</p>
           <form class="mt-5 space-y-3.5" @submit.prevent="submitAddDevice">
@@ -751,17 +1017,16 @@ function onKeyUp(e: KeyboardEvent) {
             </div>
           </form>
         </template>
-
         <template v-else>
-          <p class="mt-1 text-sm text-slate-400">Device added. On <span class="font-mono text-slate-200">{{ newDeviceId }}</span>, set these and start the Arna agent:</p>
+          <p class="mt-1 text-sm text-slate-400">Device added. On <span class="font-mono text-slate-200">{{ newDeviceId }}</span>, open Arna there and pair with these:</p>
           <div class="mt-4 space-y-2">
             <div class="rounded-lg border border-edge bg-ink px-3 py-2 font-mono text-xs text-slate-300">
-              ARNA_AGENT_ID=<span class="text-accent2">{{ newDeviceId }}</span>
+              Device ID: <span class="text-accent2">{{ newDeviceId }}</span>
             </div>
             <div class="flex items-center gap-2 rounded-lg border border-edge bg-ink px-3 py-2">
-              <span class="min-w-0 flex-1 truncate font-mono text-xs text-slate-300">ARNA_AGENT_TOKEN={{ newDeviceToken }}</span>
-              <button class="grid h-7 w-7 shrink-0 place-items-center rounded-md border border-edge text-slate-400 hover:text-slate-100" title="Copy token" @click="copyText(newDeviceToken)">
-                <Icon name="copy" class="h-3.5 w-3.5" />
+              <span class="min-w-0 flex-1 truncate font-mono text-xs text-slate-300">Token: {{ newDeviceToken }}</span>
+              <button class="grid h-7 w-7 shrink-0 place-items-center rounded-md border border-edge text-slate-400 hover:text-slate-100" title="Copy token" @click="copyText(newDeviceToken, 'tok')">
+                <Icon :name="copied === 'tok' ? 'check' : 'copy'" class="h-3.5 w-3.5" :class="copied === 'tok' ? 'text-emerald-400' : ''" />
               </button>
             </div>
           </div>

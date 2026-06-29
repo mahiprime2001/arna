@@ -1,6 +1,7 @@
 import { computed, ref } from "vue";
 
-export type Device = { id: string; name: string };
+export type Device = { id: string; name: string; has_password?: boolean };
+export type DeviceInfo = { id: string; name: string; has_password: boolean };
 
 /**
  * Account session: sign up / log in against the backend's HTTP API, remember the
@@ -10,6 +11,7 @@ export type Device = { id: string; name: string };
 export function useAuth() {
   const token = ref<string | null>(localStorage.getItem("arna.session"));
   const email = ref<string | null>(localStorage.getItem("arna.email"));
+  const userId = ref<string | null>(localStorage.getItem("arna.userId"));
   const devices = ref<Device[]>([]);
   const authError = ref("");
   const busy = ref(false);
@@ -25,19 +27,25 @@ export function useAuth() {
     }
   }
 
-  function setSession(t: string, em: string) {
+  function setSession(t: string, em: string, uid?: string) {
     token.value = t;
     email.value = em;
     localStorage.setItem("arna.session", t);
     localStorage.setItem("arna.email", em);
+    if (uid) {
+      userId.value = uid;
+      localStorage.setItem("arna.userId", uid);
+    }
   }
 
   function logout() {
     token.value = null;
     email.value = null;
+    userId.value = null;
     devices.value = [];
     localStorage.removeItem("arna.session");
     localStorage.removeItem("arna.email");
+    localStorage.removeItem("arna.userId");
   }
 
   async function authPost(wsUrl: string, path: string, body: object) {
@@ -55,7 +63,7 @@ export function useAuth() {
     try {
       const { status, json } = await authPost(wsUrl, `/auth/${kind}`, { email: em, password: pw });
       if (status === 200 && json?.token) {
-        setSession(json.token, em);
+        setSession(json.token, em, json.user_id);
         await refreshDevices(wsUrl);
         return true;
       }
@@ -115,5 +123,75 @@ export function useAuth() {
     }
   }
 
-  return { token, email, devices, loggedIn, authError, busy, login, signup, logout, refreshDevices, addDevice };
+  /** Refresh the short account ID + email from the server (e.g. on load). */
+  async function fetchMe(wsUrl: string) {
+    if (!token.value) return;
+    try {
+      const r = await fetch(httpBase(wsUrl) + "/me", {
+        headers: { authorization: "Bearer " + token.value },
+      });
+      if (r.status === 401) {
+        logout();
+        return;
+      }
+      if (r.ok) {
+        const j = await r.json();
+        if (j.user_id) {
+          userId.value = j.user_id;
+          localStorage.setItem("arna.userId", j.user_id);
+        }
+        if (j.email) {
+          email.value = j.email;
+          localStorage.setItem("arna.email", j.email);
+        }
+      }
+    } catch {
+      /* offline — keep cached values */
+    }
+  }
+
+  /** Set (pw) or clear (null/"") a device's unattended-access password. */
+  async function setDevicePassword(wsUrl: string, id: string, pw: string | null): Promise<boolean> {
+    if (!token.value) return false;
+    try {
+      const r = await fetch(httpBase(wsUrl) + `/devices/${encodeURIComponent(id)}/password`, {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: "Bearer " + token.value },
+        body: JSON.stringify({ password: pw || null }),
+      });
+      if (r.ok) await refreshDevices(wsUrl);
+      return r.ok;
+    } catch {
+      return false;
+    }
+  }
+
+  /** Resolve a device's name + whether it takes a password, before connecting. */
+  async function lookupDevice(wsUrl: string, id: string): Promise<DeviceInfo | null> {
+    try {
+      const r = await fetch(httpBase(wsUrl) + `/device/${encodeURIComponent(id)}`);
+      if (!r.ok) return null;
+      return (await r.json()) as DeviceInfo;
+    } catch {
+      return null;
+    }
+  }
+
+  return {
+    token,
+    email,
+    userId,
+    devices,
+    loggedIn,
+    authError,
+    busy,
+    login,
+    signup,
+    logout,
+    refreshDevices,
+    addDevice,
+    fetchMe,
+    setDevicePassword,
+    lookupDevice,
+  };
 }
