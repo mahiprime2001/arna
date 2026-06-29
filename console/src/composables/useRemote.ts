@@ -285,6 +285,11 @@ export function useRemote() {
             currentMonitor.value = primary ? primary.index : m.list[0]?.index ?? 0;
           } else if (m.t === "apps" && Array.isArray(m.list)) {
             apps.value = m.list;
+          } else if (m.t === "bubble_denied") {
+            // The operator declined opening the app; drop back to the screen.
+            bubbleApp.value = null;
+            errorMessage.value = "The other PC didn't allow opening that app.";
+            errorKind.value = "denied";
           }
         } catch {
           /* ignore non-JSON */

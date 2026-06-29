@@ -6,7 +6,8 @@
     "main",
     "pair",
     "chat",
-    "consent-*"
+    "consent-*",
+    "bubble-*"
   ],
   "permissions": [
     "core:default"

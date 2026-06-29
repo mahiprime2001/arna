@@ -29,6 +29,12 @@ use tokio::sync::{oneshot, Mutex};
 /// `respond_consent` command fulfils the matching sender.
 type Pending = Arc<Mutex<HashMap<String, oneshot::Sender<Consent>>>>;
 
+/// Pending **app-bubble** approvals, keyed by a unique window id.
+type BubblePending = Arc<Mutex<HashMap<String, oneshot::Sender<bool>>>>;
+
+/// Monotonic id for bubble-consent windows.
+static BUBBLE_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
 /// Flips to `true` once the agent loop is spawned, so we never start it twice.
 type Started = Arc<AtomicBool>;
 
@@ -286,6 +292,65 @@ fn make_consent(app: AppHandle, pending: Pending) -> ConsentFn {
     })
 }
 
+/// Invoked by the bubble-consent popup's Allow/Deny buttons.
+#[tauri::command]
+async fn respond_bubble_consent(
+    app: AppHandle,
+    pending: tauri::State<'_, BubblePending>,
+    id: String,
+    allow: bool,
+) -> Result<(), String> {
+    if let Some(tx) = pending.lock().await.remove(&id) {
+        let _ = tx.send(allow);
+    }
+    if let Some(win) = app.get_webview_window(&id) {
+        let _ = win.close();
+    }
+    Ok(())
+}
+
+/// Build the agent's [`BubbleConsentFn`]: opening an app in a sandbox bubble pops
+/// an always-on-top "Allow <app>?" window; the button's choice gates the launch.
+fn make_bubble_consent(app: AppHandle, pending: BubblePending) -> arna_agent::BubbleConsentFn {
+    Arc::new(move |label: String| {
+        let app = app.clone();
+        let pending = pending.clone();
+        Box::pin(async move {
+            let n = BUBBLE_SEQ.fetch_add(1, Ordering::Relaxed);
+            let id = format!("bubble-{n}");
+            let (tx, rx) = oneshot::channel();
+            pending.lock().await.insert(id.clone(), tx);
+
+            let url = format!(
+                "index.html?view=bubbleconsent&id={}&app={}",
+                id,
+                urlencoding::encode(&label),
+            );
+            let built = WebviewWindowBuilder::new(&app, &id, WebviewUrl::App(url.into()))
+                .title("Arna — open an app?")
+                .inner_size(420.0, 270.0)
+                .resizable(false)
+                .always_on_top(true)
+                .center()
+                .build();
+            if built.is_err() {
+                pending.lock().await.remove(&id);
+                return false;
+            }
+            match tokio::time::timeout(Duration::from_secs(60), rx).await {
+                Ok(Ok(allow)) => allow,
+                _ => {
+                    pending.lock().await.remove(&id);
+                    if let Some(win) = app.get_webview_window(&id) {
+                        let _ = win.close();
+                    }
+                    false
+                }
+            }
+        })
+    })
+}
+
 /// Spawn the background agent loop (so this PC can be controlled) with popup
 /// consent, GUI chat, and a native file picker for downloads. Idempotent: the
 /// [`Started`] flag means a second call (e.g. a re-pair) is a no-op → `false`.
@@ -296,6 +361,10 @@ fn start_agent(app: &AppHandle, cfg: Pairing) -> bool {
 
     let pending = app.state::<Pending>().inner().clone();
     let consent = make_consent(app.clone(), pending);
+
+    // App-bubble approval: pops an "Allow <app>?" window before launching.
+    let bubble_pending = app.state::<BubblePending>().inner().clone();
+    let bubble_consent = make_bubble_consent(app.clone(), bubble_pending);
 
     // Chat: log the message, make sure the chat window is open, and push it to
     // the window. The window dedupes history vs. live events by id.
@@ -333,7 +402,7 @@ fn start_agent(app: &AppHandle, cfg: Pairing) -> bool {
     };
     let token = (!cfg.token.is_empty()).then_some(cfg.token);
     tauri::async_runtime::spawn(async move {
-        arna_agent::run(backend, cfg.id, token, consent, chat, download).await;
+        arna_agent::run(backend, cfg.id, token, consent, chat, download, bubble_consent).await;
     });
     true
 }
@@ -352,10 +421,12 @@ pub fn run() {
         .manage(Arc::new(Mutex::new(
             HashMap::<String, oneshot::Sender<Consent>>::new(),
         )) as Pending)
+        .manage(Arc::new(Mutex::new(HashMap::<String, oneshot::Sender<bool>>::new())) as BubblePending)
         .manage(Arc::new(std::sync::Mutex::new(Vec::<ChatMsg>::new())) as ChatLog)
         .manage(Arc::new(AtomicBool::new(false)) as Started)
         .invoke_handler(tauri::generate_handler![
             respond_consent,
+            respond_bubble_consent,
             chat_history,
             send_chat,
             current_pairing,

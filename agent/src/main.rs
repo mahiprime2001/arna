@@ -133,5 +133,9 @@ async fn main() {
         })
     });
 
-    arna_agent::run(url, id, token, consent, chat, download).await;
+    // Headless: auto-allow app bubbles (no operator UI here).
+    let bubble_consent: arna_agent::BubbleConsentFn =
+        Arc::new(|_app| Box::pin(async { true }));
+
+    arna_agent::run(url, id, token, consent, chat, download, bubble_consent).await;
 }

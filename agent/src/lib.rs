@@ -43,6 +43,12 @@ mod winmon;
 // direct dependency on `arna-core`.
 pub use arna_core::p2p::{Consent, ConnectRequest, ConsentFn};
 
+/// Operator approval for opening an app **bubble**. Given the app's label,
+/// resolves to allow (`true`) / deny (`false`). The desktop app pops a window;
+/// the headless agent auto-allows.
+pub type BubbleConsentFn =
+    Arc<dyn Fn(String) -> Pin<Box<dyn Future<Output = bool> + Send>> + Send + Sync>;
+
 /// Cap the encoded width; taller/wider screens are scaled down to keep software
 /// H.264 encoding real-time. Height follows to preserve aspect ratio.
 const TARGET_WIDTH: u32 = 1280;
@@ -623,12 +629,8 @@ fn handle_input(
             }
             return;
         }
-        "bubble" => {
-            if let Some(cmd) = v.get("app").and_then(|a| a.as_str()).and_then(bubble::app_cmd) {
-                let _ = source.send(CaptureSource::Bubble(cmd.to_string()));
-            }
-            return;
-        }
+        // "bubble" (open an app) is handled in the input channel's async message
+        // handler so it can await the operator's consent first.
         "screen" => {
             let idx = enumerate_screens().iter().position(|s| s.primary).unwrap_or(0);
             let _ = source.send(CaptureSource::Screen(idx));
@@ -1102,6 +1104,7 @@ pub async fn run(
     consent: ConsentFn,
     chat: ChatBridge,
     download: DownloadProvider,
+    bubble_consent: BubbleConsentFn,
 ) {
     // Per-monitor DPI aware so scrap capture sizes and Win32 monitor rects agree.
     winmon::make_dpi_aware();
@@ -1161,6 +1164,7 @@ pub async fn run(
                 let active = active_rx.clone();
                 let source = source_tx.clone();
                 let bubble_ctl = bubble_ctl.clone();
+                let bubble_consent = bubble_consent.clone();
                 let dc_reply = dc.clone();
                 // Proactively announce monitors + bubble apps once the channel is
                 // surely open (robust vs. the on_open race), and also reply to the
@@ -1177,6 +1181,7 @@ pub async fn run(
                     let active = active.clone();
                     let source = source.clone();
                     let bubble_ctl = bubble_ctl.clone();
+                    let bubble_consent = bubble_consent.clone();
                     let dc_reply = dc_reply.clone();
                     let text = String::from_utf8_lossy(&msg.data).to_string();
                     Box::pin(async move {
@@ -1186,6 +1191,32 @@ pub async fn run(
                             let _ = dc_reply.send_text(monitors_announce()).await;
                             let _ = dc_reply.send_text(apps_announce()).await;
                             return;
+                        }
+                        // Opening an app bubble needs the operator's OK (async).
+                        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) {
+                            if v.get("t").and_then(|t| t.as_str()) == Some("bubble") {
+                                let app_id =
+                                    v.get("app").and_then(|a| a.as_str()).unwrap_or("").to_string();
+                                if let Some(cmd) = bubble::app_cmd(&app_id) {
+                                    let label = bubble::curated_apps()
+                                        .iter()
+                                        .find(|a| a.id == app_id)
+                                        .map(|a| a.label)
+                                        .unwrap_or(app_id.as_str())
+                                        .to_string();
+                                    if bubble_consent(label).await {
+                                        let _ = source.send(CaptureSource::Bubble(cmd.to_string()));
+                                    } else {
+                                        let _ = dc_reply
+                                            .send_text(
+                                                serde_json::json!({"t":"bubble_denied","app":app_id})
+                                                    .to_string(),
+                                            )
+                                            .await;
+                                    }
+                                }
+                                return;
+                            }
                         }
                         handle_input(&text, &enigo, &active, &source, &bubble_ctl);
                     })
