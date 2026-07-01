@@ -65,6 +65,7 @@ const {
   currentMonitor,
   selectMonitor,
   apps,
+  unsupportedApps,
   bubbleApp,
   openApp,
   exitBubble,
@@ -499,6 +500,24 @@ function onKeyUp(e: KeyboardEvent) {
                 >
                   <Icon name="layout" class="h-4 w-4 text-slate-500" /> {{ a.label }}
                 </button>
+
+                <!-- Apps that can't be bubbled (browsers, games…) -->
+                <template v-if="unsupportedApps.length">
+                  <div class="my-1 border-t border-edge" />
+                  <p class="px-3 pb-1 pt-1.5 text-[10px] font-semibold uppercase tracking-wider text-slate-600">Can't be shared this way</p>
+                  <div
+                    v-for="u in unsupportedApps"
+                    :key="u.label"
+                    class="flex cursor-not-allowed items-start gap-2.5 px-3 py-1.5 text-left"
+                    :title="u.reason"
+                  >
+                    <Icon name="alert" class="mt-0.5 h-4 w-4 shrink-0 text-slate-700" />
+                    <span class="min-w-0">
+                      <span class="block truncate text-sm text-slate-500 line-through">{{ u.label }}</span>
+                      <span class="block text-[11px] leading-tight text-slate-600">{{ u.reason }}</span>
+                    </span>
+                  </div>
+                </template>
               </div>
             </div>
 

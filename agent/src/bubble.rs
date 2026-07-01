@@ -33,6 +33,38 @@ pub fn app_cmd(id: &str) -> Option<&'static str> {
     curated_apps().iter().find(|a| a.id == id).map(|a| a.cmd)
 }
 
+/// An app category that **can't** run in a bubble with this technique — shown in
+/// the UI (greyed out) so people know why it's not offered.
+#[derive(Clone, Copy)]
+pub struct UnsupportedApp {
+    pub label: &'static str,
+    pub reason: &'static str,
+}
+
+/// Apps/kinds we deliberately don't offer for bubbling. They're GPU-composited or
+/// message-input-resistant, so PrintWindow captures black and window messages
+/// don't drive them — they'd need the heavier VM/Sunshine path.
+pub fn unsupported_apps() -> &'static [UnsupportedApp] {
+    &[
+        UnsupportedApp {
+            label: "Chrome, Edge & other browsers",
+            reason: "GPU-composited (Chromium) — captures black and ignores window-message input",
+        },
+        UnsupportedApp {
+            label: "Electron apps (VS Code, Slack, Discord…)",
+            reason: "Chromium under the hood — same limits as browsers",
+        },
+        UnsupportedApp {
+            label: "Games & DirectX/OpenGL apps",
+            reason: "GPU-rendered frames can't be captured this way",
+        },
+        UnsupportedApp {
+            label: "Full-screen / hardware-video apps",
+            reason: "Bypass the normal window paint that capture relies on",
+        },
+    ]
+}
+
 #[cfg(windows)]
 pub use imp::{Bubble, BubbleInput};
 

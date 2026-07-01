@@ -194,15 +194,21 @@ fn monitors_announce() -> String {
 /// JSON announcing the apps the console may open in a bubble:
 /// `{ "t":"apps", "list":[{ id, label }] }`. Empty on non-Windows (no bubbles).
 fn apps_announce() -> String {
-    let list: Vec<serde_json::Value> = if cfg!(windows) {
-        bubble::curated_apps()
-            .iter()
-            .map(|a| serde_json::json!({ "id": a.id, "label": a.label }))
-            .collect()
+    let (list, unsupported): (Vec<serde_json::Value>, Vec<serde_json::Value>) = if cfg!(windows) {
+        (
+            bubble::curated_apps()
+                .iter()
+                .map(|a| serde_json::json!({ "id": a.id, "label": a.label }))
+                .collect(),
+            bubble::unsupported_apps()
+                .iter()
+                .map(|a| serde_json::json!({ "label": a.label, "reason": a.reason }))
+                .collect(),
+        )
     } else {
-        Vec::new()
+        (Vec::new(), Vec::new())
     };
-    serde_json::json!({ "t": "apps", "list": list }).to_string()
+    serde_json::json!({ "t": "apps", "list": list, "unsupported": unsupported }).to_string()
 }
 
 /// Capture the *selected* screen, downscale, and publish frames. Switching the

@@ -46,6 +46,8 @@ export function useRemote() {
   const currentMonitor = ref(0);
   /** Apps the remote PC can open in a sandbox bubble (Windows). */
   const apps = ref<{ id: string; label: string }[]>([]);
+  /** App kinds that can't be bubbled (browsers, games…) — shown greyed out. */
+  const unsupportedApps = ref<{ label: string; reason: string }[]>([]);
   /** When set, we're viewing an app bubble (not the whole screen). */
   const bubbleApp = ref<string | null>(null);
 
@@ -285,6 +287,7 @@ export function useRemote() {
             currentMonitor.value = primary ? primary.index : m.list[0]?.index ?? 0;
           } else if (m.t === "apps" && Array.isArray(m.list)) {
             apps.value = m.list;
+            unsupportedApps.value = Array.isArray(m.unsupported) ? m.unsupported : [];
           } else if (m.t === "bubble_denied") {
             // The operator declined opening the app; drop back to the screen.
             bubbleApp.value = null;
@@ -386,6 +389,7 @@ export function useRemote() {
     monitors.value = [];
     currentMonitor.value = 0;
     apps.value = [];
+    unsupportedApps.value = [];
     bubbleApp.value = null;
     errorMessage.value = null;
     errorKind.value = null;
@@ -473,6 +477,7 @@ export function useRemote() {
     currentMonitor,
     selectMonitor,
     apps,
+    unsupportedApps,
     bubbleApp,
     openApp,
     exitBubble,
