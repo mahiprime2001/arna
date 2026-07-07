@@ -587,7 +587,7 @@ function onKeyUp(e: KeyboardEvent) {
         ref="screenEl"
         tabindex="0"
         class="relative grid flex-1 place-items-center overflow-hidden bg-ink outline-none"
-        :class="{ 'cursor-none': canControl && videoStream, 'stage-grid': phase !== 'live' }"
+        :class="{ 'cursor-crosshair': canControl && videoStream, 'stage-grid': phase !== 'live' }"
         @keydown="onKeyDown"
         @keyup="onKeyUp"
         @focus="pushClipboard"
