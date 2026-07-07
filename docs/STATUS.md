@@ -78,6 +78,12 @@ cargo dev            # backend + Arna app together (cargo dev backend / cargo de
 `cargo dev` is an alias (`.cargo/config.toml`) for the `xtask` dev runner
 (`xtask/src/main.rs`). First time, run `cd console && npm install` once.
 
+**Two-machine LAN test** — `cargo dev lan` starts the backend (open mode),
+makes THIS PC controllable as `my-pc`, serves the console with `--host`, and
+prints the URL + settings to open on the other machine (`http://<lan-ip>:4310`,
+Server `ws://<lan-ip>:8081/ws`, Device `my-pc`). One-time: allow TCP 8081 +
+`arna-agent.exe` through the Windows firewall (the command is printed).
+
 Or start the pieces by hand:
 ```bash
 # 1) backend

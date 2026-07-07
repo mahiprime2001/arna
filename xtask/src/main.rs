@@ -43,11 +43,59 @@ fn main() {
             start_app();
             done();
         }
+        "lan" => lan(),
         other => {
-            eprintln!("unknown task '{other}'.  try:  cargo dev  |  cargo dev backend  |  cargo dev app");
+            eprintln!(
+                "unknown task '{other}'.  try:  cargo dev  |  cargo dev backend  |  cargo dev app  |  cargo dev lan"
+            );
             std::process::exit(2);
         }
     }
+}
+
+/// This machine's LAN IP (for the laptop to connect to). The UDP "connect"
+/// trick picks the outbound interface without sending anything.
+fn local_ip() -> Option<String> {
+    let sock = std::net::UdpSocket::bind("0.0.0.0:0").ok()?;
+    sock.connect("8.8.8.8:80").ok()?;
+    sock.local_addr().ok().map(|a| a.ip().to_string())
+}
+
+/// Two-machine LAN test: start the backend (open mode), make THIS PC
+/// controllable as `my-pc`, and serve the console to the network — then print
+/// exactly what to open on the other machine.
+fn lan() {
+    let ip = local_ip().unwrap_or_else(|| "<this-pc-ip>".to_string());
+    println!("Arna LAN test — starting backend + agent + console…\n");
+
+    // Backend in OPEN mode so the other machine can "Connect without an account".
+    open_terminal("Arna Backend (LAN)", &root().join("backend"), "cargo run");
+    std::thread::sleep(Duration::from_secs(2));
+
+    // This PC becomes controllable as "my-pc" (headless agent auto-accepts).
+    open_terminal(
+        "Arna Agent (my-pc)",
+        &root(),
+        "cargo run -p arna-agent --release -- ws://127.0.0.1:8081/ws my-pc",
+    );
+
+    // Serve the console to the whole network (--host), not just localhost.
+    free_port(4310);
+    open_terminal("Arna Console (LAN)", &root().join("console"), "npm run dev -- --host");
+
+    println!("→ backend, agent (my-pc), and console are starting in their own windows.\n");
+    println!("========================================================");
+    println!("  On the OTHER machine (same Wi-Fi), open Chrome:");
+    println!("    http://{ip}:4310");
+    println!("  Click \"Connect without an account\", then set:");
+    println!("    Server:    ws://{ip}:8081/ws");
+    println!("    Device ID: my-pc   → Connect");
+    println!("  Then: Apps → Character Map to try the bubble.");
+    println!("========================================================\n");
+    println!("First time only, if it can't connect — run in an ADMIN PowerShell:");
+    println!("  New-NetFirewallRule -DisplayName \"Arna 8081\" -Direction Inbound -LocalPort 8081 -Protocol TCP -Action Allow -Profile Private,Domain");
+    println!("  New-NetFirewallRule -DisplayName \"Arna Agent\" -Direction Inbound -Program \"{}\\target\\release\\arna-agent.exe\" -Action Allow -Profile Private,Domain", root().display());
+    println!("\nClose those terminal windows (or Ctrl+C in them) to stop.");
 }
 
 fn start_backend() {
