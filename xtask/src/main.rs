@@ -66,18 +66,32 @@ fn local_ip() -> Option<String> {
 /// exactly what to open on the other machine.
 fn lan() {
     let ip = local_ip().unwrap_or_else(|| "<this-pc-ip>".to_string());
-    println!("Arna LAN test — starting backend + agent + console…\n");
+    println!("Arna LAN test — preparing…\n");
+
+    // Build the agent up front so it registers the moment the console is up
+    // (otherwise the other machine sees "my-pc offline" while it compiles).
+    println!("→ building the agent (first time takes a minute or two)…");
+    let built = Command::new("cargo")
+        .args(["build", "-p", "arna-agent", "--release"])
+        .current_dir(root())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+    if !built {
+        eprintln!("agent build failed — run `cargo build -p arna-agent --release` to see why");
+    }
 
     // Backend in OPEN mode so the other machine can "Connect without an account".
     open_terminal("Arna Backend (LAN)", &root().join("backend"), "cargo run");
     std::thread::sleep(Duration::from_secs(2));
 
     // This PC becomes controllable as "my-pc" (headless agent auto-accepts).
-    open_terminal(
-        "Arna Agent (my-pc)",
-        &root(),
-        "cargo run -p arna-agent --release -- ws://127.0.0.1:8081/ws my-pc",
-    );
+    // Run the already-built binary directly so it starts (and registers) instantly.
+    #[cfg(windows)]
+    let agent_cmd = "target\\release\\arna-agent.exe ws://127.0.0.1:8081/ws my-pc";
+    #[cfg(not(windows))]
+    let agent_cmd = "./target/release/arna-agent ws://127.0.0.1:8081/ws my-pc";
+    open_terminal("Arna Agent (my-pc)", &root(), agent_cmd);
 
     // Serve the console to the whole network (--host), not just localhost.
     free_port(4310);
