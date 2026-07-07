@@ -93,8 +93,8 @@ mod imp {
         BITMAPINFO, BITMAPINFOHEADER, BI_RGB, DIB_RGB_COLORS,
     };
     use winapi::um::winuser::{
-        ChildWindowFromPointEx, CloseDesktop, CreateDesktopW, EnumChildWindows, EnumDesktopWindows,
-        GetClassNameW, GetClientRect, GetDC, GetWindowThreadProcessId, IsWindowVisible,
+        ChildWindowFromPointEx, CloseDesktop, CreateDesktopW, EnumDesktopWindows, GetClientRect,
+        GetDC, GetWindowThreadProcessId, IsWindowVisible,
         MapWindowPoints, PostMessageW, PrintWindow, ReleaseDC, CWP_SKIPINVISIBLE,
         CWP_SKIPTRANSPARENT, MK_LBUTTON, MK_MBUTTON, MK_RBUTTON, PW_CLIENTONLY,
         PW_RENDERFULLCONTENT, WM_CHAR, WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDOWN, WM_LBUTTONUP,
@@ -232,18 +232,6 @@ mod imp {
         TRUE
     }
 
-    unsafe extern "system" fn child_edit_cb(hwnd: HWND, lparam: LPARAM) -> BOOL {
-        let out = &mut *(lparam as *mut HWND);
-        let mut cls = [0u16; 64];
-        let n = GetClassNameW(hwnd, cls.as_mut_ptr(), cls.len() as i32);
-        let name = String::from_utf16_lossy(&cls[..n as usize]).to_lowercase();
-        if name.contains("edit") {
-            *out = hwnd;
-            return 0;
-        }
-        TRUE
-    }
-
     /// A running app on its own hidden desktop. Owns the desktop + process; lives
     /// on the capture thread. `Drop` tears everything down.
     pub struct Bubble {
@@ -333,16 +321,6 @@ mod imp {
         /// A `Send` input handle for the current window (call after `locate`).
         pub fn input(&self) -> BubbleInput {
             BubbleInput { hwnd: self.hwnd as usize }
-        }
-
-        /// HWND of a child Edit control, if any — typed text goes here (else the
-        /// window itself). Returned as usize so callers can stash it.
-        pub fn edit_hwnd(&self) -> usize {
-            unsafe {
-                let mut found: HWND = null_mut();
-                EnumChildWindows(self.hwnd, Some(child_edit_cb), &mut found as *mut _ as LPARAM);
-                found as usize
-            }
         }
 
         /// Capture the window's **client area** as tight, top-down BGRA. Returns
@@ -448,9 +426,6 @@ mod stub {
         }
         pub fn input(&self) -> BubbleInput {
             BubbleInput
-        }
-        pub fn edit_hwnd(&self) -> usize {
-            0
         }
         pub fn capture(&self) -> Option<(i32, i32, Vec<u8>)> {
             None

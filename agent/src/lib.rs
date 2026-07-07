@@ -1147,16 +1147,6 @@ pub async fn run(
     // Two-way clipboard sync (watches the OS clipboard from here on).
     let clip = ClipSync::new();
 
-    let signaling = match Signaling::connect(&url).await {
-        Ok(s) => s,
-        Err(e) => {
-            eprintln!("agent: failed to connect to signaling backend: {e}");
-            return;
-        }
-    };
-    signaling.register("agent", &id, token.as_deref());
-    println!("agent registered as '{id}' — waiting for a viewer...");
-
     // Per admitted connection: attach a screen video track + start encoding.
     let on_peer = make_on_peer(rx);
 
@@ -1240,7 +1230,31 @@ pub async fn run(
             other => println!("agent: ignoring unknown channel '{other}'"),
         });
 
-    if let Err(e) = p2p::answer_streaming(signaling, id, consent, on_peer, on_channel).await {
-        eprintln!("agent error: {e}");
+    // Connect and serve, retrying so the agent survives the backend not being up
+    // yet, a backend restart, or a dropped socket — instead of giving up.
+    loop {
+        let signaling = match Signaling::connect(&url).await {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("agent: can't reach the signaling backend ({e}); retrying in 3s…");
+                tokio::time::sleep(Duration::from_secs(3)).await;
+                continue;
+            }
+        };
+        signaling.register("agent", &id, token.as_deref());
+        println!("agent registered as '{id}' — waiting for a viewer...");
+        if let Err(e) = p2p::answer_streaming(
+            signaling,
+            id.clone(),
+            consent.clone(),
+            on_peer.clone(),
+            on_channel.clone(),
+        )
+        .await
+        {
+            eprintln!("agent error: {e}");
+        }
+        eprintln!("agent: disconnected from the backend; reconnecting in 3s…");
+        tokio::time::sleep(Duration::from_secs(3)).await;
     }
 }
