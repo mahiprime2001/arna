@@ -278,6 +278,9 @@ const screenEl = ref<HTMLDivElement | null>(null);
 const fileInput = ref<HTMLInputElement | null>(null);
 const dragOver = ref(false);
 let lastMove = 0;
+// On-screen pointer marker (the remote cursor isn't in the video stream, so we
+// draw where you're aiming). Pixel coords relative to the stage.
+const pointer = ref<{ x: number; y: number } | null>(null);
 
 function pickFile() {
   fileInput.value?.click();
@@ -392,10 +395,17 @@ function norm(e: MouseEvent): { x: number; y: number } | null {
 
 function onMouseMove(e: MouseEvent) {
   if (!canControl.value) return;
+  const p = norm(e);
+  // Move the pointer marker every event (smooth), even though we throttle sends.
+  if (p && screenEl.value) {
+    const r = screenEl.value.getBoundingClientRect();
+    pointer.value = { x: e.clientX - r.left, y: e.clientY - r.top };
+  } else {
+    pointer.value = null;
+  }
   const now = performance.now();
   if (now - lastMove < 16) return;
   lastMove = now;
-  const p = norm(e);
   if (p) sendInput({ t: "m", x: p.x, y: p.y });
 }
 function onMouseDown(e: MouseEvent) {
@@ -587,7 +597,7 @@ function onKeyUp(e: KeyboardEvent) {
         ref="screenEl"
         tabindex="0"
         class="relative grid flex-1 place-items-center overflow-hidden bg-ink outline-none"
-        :class="{ 'cursor-crosshair': canControl && videoStream, 'stage-grid': phase !== 'live' }"
+        :class="{ 'cursor-none': canControl && videoStream, 'stage-grid': phase !== 'live' }"
         @keydown="onKeyDown"
         @keyup="onKeyUp"
         @focus="pushClipboard"
@@ -619,8 +629,27 @@ function onKeyUp(e: KeyboardEvent) {
             @mousemove="onMouseMove"
             @mousedown="onMouseDown"
             @mouseup="onMouseUp"
+            @mouseleave="pointer = null"
             @wheel="onWheel"
           />
+
+          <!-- Pointer marker (the remote cursor isn't in the stream). -->
+          <svg
+            v-if="pointer && canControl"
+            class="pointer-events-none absolute z-20 drop-shadow"
+            :style="{ left: pointer.x - 3 + 'px', top: pointer.y - 2 + 'px' }"
+            width="22"
+            height="22"
+            viewBox="0 0 24 24"
+          >
+            <path
+              d="M5 2.5 L5 19.5 L9.7 14.8 L12.6 21.2 L15.2 20.1 L12.4 13.9 L18.5 13.9 Z"
+              fill="#ffffff"
+              stroke="#0b0e14"
+              stroke-width="1.6"
+              stroke-linejoin="round"
+            />
+          </svg>
           <div class="pointer-events-none absolute right-4 top-4 z-20 flex items-center gap-2 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-3 py-1 text-xs font-semibold text-emerald-300 backdrop-blur">
             <span class="h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-400" /> LIVE
           </div>

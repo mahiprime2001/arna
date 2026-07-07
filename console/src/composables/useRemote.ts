@@ -266,6 +266,13 @@ export function useRemote() {
       pc.addTransceiver("video", { direction: "recvonly" });
       pc.ontrack = (e) => {
         videoStream.value = e.streams[0] ?? new MediaStream([e.track]);
+        // Ask Chrome to minimize its jitter buffer — we want low latency for
+        // remote control, not smooth playback. This is the biggest latency lever.
+        try {
+          (e.receiver as any).playoutDelayHint = 0;
+        } catch {
+          /* not supported everywhere */
+        }
         status.value = "streaming";
       };
 

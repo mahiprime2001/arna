@@ -52,8 +52,9 @@ pub type BubbleConsentFn =
 /// Cap the encoded width; taller/wider screens are scaled down to keep software
 /// H.264 encoding real-time. Height follows to preserve aspect ratio.
 const TARGET_WIDTH: u32 = 1280;
-/// Target bitrate for the H.264 stream (bits/sec).
-const BITRATE_BPS: u32 = 4_000_000;
+/// Target bitrate for the H.264 stream (bits/sec). Higher = sharper (LAN can
+/// easily carry it); the receiver-side low-latency hint keeps delay down.
+const BITRATE_BPS: u32 = 8_000_000;
 /// Force a keyframe every N frames so loss/late tune-in recovers (~4s @ 30fps).
 const KEYFRAME_INTERVAL: u64 = 120;
 
@@ -411,7 +412,8 @@ fn run_bubble(
                 let _ = b.locate();
             }
         }
-        thread::sleep(Duration::from_millis(40));
+        // ~60 fps: keep the streamed frame fresh so your actions show up fast.
+        thread::sleep(Duration::from_millis(16));
     }
     if let Ok(mut c) = bubble_ctl.lock() {
         c.input = None;
@@ -452,6 +454,9 @@ fn spawn_video_encoder(track: Arc<TrackLocalStaticSample>, mut rx: watch::Receiv
         };
         // Dimensions the current encoder was built for; a change rebuilds it.
         let mut dims = (0usize, 0usize);
+        // Real time between samples so RTP timestamps track the wall clock — a
+        // fixed duration makes the receiver's jitter buffer drift and lag.
+        let mut last = std::time::Instant::now();
 
         let mut n: u64 = 0;
         loop {
@@ -483,9 +488,12 @@ fn spawn_video_encoder(track: Arc<TrackLocalStaticSample>, mut rx: watch::Receiv
 
             match encoded {
                 Ok(data) if !data.is_empty() => {
+                    let now = std::time::Instant::now();
+                    let dur = now.duration_since(last).max(Duration::from_millis(1));
+                    last = now;
                     let sample = Sample {
                         data: Bytes::from(data),
-                        duration: Duration::from_millis(33),
+                        duration: dur,
                         ..Default::default()
                     };
                     if let Err(e) = track.write_sample(&sample).await {
