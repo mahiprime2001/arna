@@ -633,20 +633,21 @@ function onKeyUp(e: KeyboardEvent) {
             @wheel="onWheel"
           />
 
-          <!-- Pointer marker (the remote cursor isn't in the stream). -->
+          <!-- Pointer marker (the remote cursor isn't in the stream). Bold +
+               outlined so it stands out on any app, light or dark. -->
           <svg
             v-if="pointer && canControl"
-            class="pointer-events-none absolute z-20 drop-shadow"
-            :style="{ left: pointer.x - 3 + 'px', top: pointer.y - 2 + 'px' }"
-            width="22"
-            height="22"
+            class="pointer-events-none absolute z-30"
+            :style="{ left: pointer.x - 4 + 'px', top: pointer.y - 2 + 'px', filter: 'drop-shadow(0 1px 2px rgba(0,0,0,.6))' }"
+            width="28"
+            height="28"
             viewBox="0 0 24 24"
           >
             <path
               d="M5 2.5 L5 19.5 L9.7 14.8 L12.6 21.2 L15.2 20.1 L12.4 13.9 L18.5 13.9 Z"
-              fill="#ffffff"
-              stroke="#0b0e14"
-              stroke-width="1.6"
+              fill="#6d5efc"
+              stroke="#ffffff"
+              stroke-width="2"
               stroke-linejoin="round"
             />
           </svg>
