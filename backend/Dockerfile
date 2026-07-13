@@ -11,7 +11,11 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY --from=builder /app/target/release/arna-backend /usr/local/bin/arna-backend
+# Accounts DB lives on a volume so users survive container restarts.
+RUN mkdir -p /data
 ENV PORT=8081
+ENV ARNA_DB=/data/arna.db
 ENV RUST_LOG=info
+VOLUME ["/data"]
 EXPOSE 8081
 CMD ["arna-backend"]

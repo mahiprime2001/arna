@@ -1,0 +1,39 @@
+# Arna login + signaling server for a VPS (reachable by IP:port).
+#
+# This is the minimal deploy: just the Rust backend (accounts + the tiny
+# connection "introduction"). Remote-control media stays peer-to-peer and never
+# touches this server. No domain/TLS here — see the note in README.md before
+# using it for anything real.
+#
+# Quick start (on the VPS):
+#   1. cp .env.example .env      # then set ARNA_SSO_SECRET (required)
+#   2. docker compose up -d --build
+#   3. open the port on the firewall:  ufw allow ${ARNA_PORT:-48080}/tcp
+#
+# Apps then connect to:  ws://<vps-ip>:<ARNA_PORT>/ws
+
+services:
+  arna-server:
+    build: ../../backend
+    container_name: arna-server
+    restart: unless-stopped
+    environment:
+      # Internal port (fixed); change the *published* port via ARNA_PORT below.
+      - PORT=48080
+      - ARNA_DB=/data/arna.db
+      # REQUIRED for accounts — signs login sessions + device tokens.
+      - ARNA_SSO_SECRET=${ARNA_SSO_SECRET:?set ARNA_SSO_SECRET in .env}
+      # Optional STUN/TURN handed to clients (leave unset for public STUN only).
+      - ARNA_STUN=${ARNA_STUN:-}
+      - ARNA_TURN=${ARNA_TURN:-}
+      - ARNA_TURN_USER=${ARNA_TURN_USER:-}
+      - ARNA_TURN_PASS=${ARNA_TURN_PASS:-}
+      - RUST_LOG=info
+    ports:
+      # host:container — set the public port in .env (default 48080).
+      - "${ARNA_PORT:-48080}:48080"
+    volumes:
+      - arna_data:/data
+
+volumes:
+  arna_data:
