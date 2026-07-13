@@ -643,7 +643,7 @@ function onKeyUp(e: KeyboardEvent) {
             autoplay
             playsinline
             muted
-            class="max-h-full max-w-full object-contain"
+            class="absolute inset-0 h-full w-full object-contain"
             @mousemove="onMouseMove"
             @mousedown="onMouseDown"
             @mouseup="onMouseUp"

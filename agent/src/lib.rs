@@ -51,7 +51,7 @@ pub type BubbleConsentFn =
 
 /// Cap the encoded width; taller/wider screens are scaled down to keep software
 /// H.264 encoding real-time. Height follows to preserve aspect ratio.
-const TARGET_WIDTH: u32 = 1280;
+const TARGET_WIDTH: u32 = 1920;
 /// Target bitrate for the H.264 stream (bits/sec). Higher = sharper (LAN can
 /// easily carry it); the receiver-side low-latency hint keeps delay down.
 const BITRATE_BPS: u32 = 8_000_000;
@@ -592,9 +592,9 @@ fn map_key(k: &str) -> Option<Key> {
 /// Apply one input event (JSON) to the local machine. `active` carries the
 /// streamed screen's `(origin_x, origin_y, width, height)` so normalized mouse
 /// coords land on the right monitor; `select` lets the console switch monitors.
-/// Forward one key to a bubble window: named keys → virtual-key codes (down+up),
-/// printable chars → WM_CHAR on key-down.
-fn bubble_key(bi: &bubble::BubbleInput, key: &str, down: bool) {
+/// Forward one key to a bubble window at `(nx, ny)` (the control under the
+/// pointer): named keys → virtual-key codes (down+up), printable → WM_CHAR down.
+fn bubble_key(bi: &bubble::BubbleInput, nx: f64, ny: f64, key: &str, down: bool) {
     let vk: Option<u16> = match key {
         "Enter" => Some(0x0D),
         "Backspace" => Some(0x08),
@@ -610,11 +610,11 @@ fn bubble_key(bi: &bubble::BubbleInput, key: &str, down: bool) {
         _ => None,
     };
     if let Some(vk) = vk {
-        bi.key_vk(vk, down);
+        bi.key_vk(nx, ny, vk, down);
     } else if down {
         let mut chars = key.chars();
         if let (Some(c), None) = (chars.next(), chars.next()) {
-            bi.key_char(c);
+            bi.key_char(nx, ny, c);
         }
     }
 }
@@ -673,12 +673,12 @@ fn handle_input(
                 }
                 "kd" => {
                     if let Some(k) = v.get("k").and_then(|k| k.as_str()) {
-                        bubble_key(&bi, k, true);
+                        bubble_key(&bi, c.last_x, c.last_y, k, true);
                     }
                 }
                 "ku" => {
                     if let Some(k) = v.get("k").and_then(|k| k.as_str()) {
-                        bubble_key(&bi, k, false);
+                        bubble_key(&bi, c.last_x, c.last_y, k, false);
                     }
                 }
                 _ => {}

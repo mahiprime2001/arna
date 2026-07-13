@@ -86,7 +86,8 @@ mod imp {
     use winapi::shared::windef::{HBITMAP, HDC, HDESK, HWND, POINT, RECT};
     use winapi::um::handleapi::CloseHandle;
     use winapi::um::processthreadsapi::{
-        CreateProcessW, GetExitCodeProcess, TerminateProcess, PROCESS_INFORMATION, STARTUPINFOW,
+        CreateProcessW, GetCurrentProcessId, GetExitCodeProcess, TerminateProcess,
+        PROCESS_INFORMATION, STARTUPINFOW,
     };
     use winapi::um::wingdi::{
         CreateCompatibleBitmap, CreateCompatibleDC, DeleteDC, DeleteObject, GetDIBits, SelectObject,
@@ -179,9 +180,11 @@ mod imp {
             }
         }
 
-        pub fn key_char(&self, c: char) {
+        /// Type a char into the control under the pointer (focus-follows-pointer,
+        /// since a hidden-desktop window has no keyboard focus of its own).
+        pub fn key_char(&self, nx: f64, ny: f64, c: char) {
             unsafe {
-                let h = self.hwnd as HWND;
+                let (h, _, _) = self.target_at(nx, ny);
                 let mut buf = [0u16; 2];
                 for u in c.encode_utf16(&mut buf) {
                     PostMessageW(h, WM_CHAR, *u as WPARAM, 1);
@@ -189,10 +192,10 @@ mod imp {
             }
         }
 
-        /// Named/non-printable key via virtual-key code (down then up handled by caller).
-        pub fn key_vk(&self, vk: u16, down: bool) {
+        /// Named/non-printable key (virtual-key code) into the control under the pointer.
+        pub fn key_vk(&self, nx: f64, ny: f64, vk: u16, down: bool) {
             unsafe {
-                let h = self.hwnd as HWND;
+                let (h, _, _) = self.target_at(nx, ny);
                 PostMessageW(h, if down { WM_KEYDOWN } else { WM_KEYUP }, vk as WPARAM, 1);
             }
         }
@@ -245,8 +248,12 @@ mod imp {
         /// Create a hidden desktop and launch `cmd` on it.
         pub fn launch(cmd: &str) -> Result<Self, String> {
             unsafe {
+                // Unique per agent *process* + sequence, so we never reopen a
+                // desktop leaked by an earlier (crashed) run and inherit its
+                // stale windows. CreateDesktopW("ArnaBubble1") would otherwise
+                // silently re-open a lingering desktop.
                 let n = SEQ.fetch_add(1, Ordering::Relaxed);
-                let dname = format!("ArnaBubble{n}");
+                let dname = format!("ArnaBubble_{}_{}", GetCurrentProcessId(), n);
                 let dwide = wide(&dname);
                 let hdesk = CreateDesktopW(
                     dwide.as_ptr(),
@@ -306,9 +313,23 @@ mod imp {
                     best_any_area: 0,
                 };
                 EnumDesktopWindows(self.hdesk, Some(enum_cb), &mut f as *mut _ as LPARAM);
-                let w = if !f.best_pid.is_null() { f.best_pid } else { f.best_any };
-                if !w.is_null() {
+                // Strongly prefer a window owned by the process we launched; the
+                // "any largest" fallback only matters on the first frame before the
+                // app's window exists (fresh unique desktop → nothing stale to grab).
+                let (w, by_pid) = if !f.best_pid.is_null() {
+                    (f.best_pid, true)
+                } else {
+                    (f.best_any, false)
+                };
+                if !w.is_null() && w != self.hwnd {
                     self.hwnd = w;
+                    // Maximize so resizable apps (WordPad, Paint, Notepad) capture
+                    // at full desktop resolution — much sharper. Only ever applied
+                    // to our own app's window; fixed-size dialogs (Character Map)
+                    // simply ignore it.
+                    if by_pid {
+                        winapi::um::winuser::ShowWindow(self.hwnd, 3 /* SW_MAXIMIZE */);
+                    }
                 }
                 !self.hwnd.is_null()
             }
@@ -409,8 +430,8 @@ mod stub {
         pub fn mouse_move(&self, _nx: f64, _ny: f64) {}
         pub fn mouse_button(&self, _nx: f64, _ny: f64, _b: u8, _d: bool) {}
         pub fn wheel(&self, _nx: f64, _ny: f64, _d: i32) {}
-        pub fn key_char(&self, _c: char) {}
-        pub fn key_vk(&self, _vk: u16, _down: bool) {}
+        pub fn key_char(&self, _nx: f64, _ny: f64, _c: char) {}
+        pub fn key_vk(&self, _nx: f64, _ny: f64, _vk: u16, _down: bool) {}
     }
 
     pub struct Bubble;
