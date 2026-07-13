@@ -35,5 +35,18 @@ services:
     volumes:
       - arna_data:/data
 
+  # The console web app, so anyone can just open a URL in a browser to sign in
+  # and connect — no install. Baked to talk to arna-server above.
+  arna-console:
+    build:
+      context: ../../console
+      dockerfile: web.Dockerfile
+      args:
+        VITE_ARNA_BACKEND: ${ARNA_WS:-ws://187.124.99.4:48080/ws}
+    container_name: arna-console
+    restart: unless-stopped
+    ports:
+      - "${ARNA_CONSOLE_PORT:-48090}:80"
+
 volumes:
   arna_data:

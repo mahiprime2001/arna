@@ -22,20 +22,32 @@ ufw allow 48080/tcp        # or your ARNA_PORT
 # (or add it in your cloud provider's security group)
 ```
 
-Check it's up:
+Open the console port too (default 48090):
 
 ```bash
-curl http://localhost:48080/health          # -> ok
-curl http://<vps-ip>:48080/health           # from your machine
+ufw allow 48090/tcp
 ```
 
-## Point the apps at it
+Check both are up:
 
-- **Console (browser/app):** on the sign-in screen open **Server** and set
-  `ws://<vps-ip>:48080/ws`, then sign up / log in.
-- **Bake it into a build** so users don't type it — build the app with
-  `VITE_ARNA_BACKEND=ws://<vps-ip>:48080/ws` (and `ARNA_DEFAULT_BACKEND=...` for
-  the agent). See [`../../docs/RELEASING.md`](../../docs/RELEASING.md).
+```bash
+curl http://<vps-ip>:48080/health           # server -> ok
+# open http://<vps-ip>:48090/ in a browser  # the console web app
+```
+
+## Use it (no install)
+
+This deploys **two** things: the server (accounts + signaling) and the
+**console web app**. So anyone can just:
+
+1. Open **`http://<vps-ip>:48090/`** in a browser (Chrome).
+2. **Sign up / sign in** — the server is already baked in, no URL to type.
+3. To make a Windows PC reachable, run the desktop app there and sign in with
+   the same account — it registers itself automatically. Then it shows up in the
+   browser's device list; click to connect.
+
+The desktop installers (built by the `desktop` GitHub Action) are baked to the
+same server, so they connect automatically too.
 
 ## Manage
 
