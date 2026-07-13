@@ -35,9 +35,11 @@ services:
     volumes:
       - arna_data:/data
 
-  # The console web app, so anyone can just open a URL in a browser to sign in
-  # and connect — no install. Baked to talk to arna-server above.
+  # OPTIONAL: also host the console web app so any browser can open a URL (no
+  # install). Off by default — on the same LAN you can just serve it from the
+  # dev machine (npm run dev). Enable with:  docker compose --profile console up -d
   arna-console:
+    profiles: ["console"]
     build:
       context: ../../console
       dockerfile: web.Dockerfile
