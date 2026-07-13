@@ -111,8 +111,13 @@ fn ice_config_from_env() -> serde_json::Value {
     };
 
     let mut servers = Vec::new();
+    // Treat an unset OR empty ARNA_STUN as "use the default" (compose passes an
+    // empty string when the var isn't in .env).
     let stun = split(
-        std::env::var("ARNA_STUN").unwrap_or_else(|_| "stun:stun.l.google.com:19302".to_string()),
+        std::env::var("ARNA_STUN")
+            .ok()
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| "stun:stun.l.google.com:19302".to_string()),
     );
     if !stun.is_empty() {
         servers.push(json!({ "urls": stun }));
