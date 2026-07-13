@@ -17,11 +17,10 @@ function loadStore(): Store {
 }
 const saved = loadStore();
 
-// Default server: a build can bake in the hosted backend via VITE_ARNA_BACKEND
-// (set for production bundles); dev falls back to localhost. A saved value the
-// user entered always wins.
-const DEFAULT_BACKEND = import.meta.env.VITE_ARNA_BACKEND || "ws://127.0.0.1:8081/ws";
-const backend = ref(saved.backend || DEFAULT_BACKEND);
+// The server is the hosted VPS — users never type it. A build can override at
+// build time with VITE_ARNA_BACKEND. (Fixed on purpose: no stale saved value.)
+const DEFAULT_BACKEND = import.meta.env.VITE_ARNA_BACKEND || "ws://187.124.99.4:48080/ws";
+const backend = ref(DEFAULT_BACKEND);
 const agentId = ref(saved.agentId || "agent-1");
 const ticket = ref("");
 const recents = ref<string[]>(saved.recents || []);
@@ -105,8 +104,34 @@ const {
 const loginEmail = ref("");
 const loginPassword = ref("");
 const isSignup = ref(false);
-const showManual = ref(false); // signed-out: connect without an account (self-host)
-const showServer = ref(false); // signed-out: reveal the server address field
+
+// Running inside the desktop app (vs a plain browser)? Only the app can make
+// this machine reachable (register + run the agent loop); a browser is view-only.
+const inApp = "__TAURI_INTERNALS__" in window;
+
+/** Make THIS PC reachable automatically after login — no manual "add device +
+ * paste token + pair". Registers a device named after the machine and starts
+ * the agent with its token. Idempotent (skips if already set up). App only. */
+async function ensureThisPcReachable() {
+  if (!inApp || !loggedIn.value) return;
+  try {
+    const { invoke } = await import("@tauri-apps/api/core");
+    if (await invoke<boolean>("is_paired")) return; // already reachable
+    const name = await invoke<string>("device_name").catch(() => "My PC");
+    let id = localStorage.getItem("arna.deviceId");
+    if (!id) {
+      id = "pc-" + Math.random().toString(36).slice(2, 8);
+      localStorage.setItem("arna.deviceId", id);
+    }
+    const token = await authAddDevice(backend.value.trim(), id, name);
+    if (token) {
+      await invoke("save_pairing", { backend: backend.value.trim(), id, token });
+      refreshDevices(backend.value.trim());
+    }
+  } catch {
+    /* not in the app, or setup failed — the user can still connect out */
+  }
+}
 
 async function submitAuth() {
   const fn = isSignup.value ? authSignup : authLogin;
@@ -114,6 +139,7 @@ async function submitAuth() {
   if (loggedIn.value) {
     loginPassword.value = "";
     fetchMe(backend.value.trim());
+    ensureThisPcReachable();
   }
 }
 
@@ -174,15 +200,6 @@ watch(active, (a) => {
     connectError.value = errorMessage.value || "Wrong password.";
   }
 });
-
-// Manual connect (self-host, signed out): server + agent id + optional ticket.
-function manualConnect() {
-  const id = agentId.value.trim();
-  if (!id) return;
-  rememberAgent(id);
-  persist();
-  connect(backend.value.trim(), id, ticket.value.trim() || undefined);
-}
 
 // ── Add a device ───────────────────────────────────────────────────────────
 const showAddDevice = ref(false);
@@ -261,6 +278,7 @@ onMounted(() => {
   if (loggedIn.value) {
     refreshDevices(backend.value.trim());
     fetchMe(backend.value.trim());
+    ensureThisPcReachable();
   }
   // Deep links: ?connect=<id> prefills the connect field; ?invite= opens signup.
   const params = new URLSearchParams(location.search);
@@ -932,96 +950,39 @@ function onKeyUp(e: KeyboardEvent) {
       </div>
     </div>
 
-    <!-- ════════════════ SIGNED OUT (auth) ════════════════ -->
+    <!-- ════════════════ SIGNED OUT (sign in / sign up) ════════════════ -->
     <div v-else class="stage-grid grid h-full place-items-center px-6">
       <div class="w-full max-w-md">
-        <!-- Manual connect (self-host, no account) -->
-        <template v-if="showManual">
-          <div class="rounded-2xl border border-edge bg-panel/90 p-7 shadow-2xl shadow-black/40">
-            <div class="mb-5 flex items-center gap-3">
-              <span class="grid h-11 w-11 place-items-center rounded-xl bg-accent/10 text-accent2 ring-1 ring-inset ring-accent/20"><Icon name="monitor" class="h-5 w-5" /></span>
-              <div>
-                <h1 class="text-lg font-semibold tracking-tight text-slate-100">Connect manually</h1>
-                <p class="text-sm text-slate-500">Enter a server + device ID (no account).</p>
-              </div>
-            </div>
-            <div v-if="errorMessage" role="alert" class="mb-4 flex items-start gap-2.5 rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2.5 text-sm text-rose-200">
-              <Icon :name="errorKind === 'offline' ? 'offline' : 'alert'" class="mt-0.5 h-4 w-4 shrink-0 text-rose-400" />
-              <span>{{ errorMessage }}</span>
-            </div>
-            <form class="space-y-3.5" @submit.prevent="manualConnect">
-              <div>
-                <label class="mb-1 block text-xs font-medium text-slate-400">Device ID</label>
-                <input v-model="agentId" placeholder="agent-1" autocomplete="off" spellcheck="false" class="w-full rounded-lg border border-edge bg-ink px-3 py-2.5 text-slate-100 outline-none transition placeholder:text-slate-600 focus:border-accent focus:ring-2 focus:ring-accent/30" />
-              </div>
-              <div>
-                <label class="mb-1 block text-xs font-medium text-slate-400">Signaling server</label>
-                <input v-model="backend" class="w-full rounded-lg border border-edge bg-ink px-3 py-2.5 font-mono text-sm text-slate-300 outline-none transition focus:border-accent focus:ring-2 focus:ring-accent/30" />
-              </div>
-              <div>
-                <label class="mb-1 block text-xs font-medium text-slate-400">SSO ticket <span class="text-slate-600">· optional</span></label>
-                <input v-model="ticket" placeholder="paste a signed ticket if required" class="w-full rounded-lg border border-edge bg-ink px-3 py-2.5 text-sm text-slate-300 outline-none transition placeholder:text-slate-600 focus:border-accent focus:ring-2 focus:ring-accent/30" />
-              </div>
-              <button type="submit" class="mt-1 flex w-full items-center justify-center gap-2 rounded-lg bg-accent px-4 py-2.5 text-sm font-semibold text-white shadow-lg shadow-accent/25 transition hover:bg-accent/90">
-                <Icon name="power" class="h-4 w-4" /> Connect
-              </button>
-            </form>
-          </div>
-          <p class="mt-4 text-center text-xs">
-            <button class="text-slate-500 underline-offset-2 hover:text-slate-300 hover:underline" @click="showManual = false">← Back to sign in</button>
-          </p>
-        </template>
-
-        <!-- Login / signup -->
-        <template v-else>
-          <div class="rounded-2xl border border-edge bg-panel/90 p-7 shadow-2xl shadow-black/40">
-            <div class="mb-5 flex items-center gap-3">
-              <span class="grid h-11 w-11 place-items-center rounded-xl bg-gradient-to-br from-accent to-accent2 shadow-lg shadow-accent/25"><Icon name="monitor" class="h-5 w-5 text-white" /></span>
-              <div>
-                <h1 class="text-lg font-semibold tracking-tight text-slate-100">{{ isSignup ? "Create your account" : "Welcome to Arna" }}</h1>
-                <p class="text-sm text-slate-500">{{ isSignup ? "Sign up to manage your devices." : "Sign in to reach your devices." }}</p>
-              </div>
-            </div>
-            <div v-if="authError" role="alert" class="mb-4 flex items-start gap-2.5 rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2.5 text-sm text-rose-200">
-              <Icon name="alert" class="mt-0.5 h-4 w-4 shrink-0 text-rose-400" />
-              <span>{{ authError }}</span>
-            </div>
-            <form class="space-y-3.5" @submit.prevent="submitAuth">
-              <div>
-                <label class="mb-1 block text-xs font-medium text-slate-400">Email</label>
-                <input v-model="loginEmail" type="email" autocomplete="email" placeholder="you@example.com" class="w-full rounded-lg border border-edge bg-ink px-3 py-2.5 text-slate-100 outline-none transition placeholder:text-slate-600 focus:border-accent focus:ring-2 focus:ring-accent/30" />
-              </div>
-              <div>
-                <label class="mb-1 block text-xs font-medium text-slate-400">Password</label>
-                <input v-model="loginPassword" type="password" :autocomplete="isSignup ? 'new-password' : 'current-password'" placeholder="••••••••" class="w-full rounded-lg border border-edge bg-ink px-3 py-2.5 text-slate-100 outline-none transition placeholder:text-slate-600 focus:border-accent focus:ring-2 focus:ring-accent/30" />
-              </div>
-              <button type="submit" :disabled="authBusy" class="mt-1 w-full rounded-lg bg-accent px-4 py-2.5 text-sm font-semibold text-white shadow-lg shadow-accent/25 transition hover:bg-accent/90 disabled:opacity-50">
-                {{ authBusy ? "…" : isSignup ? "Create account" : "Sign in" }}
-              </button>
-            </form>
-            <p class="mt-4 text-center text-sm text-slate-500">
-              {{ isSignup ? "Already have an account?" : "New here?" }}
-              <button class="font-medium text-accent2 hover:underline" @click="isSignup = !isSignup">{{ isSignup ? "Sign in" : "Create one" }}</button>
-            </p>
-
-            <!-- Server (point at a LAN / self-hosted / VPS backend) -->
-            <div class="mt-5 border-t border-edge/70 pt-4">
-              <button class="flex w-full items-center gap-1.5 text-xs font-medium text-slate-500 transition hover:text-slate-300" @click="showServer = !showServer">
-                <Icon name="shield" class="h-3.5 w-3.5" /> Server
-                <span class="ml-auto font-mono text-[11px] text-slate-600">{{ showServer ? "▾" : "▸" }}</span>
-              </button>
-              <input
-                v-if="showServer"
-                v-model="backend"
-                spellcheck="false"
-                class="mt-2 w-full rounded-lg border border-edge bg-ink px-3 py-2 font-mono text-xs text-slate-300 outline-none transition focus:border-accent focus:ring-2 focus:ring-accent/30"
-              />
+        <div class="rounded-2xl border border-edge bg-panel/90 p-7 shadow-2xl shadow-black/40">
+          <div class="mb-5 flex items-center gap-3">
+            <span class="grid h-11 w-11 place-items-center rounded-xl bg-gradient-to-br from-accent to-accent2 shadow-lg shadow-accent/25"><Icon name="monitor" class="h-5 w-5 text-white" /></span>
+            <div>
+              <h1 class="text-lg font-semibold tracking-tight text-slate-100">{{ isSignup ? "Create your account" : "Welcome to Arna" }}</h1>
+              <p class="text-sm text-slate-500">{{ isSignup ? "Sign up — this PC becomes reachable automatically." : "Sign in to reach your devices." }}</p>
             </div>
           </div>
-          <p class="mt-4 text-center text-xs">
-            <button class="text-slate-500 underline-offset-2 hover:text-slate-300 hover:underline" @click="showManual = true">Connect without an account</button>
+          <div v-if="authError" role="alert" class="mb-4 flex items-start gap-2.5 rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2.5 text-sm text-rose-200">
+            <Icon name="alert" class="mt-0.5 h-4 w-4 shrink-0 text-rose-400" />
+            <span>{{ authError }}</span>
+          </div>
+          <form class="space-y-3.5" @submit.prevent="submitAuth">
+            <div>
+              <label class="mb-1 block text-xs font-medium text-slate-400">Email</label>
+              <input v-model="loginEmail" type="email" autocomplete="email" placeholder="you@example.com" class="w-full rounded-lg border border-edge bg-ink px-3 py-2.5 text-slate-100 outline-none transition placeholder:text-slate-600 focus:border-accent focus:ring-2 focus:ring-accent/30" />
+            </div>
+            <div>
+              <label class="mb-1 block text-xs font-medium text-slate-400">Password</label>
+              <input v-model="loginPassword" type="password" :autocomplete="isSignup ? 'new-password' : 'current-password'" placeholder="••••••••" class="w-full rounded-lg border border-edge bg-ink px-3 py-2.5 text-slate-100 outline-none transition placeholder:text-slate-600 focus:border-accent focus:ring-2 focus:ring-accent/30" />
+            </div>
+            <button type="submit" :disabled="authBusy" class="mt-1 w-full rounded-lg bg-accent px-4 py-2.5 text-sm font-semibold text-white shadow-lg shadow-accent/25 transition hover:bg-accent/90 disabled:opacity-50">
+              {{ authBusy ? "…" : isSignup ? "Create account" : "Sign in" }}
+            </button>
+          </form>
+          <p class="mt-4 text-center text-sm text-slate-500">
+            {{ isSignup ? "Already have an account?" : "New here?" }}
+            <button class="font-medium text-accent2 hover:underline" @click="isSignup = !isSignup">{{ isSignup ? "Sign in" : "Create one" }}</button>
           </p>
-        </template>
+        </div>
       </div>
     </div>
 

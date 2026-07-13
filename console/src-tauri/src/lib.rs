@@ -109,6 +109,22 @@ fn show_main(app: &AppHandle) {
     }
 }
 
+/// This machine's name, used to auto-name the device on first login.
+#[tauri::command]
+fn device_name() -> String {
+    std::env::var("COMPUTERNAME")
+        .or_else(|_| std::env::var("HOSTNAME"))
+        .ok()
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "My PC".to_string())
+}
+
+/// Whether this PC is already set up as a reachable device (has saved pairing).
+#[tauri::command]
+fn is_paired(app: AppHandle) -> bool {
+    load_pairing(&app).is_some()
+}
+
 /// Prefill the pairing form (backend + id), but never echo the saved token back.
 #[tauri::command]
 fn current_pairing(app: AppHandle) -> Pairing {
@@ -430,7 +446,9 @@ pub fn run() {
             chat_history,
             send_chat,
             current_pairing,
-            save_pairing
+            save_pairing,
+            device_name,
+            is_paired
         ])
         // Closing the main window keeps the app alive in the tray, so this PC
         // stays reachable. Quit from the tray to exit fully.
