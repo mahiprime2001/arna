@@ -1,68 +1,52 @@
-# Arna
+# Arna — Workspace Platform
 
-Arna is the **Siri ecosystem's** self-hosted, all-in-one operations platform for the
-store network — **remote support, fleet monitoring, team chat, video meetings, and
-file sharing** — built on a single WebRTC engine. End-to-end encrypted, self-hosted,
-and fully owned.
+**Lend your computer's power, not your computer.**
 
-> **Status:** scaffolding. v1 ships the remote-support core; every other module is a
-> layer on the same foundation. Full spec: [docs/PLAN.md](docs/PLAN.md).
+Arna lets a host share compute, storage, and selected resources with people they invite —
+as isolated **workspaces**, not as remote control of their desktop. A workspace is a
+place, not a connection: it has its own screen, input, clipboard, filesystem, and
+processes. The host keeps using their machine the whole time, and always stays in control.
 
-## Modules (one app, one engine)
+> **A workspace is a place, not a connection.**
 
-| Module | What it does |
-|---|---|
-| **Remote** | Full remote control of a store PC — screen, mouse, keyboard, multi-monitor |
-| **Fleet**  | Per-store health (disk, `_MEI`, offline-queue, status) + one-click remote commands |
-| **Chat**   | Live + persistent messaging, broadcast to all stores |
-| **Meet**   | Teams-style audio/video calls + screen share |
-| **Files**  | P2P drag-drop + backend-backed transfer |
+## Status
 
-## Repository layout
+**Design phase.** The product and its contract are settled and frozen; implementation is
+sequenced and about to begin.
 
-| Path | Purpose |
-|---|---|
-| `core/`    | Shared Rust crate — protocol, WebRTC wiring, data channels, file/chat |
-| `agent/`   | Tauri app installed on **store PCs** (capture, input injection, consent popup) |
-| `console/` | Tauri app for **admins** (control, files, chat, meet) |
-| `backend/` | Signaling + device registry + messaging + SSO verification (Rust / axum) |
-| `infra/`   | Dockerized stack — Caddy (auto-HTTPS) + coturn + `docker-compose` |
-| `.github/` | CI — backend and Tauri build workflows |
-| `docs/`    | `PLAN.md` (source of truth), `PROTOCOL.md` |
-
-> The public website (`arna.ifleon.com`) lives in its own repo:
-> [`arna-website`](https://github.com/mahiprime2001/arna-website).
-
-## Tech
-
-Tauri · Rust (`axum` backend; `webrtc-rs`, `windows-capture`, `vpx-encode`, `enigo` apps) · coturn · WebRTC (DTLS-SRTP, end-to-end encrypted)
-
-## Domains
-
-| Subdomain | Service |
-|---|---|
-| `arna.ifleon.com` | Website (separate repo: [`arna-website`](https://github.com/mahiprime2001/arna-website)) |
-| `api.arna.ifleon.com` | Backend signaling (WSS + REST) |
-| `turn.arna.ifleon.com` | coturn TURN/STUN relay |
-
-## Run the stack (on the VPS)
-
-```bash
-cd infra
-cp .env.example .env                                   # set a real TURN secret
-cp coturn/turnserver.conf.example coturn/turnserver.conf
-docker compose up -d --build
-```
-
-Caddy obtains HTTPS certificates automatically once the A records point at the VPS.
-Open the coturn UDP ports (3478, 5349, 49152–65535) on the firewall + provider panel.
+- ✅ [`docs/SPEC.md`](docs/SPEC.md) — the platform specification, **frozen v1.0**. Defines
+  what a workspace *is* and what any implementation MUST guarantee. Implementation-free by
+  design: it names no operating system, VM, or language.
+- ✅ [`docs/adr/`](docs/adr/) — Architecture Decision Records (ADR-001..007): product
+  scope, audience, hardware ownership, workspace identity, the platform-adapter
+  architecture, the Windows rendering/input evidence, and the spec-before-implementation
+  rule.
+- ◐ [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — the component map, the adapter
+  interface (each method cited to a spec section), and the build sequence.
 
 ## How it's built
 
-Phased, riskiest-first — see the milestone table in [docs/PLAN.md](docs/PLAN.md). Each
-phase is verified before the next. The billing app (and any future app) launches a
-session via the `arnaremote://` deep link with an SSO handoff ticket.
+The specification is the contract. Platform **adapters** implement it per OS; the layers
+above the adapter boundary never name an operating system. Build order (see
+[ADR-007](docs/adr/0007-specification-before-platform-integration.md) and
+[ARCHITECTURE.md](docs/ARCHITECTURE.md)):
 
----
+```
+Spec → Architecture → Domain + Adapter interface → Mock adapter →
+Manager → Policy → Runtime → Protocol → Windows/Linux/macOS adapters → Client
+```
 
-Part of the **Siri ecosystem**. Proprietary — see [LICENSE](LICENSE).
+The mock adapter comes first, so the platform is built and tested with no OS involved. The
+UI comes near last, by design.
+
+## History
+
+This repository previously held a remote-desktop application. That code is preserved in
+git history and was retired in favour of the workspace-platform design above. Proven
+pieces (low-latency capture, H.264 encoding, WebRTC transport, input injection) are
+recoverable from history and will be reused as the streaming path per
+[ARCHITECTURE.md](docs/ARCHITECTURE.md).
+
+## License
+
+See [LICENSE](LICENSE).

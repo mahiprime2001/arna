@@ -1,8 +1,0 @@
-# Automatic HTTPS via Let's Encrypt. Point this A record at the VPS first.
-# The website (arna.ifleon.com) is served from the separate arna-website repo.
-
-api.arna.ifleon.com {
-	encode gzip
-	# WebSocket upgrades are proxied transparently by Caddy.
-	reverse_proxy backend:8081
-}
