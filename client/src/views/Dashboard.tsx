@@ -3,26 +3,31 @@ import {
   UsersThree,
   BellRinging,
   Plus,
+  ArrowRight,
 } from "@phosphor-icons/react";
 import { Card } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
 import { Avatar } from "@/components/Avatar";
 import { PageHeader } from "@/components/PageHeader";
 import { cn } from "@/lib/utils";
-import { friends, user, workspaces, type Route } from "@/lib/mock";
+import { user, workspaces, type Friend, type Route } from "@/lib/mock";
 
 export function Dashboard({
+  friends,
+  requestCount,
   unread,
   setRoute,
 }: {
+  friends: Friend[];
+  requestCount: number;
   unread: number;
   setRoute: (r: Route) => void;
 }) {
-  const online = friends.filter((f) => f.online).length;
+  const online = friends.filter((f) => f.presence !== "offline");
   const first = user.name.split(" ")[0];
   const stats = [
     { icon: StackSimple, value: workspaces.length, label: "Active workspaces" },
-    { icon: UsersThree, value: online, label: "Friends online" },
+    { icon: UsersThree, value: online.length, label: "Friends online" },
     { icon: BellRinging, value: unread, label: "Unread alerts" },
   ];
 
@@ -30,8 +35,26 @@ export function Dashboard({
     <div className="animate-fade-up space-y-6">
       <PageHeader
         title={`Welcome back, ${first}`}
-        subtitle="Here is what is happening on your machine."
+        subtitle="A quick look at your machine and your people."
       />
+
+      {requestCount > 0 && (
+        <button
+          onClick={() => setRoute("friends")}
+          className="flex w-full items-center gap-3 rounded-lg border border-brand/25 bg-brand-soft px-4 py-3 text-left transition-colors hover:bg-brand/15"
+        >
+          <UsersThree size={20} weight="duotone" className="text-brand" />
+          <p className="text-sm">
+            <span className="font-medium">
+              {requestCount} friend {requestCount === 1 ? "request" : "requests"}
+            </span>{" "}
+            <span className="text-muted">waiting for you.</span>
+          </p>
+          <span className="ml-auto inline-flex items-center gap-1 text-[13px] font-medium text-brand">
+            Review <ArrowRight size={14} weight="bold" />
+          </span>
+        </button>
+      )}
 
       <div className="grid grid-cols-3 gap-4">
         {stats.map(({ icon: Ico, value, label }) => (
@@ -57,17 +80,29 @@ export function Dashboard({
           </Button>
         </Card>
 
-        <Card className="p-5">
-          <p className="text-[13px] font-medium text-muted">Friends</p>
+        <Card className="flex flex-col p-5">
+          <div className="flex items-center justify-between">
+            <p className="text-[13px] font-medium text-muted">Friends</p>
+            <button
+              onClick={() => setRoute("friends")}
+              className="text-[12px] font-medium text-brand hover:underline"
+            >
+              See all
+            </button>
+          </div>
           <ul className="mt-3 space-y-3">
-            {friends.map((f) => (
-              <li key={f.name} className="flex items-center gap-3">
+            {friends.slice(0, 4).map((f) => (
+              <li key={f.id} className="flex items-center gap-3">
                 <Avatar name={f.name} size={30} />
-                <span className="text-sm">{f.name}</span>
+                <span className="truncate text-sm">{f.name}</span>
                 <span
                   className={cn(
-                    "ml-auto h-2 w-2 rounded-full",
-                    f.online ? "bg-good" : "bg-line",
+                    "ml-auto h-2 w-2 shrink-0 rounded-full",
+                    f.presence === "online"
+                      ? "bg-good"
+                      : f.presence === "workspace"
+                        ? "bg-brand"
+                        : "bg-line",
                   )}
                 />
               </li>

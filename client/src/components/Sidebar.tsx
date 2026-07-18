@@ -1,4 +1,11 @@
-import { House, StackSimple, Bell, UserCircle, GearSix } from "@phosphor-icons/react";
+import {
+  House,
+  StackSimple,
+  UsersThree,
+  Bell,
+  UserCircle,
+  GearSix,
+} from "@phosphor-icons/react";
 import type { Icon } from "@phosphor-icons/react";
 import { Avatar } from "./Avatar";
 import { cn } from "@/lib/utils";
@@ -7,6 +14,7 @@ import type { Route, User } from "@/lib/mock";
 const ITEMS: { id: Route; label: string; icon: Icon }[] = [
   { id: "dashboard", label: "Dashboard", icon: House },
   { id: "workspaces", label: "Workspaces", icon: StackSimple },
+  { id: "friends", label: "Friends", icon: UsersThree },
   { id: "notifications", label: "Notifications", icon: Bell },
   { id: "profile", label: "Profile", icon: UserCircle },
   { id: "settings", label: "Settings", icon: GearSix },
@@ -15,12 +23,12 @@ const ITEMS: { id: Route; label: string; icon: Icon }[] = [
 export function Sidebar({
   route,
   setRoute,
-  unread,
+  badges,
   user,
 }: {
   route: Route;
   setRoute: (r: Route) => void;
-  unread: number;
+  badges: Partial<Record<Route, number>>;
   user: User;
 }) {
   return (
@@ -31,7 +39,7 @@ export function Sidebar({
         </p>
         {ITEMS.map(({ id, label, icon: Ico }) => {
           const active = route === id;
-          const badge = id === "notifications" ? unread : 0;
+          const badge = badges[id] ?? 0;
           return (
             <button
               key={id}

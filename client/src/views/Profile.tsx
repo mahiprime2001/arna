@@ -32,6 +32,7 @@ export function Profile() {
 
       <Card className="divide-y divide-line">
         <Row label="Display name" value={user.name} />
+        <Row label="Handle" value={user.handle} />
         <Row label="Email" value={user.email} />
         <Row label="Role" value={user.role} />
       </Card>
