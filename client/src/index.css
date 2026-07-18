@@ -1,0 +1,69 @@
+@import "@fontsource-variable/geist";
+@import "@fontsource-variable/geist-mono";
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --canvas: 240 20% 98%;
+    --surface: 0 0% 100%;
+    --elevated: 240 20% 96%;
+    --line: 240 12% 90%;
+    --ink: 240 14% 12%;
+    --muted: 240 6% 44%;
+    --brand: 255 90% 66%;
+    --brand-fg: 0 0% 100%;
+    --good: 145 60% 40%;
+    --danger: 356 72% 52%;
+    --radius: 0.8rem;
+  }
+
+  .dark {
+    --canvas: 240 14% 6%;
+    --surface: 240 13% 9%;
+    --elevated: 240 11% 13%;
+    --line: 240 9% 18%;
+    --ink: 240 20% 94%;
+    --muted: 240 8% 58%;
+    --brand: 253 92% 74%;
+    --brand-fg: 240 40% 8%;
+    --good: 145 55% 58%;
+    --danger: 356 78% 66%;
+  }
+
+  * {
+    border-color: hsl(var(--line));
+  }
+
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    margin: 0;
+    background: hsl(var(--canvas));
+    color: hsl(var(--ink));
+    font-family: "Geist Variable", system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: hsl(var(--line));
+    border-radius: 999px;
+    border: 3px solid transparent;
+    background-clip: content-box;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: hsl(var(--muted) / 0.5);
+    background-clip: content-box;
+  }
+}

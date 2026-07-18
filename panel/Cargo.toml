@@ -1,9 +1,0 @@
-[package]
-name = "arna-panel"
-version = "0.1.0"
-edition = "2021"
-description = "Arna — an empty panel window (starting scaffold)"
-license = "LicenseRef-Proprietary"
-
-[dependencies]
-eframe = "0.29"
