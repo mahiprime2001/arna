@@ -91,3 +91,26 @@ export const initialNotes: Note[] = [
 
 // No workspaces yet, by design.
 export const workspaces: { id: string; name: string; state: string }[] = [];
+
+export interface ChatMessage {
+  id: number;
+  mine: boolean;
+  text: string;
+  time: string;
+}
+
+// Direct-message threads, keyed by friend id.
+export const conversations: Record<number, ChatMessage[]> = {
+  1: [
+    { id: 1, mine: false, text: "hey! are you around later?", time: "10:02" },
+    { id: 2, mine: true, text: "yeah, after 3 works", time: "10:03" },
+    { id: 3, mine: false, text: "perfect. can you lend me a box to test a build?", time: "10:03" },
+    { id: 4, mine: true, text: "for sure, i'll spin up a workspace for you", time: "10:04" },
+  ],
+  2: [
+    { id: 1, mine: false, text: "pushed the fix, take a look when you can", time: "09:15" },
+    { id: 2, mine: true, text: "on it", time: "09:20" },
+  ],
+  3: [{ id: 1, mine: true, text: "welcome to Arna :)", time: "yesterday" }],
+};
+

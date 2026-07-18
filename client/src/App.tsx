@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
 import { TitleBar } from "@/components/TitleBar";
 import { Sidebar } from "@/components/Sidebar";
+import { CallOverlay, type Call } from "@/components/CallOverlay";
 import { Dashboard } from "@/views/Dashboard";
 import { Workspaces } from "@/views/Workspaces";
 import { Friends } from "@/views/Friends";
+import { Messages } from "@/views/Messages";
 import { Notifications } from "@/views/Notifications";
 import { Profile } from "@/views/Profile";
 import { Settings } from "@/views/Settings";
@@ -31,6 +33,8 @@ export default function App() {
   const [friends, setFriends] = useState<Friend[]>(initialFriends);
   const [requests, setRequests] = useState<FriendRequest[]>(initialRequests);
   const [sent, setSent] = useState<SentRequest[]>(initialSent);
+  const [dmFriend, setDmFriend] = useState<number | null>(null);
+  const [call, setCall] = useState<Call | null>(null);
 
   useEffect(() => {
     document.documentElement.classList.toggle("dark", theme === "dark");
@@ -38,7 +42,6 @@ export default function App() {
 
   const unread = useMemo(() => notes.filter((n) => !n.read).length, [notes]);
 
-  // Friend actions (mock).
   const acceptRequest = (id: number) => {
     const r = requests.find((x) => x.id === id);
     if (!r) return;
@@ -50,12 +53,14 @@ export default function App() {
   };
   const declineRequest = (id: number) =>
     setRequests((rs) => rs.filter((x) => x.id !== id));
-  const cancelSent = (id: number) =>
-    setSent((ss) => ss.filter((x) => x.id !== id));
-  const removeFriend = (id: number) =>
-    setFriends((f) => f.filter((x) => x.id !== id));
+  const cancelSent = (id: number) => setSent((ss) => ss.filter((x) => x.id !== id));
+  const removeFriend = (id: number) => setFriends((f) => f.filter((x) => x.id !== id));
   const addFriend = (handle: string) =>
     setSent((ss) => [{ id: nextId++, handle }, ...ss]);
+  const openDm = (id: number) => {
+    setDmFriend(id);
+    setRoute("messages");
+  };
 
   return (
     <div className="flex h-screen flex-col overflow-hidden bg-canvas text-ink">
@@ -78,6 +83,9 @@ export default function App() {
               />
             )}
             {route === "workspaces" && <Workspaces />}
+            {route === "messages" && (
+              <Messages friends={friends} initialFriendId={dmFriend} onCall={setCall} />
+            )}
             {route === "friends" && (
               <Friends
                 friends={friends}
@@ -88,6 +96,8 @@ export default function App() {
                 onCancelSent={cancelSent}
                 onRemove={removeFriend}
                 onAdd={addFriend}
+                onMessage={openDm}
+                onCall={setCall}
               />
             )}
             {route === "notifications" && (
@@ -98,6 +108,8 @@ export default function App() {
           </div>
         </main>
       </div>
+
+      {call && <CallOverlay call={call} onEnd={() => setCall(null)} />}
     </div>
   );
 }

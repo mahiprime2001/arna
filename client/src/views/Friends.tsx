@@ -1,7 +1,8 @@
 import { useState } from "react";
 import {
   UserPlus,
-  PaperPlaneTilt,
+  ChatCircle,
+  VideoCamera,
   Trash,
   Check,
   X,
@@ -13,6 +14,7 @@ import { Input } from "@/components/ui/Input";
 import { Avatar } from "@/components/Avatar";
 import { PageHeader } from "@/components/PageHeader";
 import { cn } from "@/lib/utils";
+import type { Call } from "@/components/CallOverlay";
 import type { Friend, FriendRequest, Presence, SentRequest } from "@/lib/mock";
 
 function SectionTitle({ label, count }: { label: string; count?: number }) {
@@ -52,6 +54,8 @@ export function Friends({
   onCancelSent,
   onRemove,
   onAdd,
+  onMessage,
+  onCall,
 }: {
   friends: Friend[];
   requests: FriendRequest[];
@@ -61,6 +65,8 @@ export function Friends({
   onCancelSent: (id: number) => void;
   onRemove: (id: number) => void;
   onAdd: (handle: string) => void;
+  onMessage: (id: number) => void;
+  onCall: (call: Call) => void;
 }) {
   const [adding, setAdding] = useState(false);
   const [handle, setHandle] = useState("");
@@ -185,15 +191,19 @@ export function Friends({
                       <Button
                         size="sm"
                         variant="outline"
-                        disabled={f.presence === "offline"}
-                        title={
-                          f.presence === "offline"
-                            ? "They are offline right now"
-                            : "Invite to a workspace"
-                        }
+                        onClick={() => onMessage(f.id)}
                       >
-                        <PaperPlaneTilt size={15} /> Invite
+                        <ChatCircle size={15} /> Message
                       </Button>
+                      {f.presence !== "offline" && (
+                        <button
+                          onClick={() => onCall({ name: f.name, kind: "video" })}
+                          title="Video call"
+                          className="grid h-8 w-8 place-items-center rounded-md text-muted transition-colors hover:bg-elevated hover:text-ink"
+                        >
+                          <VideoCamera size={16} />
+                        </button>
+                      )}
                       <button
                         onClick={() => setConfirmId(f.id)}
                         title="Remove friend"

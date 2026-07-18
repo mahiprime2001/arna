@@ -1,6 +1,7 @@
 import {
   House,
   StackSimple,
+  ChatCircle,
   UsersThree,
   Bell,
   UserCircle,
@@ -14,6 +15,7 @@ import type { Route, User } from "@/lib/mock";
 const ITEMS: { id: Route; label: string; icon: Icon }[] = [
   { id: "dashboard", label: "Dashboard", icon: House },
   { id: "workspaces", label: "Workspaces", icon: StackSimple },
+  { id: "messages", label: "Messages", icon: ChatCircle },
   { id: "friends", label: "Friends", icon: UsersThree },
   { id: "notifications", label: "Notifications", icon: Bell },
   { id: "profile", label: "Profile", icon: UserCircle },
