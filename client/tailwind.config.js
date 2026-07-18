@@ -17,6 +17,7 @@ export default {
           soft: "hsl(var(--brand) / 0.12)",
         },
         good: "hsl(var(--good))",
+        warn: "hsl(var(--warn))",
         danger: "hsl(var(--danger))",
       },
       borderColor: { DEFAULT: "hsl(var(--line))" },

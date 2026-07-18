@@ -101,7 +101,7 @@ export function Dashboard({
                     f.presence === "online"
                       ? "bg-good"
                       : f.presence === "workspace"
-                        ? "bg-brand"
+                        ? "bg-warn"
                         : "bg-line",
                   )}
                 />

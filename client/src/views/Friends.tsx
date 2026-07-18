@@ -31,7 +31,7 @@ function SectionTitle({ label, count }: { label: string; count?: number }) {
 function PresenceTag({ presence }: { presence: Presence }) {
   const map: Record<Presence, { dot: string; text: string; label: string }> = {
     online: { dot: "bg-good", text: "text-good", label: "Online" },
-    workspace: { dot: "bg-brand", text: "text-brand", label: "In a workspace" },
+    workspace: { dot: "bg-warn", text: "text-warn", label: "In a workspace" },
     offline: { dot: "bg-muted/50", text: "text-muted", label: "Offline" },
   };
   const s = map[presence];
