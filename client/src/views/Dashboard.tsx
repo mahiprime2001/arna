@@ -10,14 +10,17 @@ import { Button } from "@/components/ui/Button";
 import { Avatar } from "@/components/Avatar";
 import { PageHeader } from "@/components/PageHeader";
 import { cn } from "@/lib/utils";
-import { user, workspaces, type Friend, type Route } from "@/lib/mock";
+import { workspaces, type Friend, type Route } from "@/lib/mock";
+import type { AuthUser } from "@/lib/api";
 
 export function Dashboard({
+  user,
   friends,
   requestCount,
   unread,
   setRoute,
 }: {
+  user: AuthUser;
   friends: Friend[];
   requestCount: number;
   unread: number;

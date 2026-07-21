@@ -3,7 +3,7 @@ import { Card } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
 import { Avatar } from "@/components/Avatar";
 import { PageHeader } from "@/components/PageHeader";
-import { user } from "@/lib/mock";
+import type { AuthUser } from "@/lib/api";
 
 function Row({ label, value }: { label: string; value: string }) {
   return (
@@ -14,7 +14,13 @@ function Row({ label, value }: { label: string; value: string }) {
   );
 }
 
-export function Profile() {
+export function Profile({
+  user,
+  onSignOut,
+}: {
+  user: AuthUser;
+  onSignOut: () => void;
+}) {
   return (
     <div className="animate-fade-up space-y-6">
       <PageHeader title="Profile" />
@@ -41,7 +47,7 @@ export function Profile() {
         <Button variant="outline">
           <PencilSimple size={16} /> Edit profile
         </Button>
-        <Button variant="danger">
+        <Button variant="danger" onClick={onSignOut}>
           <SignOut size={16} /> Sign out
         </Button>
       </div>

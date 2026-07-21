@@ -14,19 +14,25 @@ import {
   initialNotes,
   initialRequests,
   initialSent,
-  user,
   type Friend,
   type FriendRequest,
   type Note,
   type Route,
   type SentRequest,
 } from "@/lib/mock";
+import type { AuthUser } from "@/lib/api";
 
 export type Theme = "dark" | "light";
 
 let nextId = 1000;
 
-export default function App() {
+export default function App({
+  user,
+  onSignOut,
+}: {
+  user: AuthUser;
+  onSignOut: () => void;
+}) {
   const [route, setRoute] = useState<Route>("dashboard");
   const [theme, setTheme] = useState<Theme>("dark");
   const [notes, setNotes] = useState<Note[]>(initialNotes);
@@ -76,6 +82,7 @@ export default function App() {
           <div className="mx-auto max-w-5xl px-8 py-8">
             {route === "dashboard" && (
               <Dashboard
+                user={user}
                 friends={friends}
                 requestCount={requests.length}
                 unread={unread}
@@ -103,7 +110,7 @@ export default function App() {
             {route === "notifications" && (
               <Notifications notes={notes} setNotes={setNotes} />
             )}
-            {route === "profile" && <Profile />}
+            {route === "profile" && <Profile user={user} onSignOut={onSignOut} />}
             {route === "settings" && <Settings theme={theme} setTheme={setTheme} />}
           </div>
         </main>

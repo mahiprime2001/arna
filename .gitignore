@@ -2,6 +2,13 @@
 /target/
 **/target/
 
+# Go
+/services/arna-services
+/services/arna-services.exe
+/services/*.db
+/services/*.db-shm
+/services/*.db-wal
+
 # Node / frontend
 node_modules/
 dist/
