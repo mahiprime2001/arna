@@ -1,8 +1,8 @@
-// Arna services: a small accounts backend (Go + SQLite).
+// Arna services: accounts + social graph (Go + SQLite).
 //
-// It stores ONLY accounts and sessions. It never stores messages: chat is
-// device-local and end-to-end encrypted, with the relay (added later) only
-// forwarding ciphertext and forgetting it after delivery.
+// Stores accounts, sessions, and friendships only. It never stores messages:
+// chat is device-local and end-to-end encrypted, with a relay (added later)
+// that forwards ciphertext and forgets it after delivery.
 package main
 
 import (
@@ -29,9 +29,7 @@ func main() {
 		log.Fatal(err)
 	}
 	db.SetMaxOpenConns(1) // SQLite: single writer
-	if err := migrate(); err != nil {
-		log.Fatal(err)
-	}
+	migrate()
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/health", health)
@@ -39,6 +37,13 @@ func main() {
 	mux.HandleFunc("/api/login", login)
 	mux.HandleFunc("/api/logout", logout)
 	mux.HandleFunc("/api/me", me)
+	mux.HandleFunc("/api/presence/ping", presencePing)
+	mux.HandleFunc("/api/friends", friendsList)
+	mux.HandleFunc("/api/friends/request", friendRequest)
+	mux.HandleFunc("/api/friends/respond", friendRespond)
+	mux.HandleFunc("/api/friends/cancel", friendCancel)
+	mux.HandleFunc("/api/friends/remove", friendRemove)
+	mux.HandleFunc("/api/users/search", userSearch)
 
 	addr := "0.0.0.0:" + env("PORT", "8787")
 	log.Println("arna services listening on", addr)
@@ -52,26 +57,33 @@ func env(k, d string) string {
 	return d
 }
 
-func migrate() error {
-	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS users (
+func migrate() {
+	db.Exec(`CREATE TABLE IF NOT EXISTS users (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
 		email TEXT UNIQUE NOT NULL,
 		name TEXT NOT NULL,
 		handle TEXT NOT NULL,
 		pass_hash TEXT NOT NULL,
+		last_seen TEXT,
 		created_at TEXT NOT NULL
-	)`); err != nil {
-		return err
-	}
-	_, err := db.Exec(`CREATE TABLE IF NOT EXISTS sessions (
+	)`)
+	db.Exec(`ALTER TABLE users ADD COLUMN last_seen TEXT`) // for older DBs; ignored if present
+	db.Exec(`CREATE TABLE IF NOT EXISTS sessions (
 		token TEXT PRIMARY KEY,
 		user_id INTEGER NOT NULL,
 		created_at TEXT NOT NULL
 	)`)
-	return err
+	db.Exec(`CREATE TABLE IF NOT EXISTS friend_edges (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		requester_id INTEGER NOT NULL,
+		addressee_id INTEGER NOT NULL,
+		status TEXT NOT NULL,
+		created_at TEXT NOT NULL,
+		UNIQUE(requester_id, addressee_id)
+	)`)
 }
 
-// Cross-origin dev: the client (port 4320) calls this API (port 8787).
+// Cross-origin dev: client (4320) calls this API (8787).
 func cors(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
@@ -92,6 +104,8 @@ type User struct {
 	Handle string `json:"handle"`
 }
 
+func now() string { return time.Now().UTC().Format(time.RFC3339) }
+
 func writeJSON(w http.ResponseWriter, code int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
@@ -110,8 +124,7 @@ func newToken() string {
 
 func createSession(uid int64) (string, error) {
 	t := newToken()
-	_, err := db.Exec("INSERT INTO sessions(token,user_id,created_at) VALUES(?,?,?)",
-		t, uid, time.Now().UTC().Format(time.RFC3339))
+	_, err := db.Exec("INSERT INTO sessions(token,user_id,created_at) VALUES(?,?,?)", t, uid, now())
 	return t, err
 }
 
@@ -123,14 +136,35 @@ func bearer(r *http.Request) string {
 	return ""
 }
 
+func currentUID(r *http.Request) (int64, bool) {
+	tok := bearer(r)
+	if tok == "" {
+		return 0, false
+	}
+	var uid int64
+	if db.QueryRow("SELECT user_id FROM sessions WHERE token=?", tok).Scan(&uid) != nil {
+		return 0, false
+	}
+	return uid, true
+}
+
+func presenceFor(ls sql.NullString) string {
+	if !ls.Valid || ls.String == "" {
+		return "offline"
+	}
+	t, err := time.Parse(time.RFC3339, ls.String)
+	if err != nil || time.Since(t) > 45*time.Second {
+		return "offline"
+	}
+	return "online"
+}
+
 func health(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, 200, map[string]string{"status": "ok"})
 }
 
 func signup(w http.ResponseWriter, r *http.Request) {
-	var in struct {
-		Email, Name, Password string
-	}
+	var in struct{ Email, Name, Password string }
 	if json.NewDecoder(r.Body).Decode(&in) != nil {
 		fail(w, 400, "bad request")
 		return
@@ -146,8 +180,8 @@ func signup(w http.ResponseWriter, r *http.Request) {
 	}
 	handle := "@" + strings.Split(in.Email, "@")[0]
 	hash, _ := bcrypt.GenerateFromPassword([]byte(in.Password), bcrypt.DefaultCost)
-	res, err := db.Exec("INSERT INTO users(email,name,handle,pass_hash,created_at) VALUES(?,?,?,?,?)",
-		in.Email, name, handle, string(hash), time.Now().UTC().Format(time.RFC3339))
+	res, err := db.Exec("INSERT INTO users(email,name,handle,pass_hash,last_seen,created_at) VALUES(?,?,?,?,?,?)",
+		in.Email, name, handle, string(hash), now(), now())
 	if err != nil {
 		fail(w, 409, "that email is already registered")
 		return
@@ -172,18 +206,14 @@ func login(w http.ResponseWriter, r *http.Request) {
 		fail(w, 401, "wrong email or password")
 		return
 	}
+	db.Exec("UPDATE users SET last_seen=? WHERE id=?", now(), u.ID)
 	tok, _ := createSession(u.ID)
 	writeJSON(w, 200, map[string]any{"token": tok, "user": u})
 }
 
 func me(w http.ResponseWriter, r *http.Request) {
-	tok := bearer(r)
-	if tok == "" {
-		fail(w, 401, "not signed in")
-		return
-	}
-	var uid int64
-	if db.QueryRow("SELECT user_id FROM sessions WHERE token=?", tok).Scan(&uid) != nil {
+	uid, ok := currentUID(r)
+	if !ok {
 		fail(w, 401, "not signed in")
 		return
 	}
@@ -199,4 +229,233 @@ func me(w http.ResponseWriter, r *http.Request) {
 func logout(w http.ResponseWriter, r *http.Request) {
 	db.Exec("DELETE FROM sessions WHERE token=?", bearer(r))
 	writeJSON(w, 200, map[string]string{"status": "ok"})
+}
+
+func presencePing(w http.ResponseWriter, r *http.Request) {
+	uid, ok := currentUID(r)
+	if !ok {
+		fail(w, 401, "not signed in")
+		return
+	}
+	db.Exec("UPDATE users SET last_seen=? WHERE id=?", now(), uid)
+	writeJSON(w, 200, map[string]string{"status": "ok"})
+}
+
+// GET /api/friends -> { friends, incoming, outgoing }
+func friendsList(w http.ResponseWriter, r *http.Request) {
+	uid, ok := currentUID(r)
+	if !ok {
+		fail(w, 401, "not signed in")
+		return
+	}
+
+	friends := []map[string]any{}
+	rows, _ := db.Query(`SELECT u.id,u.name,u.handle,u.last_seen FROM friend_edges e
+		JOIN users u ON u.id = CASE WHEN e.requester_id=? THEN e.addressee_id ELSE e.requester_id END
+		WHERE e.status='accepted' AND (e.requester_id=? OR e.addressee_id=?)
+		ORDER BY u.name`, uid, uid, uid)
+	if rows != nil {
+		for rows.Next() {
+			var id int64
+			var name, handle string
+			var ls sql.NullString
+			rows.Scan(&id, &name, &handle, &ls)
+			friends = append(friends, map[string]any{
+				"id": id, "name": name, "handle": handle, "presence": presenceFor(ls),
+			})
+		}
+		rows.Close()
+	}
+
+	incoming := []map[string]any{}
+	rows, _ = db.Query(`SELECT e.id,u.id,u.name,u.handle FROM friend_edges e
+		JOIN users u ON u.id=e.requester_id
+		WHERE e.addressee_id=? AND e.status='pending' ORDER BY e.created_at DESC`, uid)
+	if rows != nil {
+		for rows.Next() {
+			var eid, userID int64
+			var name, handle string
+			rows.Scan(&eid, &userID, &name, &handle)
+			incoming = append(incoming, map[string]any{
+				"id": eid, "userId": userID, "name": name, "handle": handle,
+			})
+		}
+		rows.Close()
+	}
+
+	outgoing := []map[string]any{}
+	rows, _ = db.Query(`SELECT e.id,u.handle FROM friend_edges e
+		JOIN users u ON u.id=e.addressee_id
+		WHERE e.requester_id=? AND e.status='pending' ORDER BY e.created_at DESC`, uid)
+	if rows != nil {
+		for rows.Next() {
+			var eid int64
+			var handle string
+			rows.Scan(&eid, &handle)
+			outgoing = append(outgoing, map[string]any{"id": eid, "handle": handle})
+		}
+		rows.Close()
+	}
+
+	writeJSON(w, 200, map[string]any{"friends": friends, "incoming": incoming, "outgoing": outgoing})
+}
+
+func friendRequest(w http.ResponseWriter, r *http.Request) {
+	uid, ok := currentUID(r)
+	if !ok {
+		fail(w, 401, "not signed in")
+		return
+	}
+	var in struct{ Handle, Email string }
+	json.NewDecoder(r.Body).Decode(&in)
+	q := strings.ToLower(strings.TrimSpace(in.Handle))
+	if q == "" {
+		q = strings.ToLower(strings.TrimSpace(in.Email))
+	}
+	if q == "" {
+		fail(w, 400, "who do you want to add?")
+		return
+	}
+	handle := "@" + strings.TrimPrefix(q, "@")
+
+	var tid int64
+	if db.QueryRow("SELECT id FROM users WHERE lower(handle)=? OR lower(email)=?", handle, q).Scan(&tid) != nil {
+		fail(w, 404, "no one found with that handle or email")
+		return
+	}
+	if tid == uid {
+		fail(w, 400, "you can't add yourself")
+		return
+	}
+
+	var eid, reqr int64
+	var status string
+	if db.QueryRow(`SELECT id,status,requester_id FROM friend_edges
+		WHERE (requester_id=? AND addressee_id=?) OR (requester_id=? AND addressee_id=?)`,
+		uid, tid, tid, uid).Scan(&eid, &status, &reqr) == nil {
+		if status == "accepted" {
+			fail(w, 409, "you're already friends")
+			return
+		}
+		if reqr == tid { // they already asked you; accept it
+			db.Exec("UPDATE friend_edges SET status='accepted' WHERE id=?", eid)
+			writeJSON(w, 200, map[string]string{"status": "accepted"})
+			return
+		}
+		fail(w, 409, "request already sent")
+		return
+	}
+
+	db.Exec("INSERT INTO friend_edges(requester_id,addressee_id,status,created_at) VALUES(?,?,?,?)",
+		uid, tid, "pending", now())
+	writeJSON(w, 200, map[string]string{"status": "sent"})
+}
+
+func friendRespond(w http.ResponseWriter, r *http.Request) {
+	uid, ok := currentUID(r)
+	if !ok {
+		fail(w, 401, "not signed in")
+		return
+	}
+	var in struct {
+		ID     int64
+		Action string
+	}
+	json.NewDecoder(r.Body).Decode(&in)
+	var reqr int64
+	if db.QueryRow("SELECT requester_id FROM friend_edges WHERE id=? AND addressee_id=? AND status='pending'",
+		in.ID, uid).Scan(&reqr) != nil {
+		fail(w, 404, "request not found")
+		return
+	}
+	if in.Action == "accept" {
+		db.Exec("UPDATE friend_edges SET status='accepted' WHERE id=?", in.ID)
+	} else {
+		db.Exec("DELETE FROM friend_edges WHERE id=?", in.ID)
+	}
+	writeJSON(w, 200, map[string]string{"status": "ok"})
+}
+
+func friendCancel(w http.ResponseWriter, r *http.Request) {
+	uid, ok := currentUID(r)
+	if !ok {
+		fail(w, 401, "not signed in")
+		return
+	}
+	var in struct{ ID int64 }
+	json.NewDecoder(r.Body).Decode(&in)
+	db.Exec("DELETE FROM friend_edges WHERE id=? AND requester_id=? AND status='pending'", in.ID, uid)
+	writeJSON(w, 200, map[string]string{"status": "ok"})
+}
+
+func friendRemove(w http.ResponseWriter, r *http.Request) {
+	uid, ok := currentUID(r)
+	if !ok {
+		fail(w, 401, "not signed in")
+		return
+	}
+	var in struct{ UserID int64 }
+	json.NewDecoder(r.Body).Decode(&in)
+	db.Exec(`DELETE FROM friend_edges WHERE status='accepted'
+		AND ((requester_id=? AND addressee_id=?) OR (requester_id=? AND addressee_id=?))`,
+		uid, in.UserID, in.UserID, uid)
+	writeJSON(w, 200, map[string]string{"status": "ok"})
+}
+
+// GET /api/users/search?q= -> people you can add, with relationship status.
+func userSearch(w http.ResponseWriter, r *http.Request) {
+	uid, ok := currentUID(r)
+	if !ok {
+		fail(w, 401, "not signed in")
+		return
+	}
+	q := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("q")))
+	if len(q) < 1 {
+		writeJSON(w, 200, map[string]any{"users": []any{}})
+		return
+	}
+	like := "%" + q + "%"
+	// Collect rows and close BEFORE computing relStatus: SQLite is capped at one
+	// connection, so a query inside an open rows loop would self-deadlock.
+	type hit struct {
+		id           int64
+		name, handle string
+	}
+	hits := []hit{}
+	rows, _ := db.Query(`SELECT id,name,handle FROM users
+		WHERE id!=? AND (lower(handle) LIKE ? OR lower(name) LIKE ? OR lower(email) LIKE ?)
+		ORDER BY name LIMIT 10`, uid, like, like, like)
+	if rows != nil {
+		for rows.Next() {
+			var h hit
+			rows.Scan(&h.id, &h.name, &h.handle)
+			hits = append(hits, h)
+		}
+		rows.Close()
+	}
+	users := []map[string]any{}
+	for _, h := range hits {
+		users = append(users, map[string]any{
+			"id": h.id, "name": h.name, "handle": h.handle, "status": relStatus(uid, h.id),
+		})
+	}
+	writeJSON(w, 200, map[string]any{"users": users})
+}
+
+// none | friends | incoming | outgoing
+func relStatus(me, other int64) string {
+	var status string
+	var reqr int64
+	if db.QueryRow(`SELECT status,requester_id FROM friend_edges
+		WHERE (requester_id=? AND addressee_id=?) OR (requester_id=? AND addressee_id=?)`,
+		me, other, other, me).Scan(&status, &reqr) != nil {
+		return "none"
+	}
+	if status == "accepted" {
+		return "friends"
+	}
+	if reqr == me {
+		return "outgoing"
+	}
+	return "incoming"
 }

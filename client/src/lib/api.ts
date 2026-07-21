@@ -65,3 +65,52 @@ export async function logout() {
   }
   clearToken();
 }
+
+// ── Social graph ────────────────────────────────────────────────────────────
+import type {
+  Friend,
+  FriendRequest,
+  SearchResult,
+  SentRequest,
+} from "@/lib/mock";
+
+export async function getFriends(): Promise<{
+  friends: Friend[];
+  incoming: FriendRequest[];
+  outgoing: SentRequest[];
+}> {
+  return req("/api/friends");
+}
+
+export async function sendFriendRequest(handle: string) {
+  return req("/api/friends/request", {
+    method: "POST",
+    body: JSON.stringify({ handle }),
+  });
+}
+
+export async function respondFriendRequest(id: number, action: "accept" | "decline") {
+  return req("/api/friends/respond", {
+    method: "POST",
+    body: JSON.stringify({ id, action }),
+  });
+}
+
+export async function cancelFriendRequest(id: number) {
+  return req("/api/friends/cancel", { method: "POST", body: JSON.stringify({ id }) });
+}
+
+export async function removeFriend(userId: number) {
+  return req("/api/friends/remove", {
+    method: "POST",
+    body: JSON.stringify({ userId }),
+  });
+}
+
+export async function searchUsers(q: string): Promise<{ users: SearchResult[] }> {
+  return req(`/api/users/search?q=${encodeURIComponent(q)}`);
+}
+
+export async function ping() {
+  return req("/api/presence/ping", { method: "POST" });
+}

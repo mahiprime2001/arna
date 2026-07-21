@@ -1,12 +1,12 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   UserPlus,
   ChatCircle,
   VideoCamera,
   Trash,
   Check,
-  X,
   ClockCountdown,
+  MagnifyingGlass,
 } from "@phosphor-icons/react";
 import { Card } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
@@ -14,8 +14,15 @@ import { Input } from "@/components/ui/Input";
 import { Avatar } from "@/components/Avatar";
 import { PageHeader } from "@/components/PageHeader";
 import { cn } from "@/lib/utils";
+import * as api from "@/lib/api";
 import type { Call } from "@/components/CallOverlay";
-import type { Friend, FriendRequest, Presence, SentRequest } from "@/lib/mock";
+import type {
+  Friend,
+  FriendRequest,
+  Presence,
+  SearchResult,
+  SentRequest,
+} from "@/lib/mock";
 
 function SectionTitle({ label, count }: { label: string; count?: number }) {
   return (
@@ -45,6 +52,120 @@ function PresenceTag({ presence }: { presence: Presence }) {
   );
 }
 
+// Live people search with an inline add / accept.
+function FindPeople({ onAdd }: { onAdd: (handle: string) => Promise<void> }) {
+  const [q, setQ] = useState("");
+  const [results, setResults] = useState<SearchResult[]>([]);
+  const [msg, setMsg] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    const query = q.trim();
+    if (!query) {
+      setResults([]);
+      return;
+    }
+    const h = setTimeout(async () => {
+      try {
+        const d = await api.searchUsers(query);
+        setResults(d.users);
+      } catch {
+        setResults([]);
+      }
+    }, 250);
+    return () => clearTimeout(h);
+  }, [q]);
+
+  const rerun = async () => {
+    try {
+      const d = await api.searchUsers(q.trim());
+      setResults(d.users);
+    } catch {
+      /* ignore */
+    }
+  };
+
+  const add = async (handle: string) => {
+    setMsg("");
+    setBusy(true);
+    try {
+      await onAdd(handle);
+      setMsg(`Sent to ${handle}.`);
+      await rerun();
+    } catch (e) {
+      setMsg(e instanceof Error ? e.message : "Could not send the request.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const raw = q.trim().startsWith("@") ? q.trim() : `@${q.trim()}`;
+
+  return (
+    <Card className="p-4">
+      <div className="relative">
+        <MagnifyingGlass
+          size={16}
+          className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-muted"
+        />
+        <Input
+          autoFocus
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+          placeholder="Find people by name or handle"
+          className="pl-9"
+        />
+      </div>
+      {msg && <p className="mt-2.5 text-[13px] text-muted">{msg}</p>}
+
+      <div className="mt-2">
+        {results.map((u) => (
+          <div key={u.id} className="flex items-center gap-3 rounded-lg px-1 py-2">
+            <Avatar name={u.name} size={36} />
+            <div className="min-w-0">
+              <p className="text-sm font-medium leading-tight">{u.name}</p>
+              <p className="text-[12.5px] text-muted">{u.handle}</p>
+            </div>
+            <div className="ml-auto">
+              {u.status === "none" && (
+                <Button size="sm" disabled={busy} onClick={() => add(u.handle)}>
+                  <UserPlus size={15} weight="bold" /> Add
+                </Button>
+              )}
+              {u.status === "incoming" && (
+                <Button size="sm" disabled={busy} onClick={() => add(u.handle)}>
+                  <Check size={15} weight="bold" /> Accept
+                </Button>
+              )}
+              {u.status === "outgoing" && (
+                <span className="text-[13px] text-muted">Requested</span>
+              )}
+              {u.status === "friends" && (
+                <span className="inline-flex items-center gap-1 text-[13px] text-good">
+                  <Check size={14} weight="bold" /> Friends
+                </span>
+              )}
+            </div>
+          </div>
+        ))}
+
+        {q.trim() && results.length === 0 && (
+          <p className="px-1 py-2 text-[13px] text-muted">
+            No one found.{" "}
+            <button
+              disabled={busy}
+              onClick={() => add(raw)}
+              className="font-medium text-brand hover:underline"
+            >
+              Send a request to {raw}
+            </button>
+          </p>
+        )}
+      </div>
+    </Card>
+  );
+}
+
 export function Friends({
   friends,
   requests,
@@ -63,23 +184,13 @@ export function Friends({
   onAccept: (id: number) => void;
   onDecline: (id: number) => void;
   onCancelSent: (id: number) => void;
-  onRemove: (id: number) => void;
-  onAdd: (handle: string) => void;
+  onRemove: (userId: number) => void;
+  onAdd: (handle: string) => Promise<void>;
   onMessage: (id: number) => void;
   onCall: (call: Call) => void;
 }) {
   const [adding, setAdding] = useState(false);
-  const [handle, setHandle] = useState("");
   const [confirmId, setConfirmId] = useState<number | null>(null);
-
-  const submitAdd = (e: React.FormEvent) => {
-    e.preventDefault();
-    const h = handle.trim();
-    if (!h) return;
-    onAdd(h.startsWith("@") ? h : `@${h}`);
-    setHandle("");
-    setAdding(false);
-  };
 
   return (
     <div className="animate-fade-up space-y-8">
@@ -87,31 +198,16 @@ export function Friends({
         title="Friends"
         subtitle="People you can start workspaces with."
         action={
-          <Button variant={adding ? "outline" : "primary"} onClick={() => setAdding((v) => !v)}>
+          <Button
+            variant={adding ? "outline" : "primary"}
+            onClick={() => setAdding((v) => !v)}
+          >
             <UserPlus size={16} weight="bold" /> Add friend
           </Button>
         }
       />
 
-      {adding && (
-        <Card className="p-4">
-          <form onSubmit={submitAdd} className="flex gap-2">
-            <Input
-              autoFocus
-              value={handle}
-              onChange={(e) => setHandle(e.target.value)}
-              placeholder="Their handle or email, like @sam"
-            />
-            <Button type="submit" disabled={!handle.trim()}>
-              Send request
-            </Button>
-          </form>
-          <p className="mt-2.5 text-[13px] text-muted">
-            They will get a request to connect. Once they accept, you can start a
-            workspace together.
-          </p>
-        </Card>
-      )}
+      {adding && <FindPeople onAdd={onAdd} />}
 
       {requests.length > 0 && (
         <section>
@@ -122,16 +218,14 @@ export function Friends({
                 <Avatar name={r.name} size={40} />
                 <div className="min-w-0">
                   <p className="font-medium leading-tight">{r.name}</p>
-                  <p className="text-[13px] text-muted">
-                    {r.handle} · {r.mutual} mutual
-                  </p>
+                  <p className="text-[13px] text-muted">{r.handle}</p>
                 </div>
                 <div className="ml-auto flex gap-2">
                   <Button size="sm" onClick={() => onAccept(r.id)}>
                     <Check size={15} weight="bold" /> Accept
                   </Button>
                   <Button size="sm" variant="ghost" onClick={() => onDecline(r.id)}>
-                    <X size={15} weight="bold" /> Decline
+                    Decline
                   </Button>
                 </div>
               </Card>
@@ -149,7 +243,8 @@ export function Friends({
             </div>
             <p className="font-medium">No friends yet</p>
             <p className="max-w-xs text-sm text-muted">
-              Add someone by their handle. When they accept, they show up here.
+              Use Add friend to find someone by their handle. When they accept,
+              they show up here.
             </p>
           </Card>
         ) : (
@@ -167,7 +262,6 @@ export function Friends({
                 <div className="ml-4 hidden sm:block">
                   <PresenceTag presence={f.presence} />
                 </div>
-
                 <div className="ml-auto flex items-center gap-2">
                   {confirmId === f.id ? (
                     <>
@@ -188,11 +282,7 @@ export function Friends({
                     </>
                   ) : (
                     <>
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        onClick={() => onMessage(f.id)}
-                      >
+                      <Button size="sm" variant="outline" onClick={() => onMessage(f.id)}>
                         <ChatCircle size={15} /> Message
                       </Button>
                       {f.presence !== "offline" && (

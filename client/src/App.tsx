@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { TitleBar } from "@/components/TitleBar";
 import { Sidebar } from "@/components/Sidebar";
 import { CallOverlay, type Call } from "@/components/CallOverlay";
@@ -10,21 +10,16 @@ import { Notifications } from "@/views/Notifications";
 import { Profile } from "@/views/Profile";
 import { Settings } from "@/views/Settings";
 import {
-  initialFriends,
-  initialNotes,
-  initialRequests,
-  initialSent,
   type Friend,
   type FriendRequest,
   type Note,
   type Route,
   type SentRequest,
 } from "@/lib/mock";
+import * as api from "@/lib/api";
 import type { AuthUser } from "@/lib/api";
 
 export type Theme = "dark" | "light";
-
-let nextId = 1000;
 
 export default function App({
   user,
@@ -35,10 +30,10 @@ export default function App({
 }) {
   const [route, setRoute] = useState<Route>("dashboard");
   const [theme, setTheme] = useState<Theme>("dark");
-  const [notes, setNotes] = useState<Note[]>(initialNotes);
-  const [friends, setFriends] = useState<Friend[]>(initialFriends);
-  const [requests, setRequests] = useState<FriendRequest[]>(initialRequests);
-  const [sent, setSent] = useState<SentRequest[]>(initialSent);
+  const [notes, setNotes] = useState<Note[]>([]);
+  const [friends, setFriends] = useState<Friend[]>([]);
+  const [requests, setRequests] = useState<FriendRequest[]>([]);
+  const [sent, setSent] = useState<SentRequest[]>([]);
   const [dmFriend, setDmFriend] = useState<number | null>(null);
   const [call, setCall] = useState<Call | null>(null);
 
@@ -46,23 +41,52 @@ export default function App({
     document.documentElement.classList.toggle("dark", theme === "dark");
   }, [theme]);
 
+  // Live social graph: load, then poll, and heartbeat presence.
+  const refresh = useCallback(async () => {
+    try {
+      const d = await api.getFriends();
+      setFriends(d.friends);
+      setRequests(d.incoming);
+      setSent(d.outgoing);
+    } catch {
+      // stay with what we have
+    }
+  }, []);
+
+  useEffect(() => {
+    refresh();
+    api.ping().catch(() => {});
+    const poll = setInterval(refresh, 8000);
+    const beat = setInterval(() => api.ping().catch(() => {}), 15000);
+    return () => {
+      clearInterval(poll);
+      clearInterval(beat);
+    };
+  }, [refresh]);
+
   const unread = useMemo(() => notes.filter((n) => !n.read).length, [notes]);
 
-  const acceptRequest = (id: number) => {
-    const r = requests.find((x) => x.id === id);
-    if (!r) return;
-    setFriends((f) => [
-      { id: r.id, name: r.name, handle: r.handle, presence: "online" as const },
-      ...f,
-    ]);
-    setRequests((rs) => rs.filter((x) => x.id !== id));
+  const acceptRequest = async (id: number) => {
+    await api.respondFriendRequest(id, "accept");
+    refresh();
   };
-  const declineRequest = (id: number) =>
-    setRequests((rs) => rs.filter((x) => x.id !== id));
-  const cancelSent = (id: number) => setSent((ss) => ss.filter((x) => x.id !== id));
-  const removeFriend = (id: number) => setFriends((f) => f.filter((x) => x.id !== id));
-  const addFriend = (handle: string) =>
-    setSent((ss) => [{ id: nextId++, handle }, ...ss]);
+  const declineRequest = async (id: number) => {
+    await api.respondFriendRequest(id, "decline");
+    refresh();
+  };
+  const cancelSent = async (id: number) => {
+    await api.cancelFriendRequest(id);
+    refresh();
+  };
+  const removeFriend = async (userId: number) => {
+    await api.removeFriend(userId);
+    refresh();
+  };
+  // Throws on failure so the Friends UI can show the server's message.
+  const addFriend = async (handle: string) => {
+    await api.sendFriendRequest(handle);
+    refresh();
+  };
   const openDm = (id: number) => {
     setDmFriend(id);
     setRoute("messages");
