@@ -3,9 +3,18 @@ import { Phone, VideoCamera } from "@phosphor-icons/react";
 import { Avatar } from "@/components/Avatar";
 import { Chat } from "@/components/Chat";
 import { cn } from "@/lib/utils";
-import type { Friend, Presence } from "@/lib/mock";
+import type { ChatMessage, Friend, OutgoingPayload, Presence } from "@/lib/mock";
 import type { Threads } from "@/lib/chat";
 import type { Call } from "@/components/CallOverlay";
+
+function previewOf(msgs?: ChatMessage[]): string {
+  if (!msgs || !msgs.length) return "No messages yet";
+  const m = msgs[msgs.length - 1];
+  if (m.kind === "image") return "Photo";
+  if (m.kind === "audio") return "Voice message";
+  if (m.kind === "file") return m.media?.name || "File";
+  return m.text || "";
+}
 
 const dot: Record<Presence, string> = {
   online: "bg-good",
@@ -27,7 +36,7 @@ export function Messages({
   unread: Record<number, number>;
   initialFriendId: number | null;
   onOpen: (friendId: number) => void;
-  onSend: (friendId: number, text: string) => void;
+  onSend: (friendId: number, payload: OutgoingPayload) => void;
   onCall: (call: Call) => void;
 }) {
   const [selectedId, setSelectedId] = useState<number | null>(
@@ -44,10 +53,7 @@ export function Messages({
 
   const preview = useMemo(() => {
     const p: Record<number, string> = {};
-    for (const f of friends) {
-      const t = chats[f.id];
-      p[f.id] = t && t.length ? t[t.length - 1].text : "No messages yet";
-    }
+    for (const f of friends) p[f.id] = previewOf(chats[f.id]);
     return p;
   }, [friends, chats]);
 
@@ -126,7 +132,7 @@ export function Messages({
           </div>
           <Chat
             messages={messages}
-            onSend={(text) => onSend(selected.id, text)}
+            onSend={(payload) => onSend(selected.id, payload)}
             placeholder={`Message ${selected.name.split(" ")[0]}`}
           />
         </div>

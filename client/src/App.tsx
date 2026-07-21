@@ -10,16 +10,20 @@ import { Notifications } from "@/views/Notifications";
 import { Profile } from "@/views/Profile";
 import { Settings } from "@/views/Settings";
 import {
+  type ChatMedia,
+  type ChatMessage,
   type Friend,
   type FriendRequest,
+  type MsgKind,
   type Note,
+  type OutgoingPayload,
   type Route,
   type SentRequest,
 } from "@/lib/mock";
 import * as api from "@/lib/api";
 import type { AuthUser } from "@/lib/api";
 import { decryptFrom, encryptFor, initCrypto, myPublicKey } from "@/lib/crypto";
-import { connectWs, disconnectWs, sendWs, type Envelope } from "@/lib/ws";
+import { connectWs, disconnectWs, sendMsg, sendReceipt, type Incoming } from "@/lib/ws";
 import { hhmm, loadChats, nextMsgId, saveChats, type Threads } from "@/lib/chat";
 
 export type Theme = "dark" | "light";
@@ -84,17 +88,60 @@ export default function App({
 
   // Incoming encrypted message: decrypt with the sender's public key, store,
   // and bump unread unless that conversation is open.
-  const onIncoming = useCallback((env: Envelope) => {
-    if (seenRef.current.has(env.id)) return; // dedupe
-    seenRef.current.add(env.id);
-    const fr = friendsRef.current.find((f) => f.id === env.from);
+  const onIncoming = useCallback((e: Incoming) => {
+    // Receipt: update our sent messages' status (delivered/read).
+    if (e.type === "receipt") {
+      setChats((prev) => {
+        const thread = prev[e.from];
+        if (!thread) return prev;
+        let changed = false;
+        const next = thread.map((m) => {
+          if (!m.mine) return m;
+          if (e.receipt === "read" && m.status !== "read") {
+            changed = true;
+            return { ...m, status: "read" as const };
+          }
+          if (e.receipt === "delivered" && m.mid === e.mid && m.status === "sent") {
+            changed = true;
+            return { ...m, status: "delivered" as const };
+          }
+          return m;
+        });
+        return changed ? { ...prev, [e.from]: next } : prev;
+      });
+      return;
+    }
+
+    // Message: dedupe, decrypt, store, acknowledge.
+    if (seenRef.current.has(e.id)) return;
+    seenRef.current.add(e.id);
+    const fr = friendsRef.current.find((f) => f.id === e.from);
     if (!fr?.pubkey) return;
-    const text = decryptFrom(fr.pubkey, env.nonce, env.ciphertext);
-    if (text == null) return;
-    const msg = { id: nextMsgId(), mine: false, text, time: hhmm(env.ts || Date.now()) };
-    setChats((prev) => ({ ...prev, [env.from]: [...(prev[env.from] || []), msg] }));
-    if (openConvRef.current !== env.from) {
-      setChatUnread((u) => ({ ...u, [env.from]: (u[env.from] || 0) + 1 }));
+    const plain = decryptFrom(fr.pubkey, e.nonce, e.ciphertext);
+    if (plain == null) return;
+    let payload: { mid: string; kind: MsgKind; text?: string; media?: ChatMedia };
+    try {
+      payload = JSON.parse(plain);
+    } catch {
+      return;
+    }
+    const ts = e.ts || Date.now();
+    const msg: ChatMessage = {
+      id: nextMsgId(),
+      mid: payload.mid,
+      mine: false,
+      kind: payload.kind,
+      text: payload.text,
+      media: payload.media,
+      time: hhmm(ts),
+      ts,
+    };
+    setChats((prev) => ({ ...prev, [e.from]: [...(prev[e.from] || []), msg] }));
+    sendReceipt(e.from, "delivered", payload.mid);
+    if (openConvRef.current === e.from) {
+      sendReceipt(e.from, "read");
+    } else {
+      setChatUnread((u) => ({ ...u, [e.from]: (u[e.from] || 0) + 1 }));
     }
   }, []);
 
@@ -147,14 +194,31 @@ export default function App({
     setRoute("messages");
   };
 
-  const sendMessage = (friendId: number, text: string) => {
+  const sendMessage = (friendId: number, payload: OutgoingPayload) => {
     const fr = friends.find((f) => f.id === friendId);
     const ts = Date.now();
-    const msg = { id: nextMsgId(), mine: true, text, time: hhmm(ts) };
+    const mid = crypto.randomUUID();
+    const msg: ChatMessage = {
+      id: nextMsgId(),
+      mid,
+      mine: true,
+      kind: payload.kind,
+      text: payload.text,
+      media: payload.media,
+      time: hhmm(ts),
+      ts,
+      status: "sent",
+    };
     setChats((prev) => ({ ...prev, [friendId]: [...(prev[friendId] || []), msg] }));
     if (fr?.pubkey) {
-      const { nonce, ciphertext } = encryptFor(fr.pubkey, text);
-      sendWs(friendId, nonce, ciphertext, ts);
+      const wire = JSON.stringify({
+        mid,
+        kind: payload.kind,
+        text: payload.text,
+        media: payload.media,
+      });
+      const { nonce, ciphertext } = encryptFor(fr.pubkey, wire);
+      sendMsg(friendId, nonce, ciphertext, ts);
     }
   };
 
@@ -165,6 +229,7 @@ export default function App({
       delete n[friendId];
       return n;
     });
+    sendReceipt(friendId, "read"); // tell them we've read their messages
   };
 
   return (

@@ -54,11 +54,34 @@ export interface Note {
   read: boolean;
 }
 
+export type MsgKind = "text" | "image" | "audio" | "file";
+
+export interface ChatMedia {
+  data: string; // data: URL (encrypted in transit, local at rest)
+  mime: string;
+  name?: string;
+  size?: number;
+  w?: number;
+  h?: number;
+  dur?: number;
+}
+
 export interface ChatMessage {
-  id: number;
+  id: number; // local render id
+  mid: string; // shared id, used for delivery/read receipts
   mine: boolean;
-  text: string;
+  kind: MsgKind;
+  text?: string;
+  media?: ChatMedia;
   time: string;
+  ts: number;
+  status?: "sent" | "delivered" | "read"; // outgoing only
+}
+
+export interface OutgoingPayload {
+  kind: MsgKind;
+  text?: string;
+  media?: ChatMedia;
 }
 
 // Chat is device-local (E2E) and not wired yet; start with no threads.

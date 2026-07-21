@@ -45,6 +45,7 @@ func wsHandler(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		return
 	}
+	conn.SetReadLimit(16 << 20) // allow media payloads (16 MB)
 
 	c := &wsClient{uid: uid, send: make(chan []byte, 64)}
 	register(c)
@@ -67,18 +68,30 @@ func wsHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		var in struct {
 			To         int64  `json:"to"`
+			Type       string `json:"type"`
 			Nonce      string `json:"nonce"`
 			Ciphertext string `json:"ciphertext"`
 			Ts         int64  `json:"ts"`
+			Receipt    string `json:"receipt"`
+			Mid        string `json:"mid"`
 		}
 		if json.Unmarshal(data, &in) != nil || in.To == 0 {
 			continue
 		}
-		out, _ := json.Marshal(map[string]any{
-			"type": "msg", "id": atomic.AddInt64(&msgSeq, 1),
-			"from": c.uid, "to": in.To,
-			"nonce": in.Nonce, "ciphertext": in.Ciphertext, "ts": in.Ts,
-		})
+		var out []byte
+		if in.Type == "receipt" {
+			// A read/delivered acknowledgement, routed back to the sender.
+			out, _ = json.Marshal(map[string]any{
+				"type": "receipt", "from": c.uid, "receipt": in.Receipt, "mid": in.Mid,
+			})
+		} else {
+			// An encrypted message envelope (ciphertext; the relay can't read it).
+			out, _ = json.Marshal(map[string]any{
+				"type": "msg", "id": atomic.AddInt64(&msgSeq, 1),
+				"from": c.uid, "to": in.To,
+				"nonce": in.Nonce, "ciphertext": in.Ciphertext, "ts": in.Ts,
+			})
+		}
 		deliver(in.To, out)
 	}
 
