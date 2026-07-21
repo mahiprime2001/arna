@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { TitleBar } from "@/components/TitleBar";
 import { Sidebar } from "@/components/Sidebar";
 import { CallOverlay, type Call } from "@/components/CallOverlay";
@@ -18,6 +18,9 @@ import {
 } from "@/lib/mock";
 import * as api from "@/lib/api";
 import type { AuthUser } from "@/lib/api";
+import { decryptFrom, encryptFor, initCrypto, myPublicKey } from "@/lib/crypto";
+import { connectWs, disconnectWs, sendWs, type Envelope } from "@/lib/ws";
+import { hhmm, loadChats, nextMsgId, saveChats, type Threads } from "@/lib/chat";
 
 export type Theme = "dark" | "light";
 
@@ -37,11 +40,26 @@ export default function App({
   const [dmFriend, setDmFriend] = useState<number | null>(null);
   const [call, setCall] = useState<Call | null>(null);
 
+  // Chat (device-local, E2E encrypted over the relay).
+  const [chats, setChats] = useState<Threads>(() => loadChats(user.id));
+  const [chatUnread, setChatUnread] = useState<Record<number, number>>({});
+  const [openConv, setOpenConv] = useState<number | null>(null);
+
+  const openConvRef = useRef<number | null>(null);
+  const friendsRef = useRef<Friend[]>(friends);
+  const seenRef = useRef<Set<number>>(new Set());
+  useEffect(() => {
+    openConvRef.current = openConv;
+  }, [openConv]);
+  useEffect(() => {
+    friendsRef.current = friends;
+  }, [friends]);
+
   useEffect(() => {
     document.documentElement.classList.toggle("dark", theme === "dark");
   }, [theme]);
 
-  // Live social graph: load, then poll, and heartbeat presence.
+  // Live social graph.
   const refresh = useCallback(async () => {
     try {
       const d = await api.getFriends();
@@ -49,7 +67,7 @@ export default function App({
       setRequests(d.incoming);
       setSent(d.outgoing);
     } catch {
-      // stay with what we have
+      /* keep current */
     }
   }, []);
 
@@ -64,7 +82,45 @@ export default function App({
     };
   }, [refresh]);
 
+  // Incoming encrypted message: decrypt with the sender's public key, store,
+  // and bump unread unless that conversation is open.
+  const onIncoming = useCallback((env: Envelope) => {
+    if (seenRef.current.has(env.id)) return; // dedupe
+    seenRef.current.add(env.id);
+    const fr = friendsRef.current.find((f) => f.id === env.from);
+    if (!fr?.pubkey) return;
+    const text = decryptFrom(fr.pubkey, env.nonce, env.ciphertext);
+    if (text == null) return;
+    const msg = { id: nextMsgId(), mine: false, text, time: hhmm(env.ts || Date.now()) };
+    setChats((prev) => ({ ...prev, [env.from]: [...(prev[env.from] || []), msg] }));
+    if (openConvRef.current !== env.from) {
+      setChatUnread((u) => ({ ...u, [env.from]: (u[env.from] || 0) + 1 }));
+    }
+  }, []);
+
+  // Publish our public key, open the relay.
+  useEffect(() => {
+    initCrypto(user.id);
+    api.setPubkey(myPublicKey()).catch(() => {});
+    connectWs(onIncoming);
+    return () => disconnectWs();
+  }, [user.id, onIncoming]);
+
+  // Persist chat locally.
+  useEffect(() => {
+    saveChats(user.id, chats);
+  }, [chats, user.id]);
+
+  // Leaving Messages closes the active conversation.
+  useEffect(() => {
+    if (route !== "messages") setOpenConv(null);
+  }, [route]);
+
   const unread = useMemo(() => notes.filter((n) => !n.read).length, [notes]);
+  const totalChatUnread = useMemo(
+    () => Object.values(chatUnread).reduce((a, b) => a + b, 0),
+    [chatUnread],
+  );
 
   const acceptRequest = async (id: number) => {
     await api.respondFriendRequest(id, "accept");
@@ -82,7 +138,6 @@ export default function App({
     await api.removeFriend(userId);
     refresh();
   };
-  // Throws on failure so the Friends UI can show the server's message.
   const addFriend = async (handle: string) => {
     await api.sendFriendRequest(handle);
     refresh();
@@ -92,6 +147,26 @@ export default function App({
     setRoute("messages");
   };
 
+  const sendMessage = (friendId: number, text: string) => {
+    const fr = friends.find((f) => f.id === friendId);
+    const ts = Date.now();
+    const msg = { id: nextMsgId(), mine: true, text, time: hhmm(ts) };
+    setChats((prev) => ({ ...prev, [friendId]: [...(prev[friendId] || []), msg] }));
+    if (fr?.pubkey) {
+      const { nonce, ciphertext } = encryptFor(fr.pubkey, text);
+      sendWs(friendId, nonce, ciphertext, ts);
+    }
+  };
+
+  const openConversation = (friendId: number) => {
+    setOpenConv(friendId);
+    setChatUnread((u) => {
+      const n = { ...u };
+      delete n[friendId];
+      return n;
+    });
+  };
+
   return (
     <div className="flex h-screen flex-col overflow-hidden bg-canvas text-ink">
       <TitleBar unread={unread} onBell={() => setRoute("notifications")} />
@@ -99,7 +174,11 @@ export default function App({
         <Sidebar
           route={route}
           setRoute={setRoute}
-          badges={{ notifications: unread, friends: requests.length }}
+          badges={{
+            notifications: unread,
+            friends: requests.length,
+            messages: totalChatUnread,
+          }}
           user={user}
         />
         <main className="flex-1 overflow-y-auto">
@@ -115,7 +194,15 @@ export default function App({
             )}
             {route === "workspaces" && <Workspaces />}
             {route === "messages" && (
-              <Messages friends={friends} initialFriendId={dmFriend} onCall={setCall} />
+              <Messages
+                friends={friends}
+                chats={chats}
+                unread={chatUnread}
+                initialFriendId={dmFriend}
+                onOpen={openConversation}
+                onSend={sendMessage}
+                onCall={setCall}
+              />
             )}
             {route === "friends" && (
               <Friends

@@ -44,6 +44,8 @@ func main() {
 	mux.HandleFunc("/api/friends/cancel", friendCancel)
 	mux.HandleFunc("/api/friends/remove", friendRemove)
 	mux.HandleFunc("/api/users/search", userSearch)
+	mux.HandleFunc("/api/keys", setKeys)
+	mux.HandleFunc("/ws", wsHandler)
 
 	addr := "0.0.0.0:" + env("PORT", "8787")
 	log.Println("arna services listening on", addr)
@@ -65,9 +67,11 @@ func migrate() {
 		handle TEXT NOT NULL,
 		pass_hash TEXT NOT NULL,
 		last_seen TEXT,
+		pubkey TEXT,
 		created_at TEXT NOT NULL
 	)`)
 	db.Exec(`ALTER TABLE users ADD COLUMN last_seen TEXT`) // for older DBs; ignored if present
+	db.Exec(`ALTER TABLE users ADD COLUMN pubkey TEXT`)
 	db.Exec(`CREATE TABLE IF NOT EXISTS sessions (
 		token TEXT PRIMARY KEY,
 		user_id INTEGER NOT NULL,
@@ -231,6 +235,24 @@ func logout(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]string{"status": "ok"})
 }
 
+// setKeys registers the caller's public key so friends can encrypt to them.
+// Only the public key is ever stored; private keys never leave the device.
+func setKeys(w http.ResponseWriter, r *http.Request) {
+	uid, ok := currentUID(r)
+	if !ok {
+		fail(w, 401, "not signed in")
+		return
+	}
+	var in struct{ Pubkey string }
+	json.NewDecoder(r.Body).Decode(&in)
+	if strings.TrimSpace(in.Pubkey) == "" {
+		fail(w, 400, "missing pubkey")
+		return
+	}
+	db.Exec("UPDATE users SET pubkey=? WHERE id=?", in.Pubkey, uid)
+	writeJSON(w, 200, map[string]string{"status": "ok"})
+}
+
 func presencePing(w http.ResponseWriter, r *http.Request) {
 	uid, ok := currentUID(r)
 	if !ok {
@@ -250,7 +272,7 @@ func friendsList(w http.ResponseWriter, r *http.Request) {
 	}
 
 	friends := []map[string]any{}
-	rows, _ := db.Query(`SELECT u.id,u.name,u.handle,u.last_seen FROM friend_edges e
+	rows, _ := db.Query(`SELECT u.id,u.name,u.handle,u.last_seen,u.pubkey FROM friend_edges e
 		JOIN users u ON u.id = CASE WHEN e.requester_id=? THEN e.addressee_id ELSE e.requester_id END
 		WHERE e.status='accepted' AND (e.requester_id=? OR e.addressee_id=?)
 		ORDER BY u.name`, uid, uid, uid)
@@ -258,10 +280,11 @@ func friendsList(w http.ResponseWriter, r *http.Request) {
 		for rows.Next() {
 			var id int64
 			var name, handle string
-			var ls sql.NullString
-			rows.Scan(&id, &name, &handle, &ls)
+			var ls, pk sql.NullString
+			rows.Scan(&id, &name, &handle, &ls, &pk)
 			friends = append(friends, map[string]any{
-				"id": id, "name": name, "handle": handle, "presence": presenceFor(ls),
+				"id": id, "name": name, "handle": handle,
+				"presence": presenceFor(ls), "pubkey": pk.String,
 			})
 		}
 		rows.Close()

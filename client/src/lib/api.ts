@@ -114,3 +114,7 @@ export async function searchUsers(q: string): Promise<{ users: SearchResult[] }>
 export async function ping() {
   return req("/api/presence/ping", { method: "POST" });
 }
+
+export async function setPubkey(pubkey: string) {
+  return req("/api/keys", { method: "POST", body: JSON.stringify({ pubkey }) });
+}

@@ -1,9 +1,10 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Phone, VideoCamera } from "@phosphor-icons/react";
 import { Avatar } from "@/components/Avatar";
 import { Chat } from "@/components/Chat";
 import { cn } from "@/lib/utils";
-import { conversations, type ChatMessage, type Friend, type Presence } from "@/lib/mock";
+import type { Friend, Presence } from "@/lib/mock";
+import type { Threads } from "@/lib/chat";
 import type { Call } from "@/components/CallOverlay";
 
 const dot: Record<Presence, string> = {
@@ -12,50 +13,43 @@ const dot: Record<Presence, string> = {
   offline: "bg-muted/50",
 };
 
-let nextMsgId = 5000;
-
 export function Messages({
   friends,
+  chats,
+  unread,
   initialFriendId,
+  onOpen,
+  onSend,
   onCall,
 }: {
   friends: Friend[];
+  chats: Threads;
+  unread: Record<number, number>;
   initialFriendId: number | null;
+  onOpen: (friendId: number) => void;
+  onSend: (friendId: number, text: string) => void;
   onCall: (call: Call) => void;
 }) {
-  const [threads, setThreads] = useState<Record<number, ChatMessage[]>>(() => ({
-    ...conversations,
-  }));
   const [selectedId, setSelectedId] = useState<number | null>(
     initialFriendId ?? friends[0]?.id ?? null,
   );
 
+  // Opening a conversation clears its unread badge (in the parent).
+  useEffect(() => {
+    if (selectedId != null) onOpen(selectedId);
+  }, [selectedId, onOpen]);
+
   const selected = friends.find((f) => f.id === selectedId) ?? null;
-  const messages = selectedId ? (threads[selectedId] ?? []) : [];
+  const messages = selectedId != null ? (chats[selectedId] ?? []) : [];
 
   const preview = useMemo(() => {
     const p: Record<number, string> = {};
     for (const f of friends) {
-      const t = threads[f.id];
+      const t = chats[f.id];
       p[f.id] = t && t.length ? t[t.length - 1].text : "No messages yet";
     }
     return p;
-  }, [friends, threads]);
-
-  const send = (text: string) => {
-    if (!selectedId) return;
-    const now = new Date();
-    const time = `${String(now.getHours()).padStart(2, "0")}:${String(
-      now.getMinutes(),
-    ).padStart(2, "0")}`;
-    setThreads((prev) => ({
-      ...prev,
-      [selectedId]: [
-        ...(prev[selectedId] ?? []),
-        { id: nextMsgId++, mine: true, text, time },
-      ],
-    }));
-  };
+  }, [friends, chats]);
 
   return (
     <div className="animate-fade-up flex h-[calc(100vh-11rem)] overflow-hidden rounded-xl border border-line bg-surface">
@@ -65,6 +59,11 @@ export function Messages({
           <h1 className="text-base font-semibold">Messages</h1>
         </div>
         <div className="flex-1 overflow-y-auto p-2">
+          {friends.length === 0 && (
+            <p className="px-3 py-6 text-center text-[13px] text-muted">
+              Add a friend to start chatting.
+            </p>
+          )}
           {friends.map((f) => (
             <button
               key={f.id}
@@ -87,6 +86,11 @@ export function Messages({
                 <p className="truncate text-sm font-medium">{f.name}</p>
                 <p className="truncate text-[12.5px] text-muted">{preview[f.id]}</p>
               </div>
+              {unread[f.id] > 0 && (
+                <span className="grid h-5 min-w-[20px] place-items-center rounded-full bg-brand px-1.5 text-[11px] font-semibold text-brand-fg">
+                  {unread[f.id]}
+                </span>
+              )}
             </button>
           ))}
         </div>
@@ -122,7 +126,7 @@ export function Messages({
           </div>
           <Chat
             messages={messages}
-            onSend={send}
+            onSend={(text) => onSend(selected.id, text)}
             placeholder={`Message ${selected.name.split(" ")[0]}`}
           />
         </div>

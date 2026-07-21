@@ -24,6 +24,7 @@ export interface Friend {
   name: string;
   handle: string;
   presence: Presence;
+  pubkey?: string;
 }
 
 export interface FriendRequest {
