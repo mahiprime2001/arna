@@ -24,7 +24,8 @@ function open() {
   const token = getToken();
   if (!token || closed) return;
   if (ws && ws.readyState !== WebSocket.CLOSED) return; // one socket only
-  const url = API.replace(/^http/, "ws") + "/ws?token=" + encodeURIComponent(token);
+  const base = API || location.origin; // same-origin when API is ""
+  const url = base.replace(/^http/, "ws") + "/ws?token=" + encodeURIComponent(token);
   ws = new WebSocket(url);
   ws.onopen = () => {
     while (outbox.length && ws && ws.readyState === WebSocket.OPEN) {

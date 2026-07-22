@@ -15,6 +15,18 @@ const https =
 export default defineConfig({
   plugins: [react()],
   resolve: { alias: { "@": path.resolve(__dirname, "./src") } },
-  server: { port: 4320, host: true, strictPort: true, https },
+  server: {
+    port: 4320,
+    host: true,
+    strictPort: true,
+    https,
+    allowedHosts: true, // accept tunnel hostnames (ngrok / trycloudflare)
+    // Same-origin API + WS: the client hits /api and /ws on its own origin and
+    // vite forwards them to the Go backend. One origin -> one tunnel covers all.
+    proxy: {
+      "/api": { target: "http://localhost:8787", changeOrigin: true },
+      "/ws": { target: "http://localhost:8787", ws: true },
+    },
+  },
   clearScreen: false,
 });

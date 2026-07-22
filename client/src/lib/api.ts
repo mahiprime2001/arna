@@ -1,7 +1,9 @@
-// Talks to the Go services backend. The base URL is derived from the page's own
-// origin (protocol + host), so it follows http/https automatically and opening
-// the app from another LAN device points the API at the same host.
-export const API = `${location.protocol}//${location.hostname}:8787`;
+// Same-origin by default: /api and /ws are served from the page's own origin
+// (vite proxies them to the Go backend in dev). This means one URL/tunnel covers
+// everything and there's no cross-origin or mixed-content trouble. Override with
+// VITE_ARNA_API to point at a separate backend origin.
+export const API =
+  ((import.meta.env as unknown as { VITE_ARNA_API?: string }).VITE_ARNA_API ?? "");
 
 const TOKEN_KEY = "arna_token";
 

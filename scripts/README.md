@@ -50,3 +50,32 @@ calls work with no browser flag.
 
 > Certs in `infra/certs/` are machine-specific and gitignored. Regenerate them
 > per the one-time setup above on each host.
+
+## Tunnel (easiest for testing across any network / device)
+
+A tunnel gives a public, browser-trusted HTTPS URL with **no certs, no flags, no
+firewall** — and it works from anywhere, not just the same LAN. The client serves
+`/api` and `/ws` on its own origin (vite proxies them to the backend), so a single
+tunnel to the client covers everything.
+
+Run three things:
+
+```powershell
+# 1) backend (plain http is fine; the tunnel provides https)
+cd services ; $env:ARNA_DB="arna-social.db" ; go run .
+# 2) client (plain http; proxies /api + /ws to the backend)
+cd client ; npm run dev
+# 3) tunnel the client origin
+cloudflared tunnel --url http://localhost:4320
+```
+
+`cloudflared` prints a `https://<random>.trycloudflare.com` URL. Open that on any
+device — camera/mic work (trusted https), no flag needed. Get cloudflared from
+<https://github.com/cloudflare/cloudflared/releases> (no account needed for quick
+tunnels). ngrok works too (`ngrok http 4320`) but needs a free authtoken.
+
+Notes:
+- The quick-tunnel URL changes each restart. A stable URL needs a Cloudflare
+  account + named tunnel (or an ngrok reserved domain).
+- Calls between devices on **different** networks may still need a TURN server for
+  the P2P media (the tunnel only carries signaling). Same-network calls are fine.
