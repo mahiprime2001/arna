@@ -60,7 +60,27 @@ export function CallOverlay({ state }: { state: CallState }) {
     return () => clearInterval(id);
   }, [state.status]);
 
-  if (state.status === "idle") return null;
+  if (state.status === "idle" && !state.error) return null;
+
+  if (state.error) {
+    return (
+      <div className="fixed inset-0 z-50 grid place-items-center bg-slate-950/95 p-6 backdrop-blur-sm">
+        <div className="w-full max-w-sm rounded-xl border border-line bg-surface p-6 text-center text-ink">
+          <div className="mx-auto mb-3 grid h-12 w-12 place-items-center rounded-full bg-danger/15 text-danger">
+            <PhoneX size={22} weight="fill" />
+          </div>
+          <h2 className="text-base font-semibold">Call couldn't start</h2>
+          <p className="mt-1.5 text-sm text-muted">{state.error}</p>
+          <button
+            onClick={() => callEngine.dismissError()}
+            className="mt-4 rounded-lg bg-brand px-5 py-2 text-sm font-semibold text-brand-fg transition hover:brightness-110"
+          >
+            Close
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   const isVideo = state.kind === "video";
   const connected = state.status === "connected";

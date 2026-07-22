@@ -16,6 +16,7 @@ export interface CallState {
   camOff: boolean;
   localStream: MediaStream | null;
   remoteStream: MediaStream | null;
+  error: string | null;
 }
 
 const ICE: RTCIceServer[] = [{ urls: "stun:stun.l.google.com:19302" }];
@@ -29,6 +30,7 @@ const idle: CallState = {
   camOff: false,
   localStream: null,
   remoteStream: null,
+  error: null,
 };
 
 class CallEngine {
@@ -145,7 +147,22 @@ class CallEngine {
     }
   }
 
+  dismissError() {
+    if (this.state.error) this.cleanup();
+  }
+
+  private fail(message: string) {
+    // Keep the overlay up so the user sees why, instead of a silent no-op.
+    this.push({ error: message });
+  }
+
   private async acquire(kind: CallKind): Promise<boolean> {
+    if (!navigator.mediaDevices?.getUserMedia) {
+      this.fail(
+        "Calls need a secure connection. Open Arna on this computer (localhost), or over HTTPS. Camera and mic are blocked on plain http:// LAN addresses.",
+      );
+      return false;
+    }
     try {
       this.local = await navigator.mediaDevices.getUserMedia({
         audio: true,
@@ -153,8 +170,15 @@ class CallEngine {
       });
       this.push({ localStream: this.local });
       return true;
-    } catch {
-      this.cleanup();
+    } catch (e) {
+      const name = e instanceof DOMException ? e.name : "";
+      this.fail(
+        name === "NotAllowedError"
+          ? "Microphone/camera permission was blocked. Allow it in the browser and try again."
+          : name === "NotFoundError"
+            ? "No microphone or camera found on this device."
+            : "Couldn't start your microphone or camera.",
+      );
       return false;
     }
   }

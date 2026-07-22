@@ -59,6 +59,7 @@ export default function App({
     camOff: false,
     localStream: null,
     remoteStream: null,
+    error: null,
   });
 
   // Chat (device-local, E2E encrypted over the relay).
