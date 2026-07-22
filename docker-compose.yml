@@ -1,0 +1,40 @@
+# Arna deploy: the app (client + API + WS relay in one container) behind Caddy,
+# which gets automatic HTTPS (Let's Encrypt) for your domain.
+#
+#   docker compose up -d --build
+#
+# Requirements on the VPS:
+#   - your domain's DNS points at this VPS (arna.ifleon.com -> VPS IP)
+#   - ports 80 and 443 are open (and free -- stop anything else on them)
+#   - edit the hostname in ./Caddyfile to your domain
+#
+# The SQLite DB lives on a named volume, so data survives rebuilds.
+
+services:
+  arna:
+    build: .
+    container_name: arna
+    restart: unless-stopped
+    expose:
+      - "8080"
+    volumes:
+      - arna_data:/data
+
+  caddy:
+    image: caddy:2-alpine
+    container_name: arna-caddy
+    restart: unless-stopped
+    depends_on:
+      - arna
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
+volumes:
+  arna_data:
+  caddy_data:
+  caddy_config:

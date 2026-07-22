@@ -1,0 +1,6 @@
+# Caddy automatically gets + renews a Let's Encrypt cert for this domain and
+# reverse-proxies to the Arna container. Change the hostname to your own.
+# Requires: this domain's DNS points at the VPS, and ports 80 + 443 are open.
+arna.ifleon.com {
+	reverse_proxy arna:8080
+}

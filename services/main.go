@@ -13,6 +13,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -46,6 +47,19 @@ func main() {
 	mux.HandleFunc("/api/users/search", userSearch)
 	mux.HandleFunc("/api/keys", setKeys)
 	mux.HandleFunc("/ws", wsHandler)
+
+	// Serve the built client (single-origin) when ARNA_WEB_DIR is set, with an
+	// SPA fallback to index.html. Used by the Docker image / VPS deploy.
+	if webDir := env("ARNA_WEB_DIR", ""); webDir != "" {
+		mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+			p := filepath.Join(webDir, filepath.Clean("/"+r.URL.Path))
+			if info, err := os.Stat(p); err == nil && !info.IsDir() {
+				http.ServeFile(w, r, p)
+				return
+			}
+			http.ServeFile(w, r, filepath.Join(webDir, "index.html"))
+		})
+	}
 
 	addr := "0.0.0.0:" + env("PORT", "8787")
 	cert, key := env("ARNA_TLS_CERT", ""), env("ARNA_TLS_KEY", "")

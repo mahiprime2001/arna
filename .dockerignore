@@ -1,0 +1,14 @@
+**/node_modules
+**/dist
+**/target
+**/*.db
+**/*.db-shm
+**/*.db-wal
+**/arna-services
+**/arna-services.exe
+infra/certs
+scripts
+.git
+.github
+docs
+panel
