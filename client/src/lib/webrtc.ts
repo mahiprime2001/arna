@@ -156,15 +156,17 @@ class CallEngine {
     this.push({ error: message });
   }
 
-  // Attach whatever local media we have; with none, negotiate receive-only so the
-  // call still connects (you can hear/see them, they just can't hear/see you).
+  // Attach whatever local media we have, and negotiate receive-only for any
+  // device we lack, so we still RECEIVE the other side. Missing mic -> we still
+  // hear them; missing camera -> we still see them.
   private attachLocal(kind: CallKind) {
-    if (this.local) {
-      this.local.getTracks().forEach((t) => this.pc!.addTrack(t, this.local!));
-      return;
+    const haveAudio = !!this.local?.getAudioTracks().length;
+    const haveVideo = !!this.local?.getVideoTracks().length;
+    this.local?.getTracks().forEach((t) => this.pc!.addTrack(t, this.local!));
+    if (!haveAudio) this.pc!.addTransceiver("audio", { direction: "recvonly" });
+    if (kind === "video" && !haveVideo) {
+      this.pc!.addTransceiver("video", { direction: "recvonly" });
     }
-    this.pc!.addTransceiver("audio", { direction: "recvonly" });
-    if (kind === "video") this.pc!.addTransceiver("video", { direction: "recvonly" });
   }
 
   // Try progressively looser device requests so a missing mic or camera doesn't
