@@ -11,7 +11,9 @@ export type Incoming =
       ciphertext: string;
       ts: number;
     }
-  | { type: "receipt"; from: number; receipt: "delivered" | "read"; mid?: string };
+  | { type: "receipt"; from: number; receipt: "delivered" | "read"; mid?: string }
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  | { type: "signal"; from: number; signal: any };
 
 let ws: WebSocket | null = null;
 let handler: ((e: Incoming) => void) | null = null;
@@ -32,7 +34,11 @@ function open() {
   ws.onmessage = (ev) => {
     try {
       const e = JSON.parse(ev.data);
-      if (e && (e.type === "msg" || e.type === "receipt") && handler) {
+      if (
+        e &&
+        (e.type === "msg" || e.type === "receipt" || e.type === "signal") &&
+        handler
+      ) {
         handler(e as Incoming);
       }
     } catch {
@@ -73,6 +79,11 @@ export function sendReceipt(
   mid?: string,
 ) {
   raw(JSON.stringify({ to, type: "receipt", receipt, mid }));
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function sendSignal(to: number, signal: any) {
+  raw(JSON.stringify({ to, type: "signal", signal }));
 }
 
 export function disconnectWs() {

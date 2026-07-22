@@ -67,32 +67,41 @@ func wsHandler(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 		var in struct {
-			To         int64  `json:"to"`
-			Type       string `json:"type"`
-			Nonce      string `json:"nonce"`
-			Ciphertext string `json:"ciphertext"`
-			Ts         int64  `json:"ts"`
-			Receipt    string `json:"receipt"`
-			Mid        string `json:"mid"`
+			To         int64           `json:"to"`
+			Type       string          `json:"type"`
+			Nonce      string          `json:"nonce"`
+			Ciphertext string          `json:"ciphertext"`
+			Ts         int64           `json:"ts"`
+			Receipt    string          `json:"receipt"`
+			Mid        string          `json:"mid"`
+			Signal     json.RawMessage `json:"signal"`
 		}
 		if json.Unmarshal(data, &in) != nil || in.To == 0 {
 			continue
 		}
-		var out []byte
-		if in.Type == "receipt" {
+		switch in.Type {
+		case "receipt":
 			// A read/delivered acknowledgement, routed back to the sender.
-			out, _ = json.Marshal(map[string]any{
+			out, _ := json.Marshal(map[string]any{
 				"type": "receipt", "from": c.uid, "receipt": in.Receipt, "mid": in.Mid,
 			})
-		} else {
+			deliver(in.To, out)
+		case "signal":
+			// WebRTC call signaling (offer/answer/ice/end). Real-time only: if the
+			// peer is offline it is simply dropped, never queued.
+			out, _ := json.Marshal(map[string]any{
+				"type": "signal", "from": c.uid, "signal": in.Signal,
+			})
+			deliverLive(in.To, out)
+		default:
 			// An encrypted message envelope (ciphertext; the relay can't read it).
-			out, _ = json.Marshal(map[string]any{
+			out, _ := json.Marshal(map[string]any{
 				"type": "msg", "id": atomic.AddInt64(&msgSeq, 1),
 				"from": c.uid, "to": in.To,
 				"nonce": in.Nonce, "ciphertext": in.Ciphertext, "ts": in.Ts,
 			})
+			deliver(in.To, out)
 		}
-		deliver(in.To, out)
 	}
 
 	unregister(c)
@@ -126,6 +135,19 @@ func unregister(c *wsClient) {
 	}
 	hubMu.Unlock()
 	close(c.send)
+}
+
+// deliverLive sends only to currently-connected devices; nothing is queued.
+// Used for call signaling, where a stale offer is worse than no offer.
+func deliverLive(to int64, msg []byte) {
+	hubMu.Lock()
+	defer hubMu.Unlock()
+	for c := range clients[to] {
+		select {
+		case c.send <- msg:
+		default:
+		}
+	}
 }
 
 func deliver(to int64, msg []byte) {

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { TitleBar } from "@/components/TitleBar";
 import { Sidebar } from "@/components/Sidebar";
-import { CallOverlay, type Call } from "@/components/CallOverlay";
+import { CallOverlay } from "@/components/CallOverlay";
 import { Dashboard } from "@/views/Dashboard";
 import { Workspaces } from "@/views/Workspaces";
 import { Friends } from "@/views/Friends";
@@ -23,8 +23,16 @@ import {
 import * as api from "@/lib/api";
 import type { AuthUser } from "@/lib/api";
 import { decryptFrom, encryptFor, initCrypto, myPublicKey } from "@/lib/crypto";
-import { connectWs, disconnectWs, sendMsg, sendReceipt, type Incoming } from "@/lib/ws";
+import {
+  connectWs,
+  disconnectWs,
+  sendMsg,
+  sendReceipt,
+  sendSignal,
+  type Incoming,
+} from "@/lib/ws";
 import { hhmm, loadChats, nextMsgId, saveChats, type Threads } from "@/lib/chat";
+import { callEngine, type CallKind, type CallState } from "@/lib/webrtc";
 
 export type Theme = "dark" | "light";
 
@@ -42,7 +50,16 @@ export default function App({
   const [requests, setRequests] = useState<FriendRequest[]>([]);
   const [sent, setSent] = useState<SentRequest[]>([]);
   const [dmFriend, setDmFriend] = useState<number | null>(null);
-  const [call, setCall] = useState<Call | null>(null);
+  const [callState, setCallState] = useState<CallState>({
+    status: "idle",
+    peerId: null,
+    peerName: "",
+    kind: "audio",
+    muted: false,
+    camOff: false,
+    localStream: null,
+    remoteStream: null,
+  });
 
   // Chat (device-local, E2E encrypted over the relay).
   const [chats, setChats] = useState<Threads>(() => loadChats(user.id));
@@ -89,6 +106,11 @@ export default function App({
   // Incoming encrypted message: decrypt with the sender's public key, store,
   // and bump unread unless that conversation is open.
   const onIncoming = useCallback((e: Incoming) => {
+    // Call signaling (offer/answer/ice/end).
+    if (e.type === "signal") {
+      callEngine.onSignal(e.from, e.signal);
+      return;
+    }
     // Receipt: update our sent messages' status (delivered/read).
     if (e.type === "receipt") {
       setChats((prev) => {
@@ -152,6 +174,15 @@ export default function App({
     connectWs(onIncoming);
     return () => disconnectWs();
   }, [user.id, onIncoming]);
+
+  // Wire the call engine to the relay + UI.
+  useEffect(() => {
+    callEngine.setSignaler(sendSignal);
+    callEngine.setListener(setCallState);
+    callEngine.setResolveName(
+      (id) => friendsRef.current.find((f) => f.id === id)?.name ?? "Unknown",
+    );
+  }, []);
 
   // Persist chat locally.
   useEffect(() => {
@@ -222,6 +253,9 @@ export default function App({
     }
   };
 
+  const startCall = (peerId: number, name: string, kind: CallKind) =>
+    callEngine.start(peerId, name, kind);
+
   const openConversation = (friendId: number) => {
     setOpenConv(friendId);
     setChatUnread((u) => {
@@ -266,7 +300,7 @@ export default function App({
                 initialFriendId={dmFriend}
                 onOpen={openConversation}
                 onSend={sendMessage}
-                onCall={setCall}
+                onCall={startCall}
               />
             )}
             {route === "friends" && (
@@ -280,7 +314,7 @@ export default function App({
                 onRemove={removeFriend}
                 onAdd={addFriend}
                 onMessage={openDm}
-                onCall={setCall}
+                onCall={startCall}
               />
             )}
             {route === "notifications" && (
@@ -292,7 +326,7 @@ export default function App({
         </main>
       </div>
 
-      {call && <CallOverlay call={call} onEnd={() => setCall(null)} />}
+      <CallOverlay state={callState} />
     </div>
   );
 }

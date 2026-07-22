@@ -15,7 +15,7 @@ import { Avatar } from "@/components/Avatar";
 import { PageHeader } from "@/components/PageHeader";
 import { cn } from "@/lib/utils";
 import * as api from "@/lib/api";
-import type { Call } from "@/components/CallOverlay";
+import type { CallKind } from "@/lib/webrtc";
 import type {
   Friend,
   FriendRequest,
@@ -187,7 +187,7 @@ export function Friends({
   onRemove: (userId: number) => void;
   onAdd: (handle: string) => Promise<void>;
   onMessage: (id: number) => void;
-  onCall: (call: Call) => void;
+  onCall: (peerId: number, name: string, kind: CallKind) => void;
 }) {
   const [adding, setAdding] = useState(false);
   const [confirmId, setConfirmId] = useState<number | null>(null);
@@ -287,7 +287,7 @@ export function Friends({
                       </Button>
                       {f.presence !== "offline" && (
                         <button
-                          onClick={() => onCall({ name: f.name, kind: "video" })}
+                          onClick={() => onCall(f.id, f.name, "video")}
                           title="Video call"
                           className="grid h-8 w-8 place-items-center rounded-md text-muted transition-colors hover:bg-elevated hover:text-ink"
                         >

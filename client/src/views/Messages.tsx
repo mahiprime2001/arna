@@ -5,7 +5,7 @@ import { Chat } from "@/components/Chat";
 import { cn } from "@/lib/utils";
 import type { ChatMessage, Friend, OutgoingPayload, Presence } from "@/lib/mock";
 import type { Threads } from "@/lib/chat";
-import type { Call } from "@/components/CallOverlay";
+import type { CallKind } from "@/lib/webrtc";
 
 function previewOf(msgs?: ChatMessage[]): string {
   if (!msgs || !msgs.length) return "No messages yet";
@@ -37,7 +37,7 @@ export function Messages({
   initialFriendId: number | null;
   onOpen: (friendId: number) => void;
   onSend: (friendId: number, payload: OutgoingPayload) => void;
-  onCall: (call: Call) => void;
+  onCall: (peerId: number, name: string, kind: CallKind) => void;
 }) {
   const [selectedId, setSelectedId] = useState<number | null>(
     initialFriendId ?? friends[0]?.id ?? null,
@@ -115,14 +115,14 @@ export function Messages({
             </div>
             <div className="ml-auto flex items-center gap-1">
               <button
-                onClick={() => onCall({ name: selected.name, kind: "audio" })}
+                onClick={() => onCall(selected.id, selected.name, "audio")}
                 aria-label="Voice call"
                 className="grid h-9 w-9 place-items-center rounded-lg text-muted transition-colors hover:bg-elevated hover:text-ink"
               >
                 <Phone size={18} />
               </button>
               <button
-                onClick={() => onCall({ name: selected.name, kind: "video" })}
+                onClick={() => onCall(selected.id, selected.name, "video")}
                 aria-label="Video call"
                 className="grid h-9 w-9 place-items-center rounded-lg text-muted transition-colors hover:bg-elevated hover:text-ink"
               >
