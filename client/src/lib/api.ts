@@ -1,7 +1,7 @@
-// Talks to the Go services backend. The base URL is derived from the page host,
-// so opening the app from another device on the LAN just works (that device's
-// URL points the API at the same host).
-export const API = `http://${location.hostname}:8787`;
+// Talks to the Go services backend. The base URL is derived from the page's own
+// origin (protocol + host), so it follows http/https automatically and opening
+// the app from another LAN device points the API at the same host.
+export const API = `${location.protocol}//${location.hostname}:8787`;
 
 const TOKEN_KEY = "arna_token";
 

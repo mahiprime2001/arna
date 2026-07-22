@@ -66,7 +66,7 @@ class CallEngine {
     this.push({ status: "outgoing", peerId, peerName: name, kind, muted: false, camOff: false });
     if (!(await this.acquire(kind))) return;
     this.makePc(peerId);
-    this.local!.getTracks().forEach((t) => this.pc!.addTrack(t, this.local!));
+    this.attachLocal(kind);
     const offer = await this.pc!.createOffer();
     await this.pc!.setLocalDescription(offer);
     this.send(peerId, { t: "offer", sdp: offer, kind });
@@ -114,7 +114,7 @@ class CallEngine {
     const peerId = this.state.peerId;
     if (!(await this.acquire(this.state.kind))) return;
     this.makePc(peerId);
-    this.local!.getTracks().forEach((t) => this.pc!.addTrack(t, this.local!));
+    this.attachLocal(this.state.kind);
     await this.pc!.setRemoteDescription(this.pendingOffer);
     const answer = await this.pc!.createAnswer();
     await this.pc!.setLocalDescription(answer);
@@ -156,6 +156,19 @@ class CallEngine {
     this.push({ error: message });
   }
 
+  // Attach whatever local media we have; with none, negotiate receive-only so the
+  // call still connects (you can hear/see them, they just can't hear/see you).
+  private attachLocal(kind: CallKind) {
+    if (this.local) {
+      this.local.getTracks().forEach((t) => this.pc!.addTrack(t, this.local!));
+      return;
+    }
+    this.pc!.addTransceiver("audio", { direction: "recvonly" });
+    if (kind === "video") this.pc!.addTransceiver("video", { direction: "recvonly" });
+  }
+
+  // Try progressively looser device requests so a missing mic or camera doesn't
+  // block the call. Permission denial is the only hard stop.
   private async acquire(kind: CallKind): Promise<boolean> {
     if (!navigator.mediaDevices?.getUserMedia) {
       this.fail(
@@ -163,24 +176,33 @@ class CallEngine {
       );
       return false;
     }
-    try {
-      this.local = await navigator.mediaDevices.getUserMedia({
-        audio: true,
-        video: kind === "video",
-      });
-      this.push({ localStream: this.local });
-      return true;
-    } catch (e) {
-      const name = e instanceof DOMException ? e.name : "";
-      this.fail(
-        name === "NotAllowedError"
-          ? "Microphone/camera permission was blocked. Allow it in the browser and try again."
-          : name === "NotFoundError"
-            ? "No microphone or camera found on this device."
-            : "Couldn't start your microphone or camera.",
-      );
-      return false;
+    const tries: MediaStreamConstraints[] =
+      kind === "video"
+        ? [{ audio: true, video: true }, { audio: false, video: true }, { audio: true, video: false }]
+        : [{ audio: true, video: false }];
+
+    for (const constraints of tries) {
+      try {
+        this.local = await navigator.mediaDevices.getUserMedia(constraints);
+        this.push({
+          localStream: this.local,
+          muted: this.local.getAudioTracks().length === 0,
+          camOff: kind === "video" && this.local.getVideoTracks().length === 0,
+        });
+        return true;
+      } catch (e) {
+        if (e instanceof DOMException && e.name === "NotAllowedError") {
+          this.fail("Microphone/camera permission was blocked. Allow it in the browser and try again.");
+          return false;
+        }
+        // otherwise fall through to the next, looser attempt
+      }
     }
+
+    // No usable mic or camera: still join, receive-only.
+    this.local = null;
+    this.push({ localStream: null, muted: true, camOff: kind === "video" });
+    return true;
   }
 
   private makePc(peerId: number) {

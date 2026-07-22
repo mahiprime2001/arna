@@ -48,7 +48,12 @@ func main() {
 	mux.HandleFunc("/ws", wsHandler)
 
 	addr := "0.0.0.0:" + env("PORT", "8787")
-	log.Println("arna services listening on", addr)
+	cert, key := env("ARNA_TLS_CERT", ""), env("ARNA_TLS_KEY", "")
+	if cert != "" && key != "" {
+		log.Println("arna services listening (https/wss) on", addr)
+		log.Fatal(http.ListenAndServeTLS(addr, cert, key, cors(mux)))
+	}
+	log.Println("arna services listening (http) on", addr)
 	log.Fatal(http.ListenAndServe(addr, cors(mux)))
 }
 

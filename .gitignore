@@ -9,6 +9,9 @@
 /services/*.db-shm
 /services/*.db-wal
 
+# Dev TLS certs (never commit)
+/infra/certs/
+
 # Node / frontend
 node_modules/
 dist/
