@@ -1,6 +1,44 @@
 # Dev run scripts
 
-Two ways to run the app for local development.
+## Recommended: one port + ngrok
+
+Everything (app, `/api`, `/ws`) is served from **one port**, so **one tunnel**
+covers the whole app. ngrok puts trusted HTTPS in front, which means camera/mic
+work on every device with **no certs and no Chrome flags**.
+
+One-time ngrok setup:
+
+```powershell
+winget install ngrok.ngrok          # or download from https://ngrok.com/download
+ngrok config add-authtoken <your-token>   # free account -> dashboard
+```
+
+Then, two terminals:
+
+```powershell
+# 1) build the client + serve app/API/WS on :8787
+scripts\serve.ps1
+
+# 2) tunnel that one port
+ngrok http 8787
+```
+
+ngrok prints a `https://<something>.ngrok-free.app` URL. Open it on any device —
+sign up, add friends, chat, call. Done.
+
+Notes:
+- A **free ngrok account includes one static domain**, so the URL stops changing:
+  grab it from the dashboard (Domains) and run
+  `ngrok http 8787 --url=<your-name>.ngrok-free.app`.
+- `scripts\serve.ps1 -NoBuild` skips the client rebuild. After editing client
+  code, re-run without `-NoBuild` (the served files are the built ones).
+- The backend stays plain HTTP on purpose — the tunnel terminates TLS.
+- Calls between devices on **different** networks may still need a TURN server
+  for the P2P media (the tunnel only carries signaling). Same-network is fine.
+
+---
+
+The rest below are alternatives; you don't need them if the above works.
 
 ## Plain HTTP (localhost only)
 
@@ -51,14 +89,12 @@ calls work with no browser flag.
 > Certs in `infra/certs/` are machine-specific and gitignored. Regenerate them
 > per the one-time setup above on each host.
 
-## Tunnel (easiest for testing across any network / device)
+## Tunnel the dev server instead (keeps hot reload)
 
-A tunnel gives a public, browser-trusted HTTPS URL with **no certs, no flags, no
-firewall** — and it works from anywhere, not just the same LAN. The client serves
-`/api` and `/ws` on its own origin (vite proxies them to the backend), so a single
-tunnel to the client covers everything.
-
-Run three things:
+Same idea as the recommended setup, but tunnelling vite instead of the backend,
+so client edits hot-reload while you test on other devices. Costs an extra
+process; vite proxies `/api` + `/ws` to the backend so one tunnel still covers
+everything. Use `ngrok http 4320` or:
 
 ```powershell
 # 1) backend (plain http is fine; the tunnel provides https)
