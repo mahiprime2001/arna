@@ -92,7 +92,9 @@ export function CallOverlay({ state }: { state: CallState }) {
       ? "Calling"
       : state.status === "incoming"
         ? `Incoming ${isVideo ? "video" : "voice"} call`
-        : `${isVideo ? "Video" : "Voice"} call · ${clock}`;
+        : state.status === "connecting"
+          ? "Connecting"
+          : `${isVideo ? "Video" : "Voice"} call · ${clock}`;
 
   return (
     <div className="fixed inset-0 z-50 flex flex-col bg-slate-950/95 backdrop-blur-sm">

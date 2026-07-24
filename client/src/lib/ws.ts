@@ -59,7 +59,7 @@ function open() {
   };
 }
 
-export function connectWs(onMessage: (e: Envelope) => void) {
+export function connectWs(onMessage: (e: Incoming) => void) {
   handler = onMessage;
   closed = false;
   open();

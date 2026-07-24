@@ -2,8 +2,7 @@
 // (vite proxies them to the Go backend in dev). This means one URL/tunnel covers
 // everything and there's no cross-origin or mixed-content trouble. Override with
 // VITE_ARNA_API to point at a separate backend origin.
-export const API =
-  ((import.meta.env as unknown as { VITE_ARNA_API?: string }).VITE_ARNA_API ?? "");
+export const API = import.meta.env.VITE_ARNA_API ?? "";
 
 const TOKEN_KEY = "arna_token";
 

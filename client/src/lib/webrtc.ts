@@ -4,7 +4,7 @@
 // One active call at a time. STUN handles most NATs; cross-internet symmetric
 // NATs would additionally need a TURN server (not configured yet).
 
-export type CallStatus = "idle" | "outgoing" | "incoming" | "connected";
+export type CallStatus = "idle" | "outgoing" | "incoming" | "connecting" | "connected";
 export type CallKind = "audio" | "video";
 
 export interface CallState {
@@ -19,7 +19,24 @@ export interface CallState {
   error: string | null;
 }
 
-const ICE: RTCIceServer[] = [{ urls: "stun:stun.l.google.com:19302" }];
+// STUN is enough when at least one side is reachable. Symmetric NATs (common on
+// mobile data, some corporate/ISP routers) need a TURN relay -- set the three
+// VITE_ARNA_TURN_* vars to add one without touching this file.
+const envv = import.meta.env;
+
+const ICE: RTCIceServer[] = [
+  { urls: "stun:stun.l.google.com:19302" },
+  { urls: "stun:stun1.l.google.com:19302" },
+  ...(envv.VITE_ARNA_TURN_URL
+    ? [
+        {
+          urls: envv.VITE_ARNA_TURN_URL,
+          username: envv.VITE_ARNA_TURN_USERNAME,
+          credential: envv.VITE_ARNA_TURN_CREDENTIAL,
+        } as RTCIceServer,
+      ]
+    : []),
+];
 
 const idle: CallState = {
   status: "idle",
@@ -36,8 +53,15 @@ const idle: CallState = {
 class CallEngine {
   private pc: RTCPeerConnection | null = null;
   private local: MediaStream | null = null;
+  private remote: MediaStream | null = null;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   private pendingOffer: any = null;
+  // ICE candidates that arrived before we had a peer connection with a remote
+  // description to attach them to -- typically the caller's candidates landing
+  // while the callee is still looking at the ringing screen. Dropping these
+  // leaves the callee with no route to the caller, so the call "connects" but
+  // no media ever flows. Hold them and flush once we can accept them.
+  private pendingIce: RTCIceCandidateInit[] = [];
   private state: CallState = { ...idle };
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -90,17 +114,16 @@ class CallEngine {
         });
         break;
       case "answer":
-        if (this.pc) await this.pc.setRemoteDescription(sig.sdp);
-        this.push({ status: "connected" });
+        if (this.pc) {
+          await this.pc.setRemoteDescription(sig.sdp);
+          await this.flushIce();
+        }
+        // Not "connected" yet -- that is decided by the actual ICE connection,
+        // in makePc(). Claiming it here is what made dead calls look live.
+        this.push({ status: "connecting" });
         break;
       case "ice":
-        if (this.pc && sig.candidate) {
-          try {
-            await this.pc.addIceCandidate(sig.candidate);
-          } catch {
-            /* ignore late candidates */
-          }
-        }
+        if (sig.candidate) await this.addIce(sig.candidate);
         break;
       case "decline":
       case "end":
@@ -112,15 +135,48 @@ class CallEngine {
   async accept() {
     if (this.state.status !== "incoming" || !this.pendingOffer || this.state.peerId == null) return;
     const peerId = this.state.peerId;
-    if (!(await this.acquire(this.state.kind))) return;
+    const kind = this.state.kind;
+
+    // Order matters: take the offer FIRST so its m-lines exist, then add our
+    // tracks into those transceivers. Adding tracks first builds a different
+    // shape than the caller offered and the two sides fail to line up.
     this.makePc(peerId);
-    this.attachLocal(this.state.kind);
     await this.pc!.setRemoteDescription(this.pendingOffer);
+    this.pendingOffer = null;
+    await this.flushIce();
+
+    if (!(await this.acquire(kind))) return;
+    this.attachLocal(kind);
+
     const answer = await this.pc!.createAnswer();
     await this.pc!.setLocalDescription(answer);
     this.send(peerId, { t: "answer", sdp: answer });
-    this.pendingOffer = null;
-    this.push({ status: "connected" });
+    this.push({ status: "connecting" });
+  }
+
+  private async addIce(candidate: RTCIceCandidateInit) {
+    // Only safe to add once a remote description exists; otherwise hold it.
+    if (!this.pc || !this.pc.remoteDescription) {
+      this.pendingIce.push(candidate);
+      return;
+    }
+    try {
+      await this.pc.addIceCandidate(candidate);
+    } catch {
+      /* a stale candidate for a closed connection is harmless */
+    }
+  }
+
+  private async flushIce() {
+    const queued = this.pendingIce;
+    this.pendingIce = [];
+    for (const c of queued) {
+      try {
+        await this.pc?.addIceCandidate(c);
+      } catch {
+        /* ignore */
+      }
+    }
   }
 
   decline() {
@@ -163,6 +219,13 @@ class CallEngine {
     const haveAudio = !!this.local?.getAudioTracks().length;
     const haveVideo = !!this.local?.getVideoTracks().length;
     this.local?.getTracks().forEach((t) => this.pc!.addTrack(t, this.local!));
+
+    // Only the caller adds these. Answering, the offer's m-lines already exist
+    // (setRemoteDescription created them) and default to receive-only, so
+    // adding more here would put extra m-lines in the answer -- which the
+    // caller rejects, killing the call for anyone without a mic or camera.
+    if (this.pc!.remoteDescription) return;
+
     if (!haveAudio) this.pc!.addTransceiver("audio", { direction: "recvonly" });
     if (kind === "video" && !haveVideo) {
       this.pc!.addTransceiver("video", { direction: "recvonly" });
@@ -210,11 +273,32 @@ class CallEngine {
   private makePc(peerId: number) {
     const pc = new RTCPeerConnection({ iceServers: ICE });
     this.pc = pc;
+    this.remote = new MediaStream();
+
     pc.onicecandidate = (e) => {
       if (e.candidate) this.send(peerId, { t: "ice", candidate: e.candidate });
     };
+
+    // Collect tracks ourselves rather than trusting e.streams[0], which is empty
+    // when the other side negotiated a transceiver without an attached stream.
     pc.ontrack = (e) => {
-      this.push({ remoteStream: e.streams[0] });
+      if (pc !== this.pc) return;
+      this.remote!.addTrack(e.track);
+      this.push({ remoteStream: this.remote });
+    };
+
+    // The call is "connected" when media can actually flow, not when we sent an
+    // answer. If ICE gives up, say so instead of showing a silent dead call.
+    pc.onconnectionstatechange = () => {
+      if (pc !== this.pc) return;
+      if (pc.connectionState === "connected") {
+        this.push({ status: "connected" });
+      } else if (pc.connectionState === "failed") {
+        this.fail(
+          "Couldn't connect the call. This usually means both devices are behind " +
+            "networks that block direct connections, which needs a TURN relay.",
+        );
+      }
     };
   }
 
@@ -227,7 +311,9 @@ class CallEngine {
     }
     this.pc = null;
     this.local = null;
+    this.remote = null;
     this.pendingOffer = null;
+    this.pendingIce = [];
     this.state = { ...idle };
     this.emit(this.state);
   }
