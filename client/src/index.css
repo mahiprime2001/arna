@@ -5,34 +5,61 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Telegram Desktop palette. Hex values from Telegram's Day/Night themes, kept
+   here as the source of truth next to the HSL triplets Tailwind consumes.
+
+   Day                          Night
+   accent      #3390EC          accent      #3390EC
+   window      #FFFFFF          sidebar     #17212B
+   chat bg     #E6EBF0          chat bg     #0E1621
+   bubble in   #FFFFFF          bubble in   #182533
+   bubble out  #EFFDDE          bubble out  #2B5278
+   secondary   #707579          secondary   #7D8B99
+   online      #4FAE4E          online      #4DCD5E              */
+
 @layer base {
   :root {
-    --canvas: 210 30% 98%;
-    --surface: 0 0% 100%;
-    --elevated: 214 28% 96%;
-    --line: 214 22% 89%;
-    --ink: 220 39% 13%;
-    --muted: 215 16% 46%;
-    --brand: 160 84% 33%;
+    --canvas: 210 25% 92%; /* #E6EBF0 chat background */
+    --surface: 0 0% 100%; /* #FFFFFF panels, chat list */
+    --elevated: 240 5% 96%; /* #F4F4F5 inputs, hover */
+    --line: 220 10% 89%; /* #DFE1E5 dividers */
+    --ink: 210 15% 10%; /* near-black message text */
+    --muted: 207 4% 46%; /* #707579 timestamps, secondary */
+    --brand: 210 83% 56%; /* #3390EC Telegram blue */
     --brand-fg: 0 0% 100%;
-    --good: 152 58% 40%;
-    --warn: 38 92% 44%;
-    --danger: 356 72% 52%;
-    --radius: 0.8rem;
+    --good: 119 38% 49%; /* #4FAE4E online, ticks */
+    --warn: 39 91% 55%;
+    --danger: 1 77% 55%; /* #E53935 */
+
+    /* Message bubbles are their own tokens: Telegram's outgoing bubble is a
+       pale green on Day and a blue on Night, neither of which is the accent. */
+    --bubble-in: 0 0% 100%; /* #FFFFFF */
+    --bubble-in-fg: 210 15% 10%;
+    --bubble-out: 87 89% 93%; /* #EFFDDE */
+    --bubble-out-fg: 210 15% 10%;
+    --tick: 119 38% 49%; /* #4FAE4E read ticks */
+
+    --radius: 0.75rem;
   }
 
   .dark {
-    --canvas: 220 28% 7%;
-    --surface: 220 24% 10%;
-    --elevated: 220 19% 14%;
-    --line: 220 15% 20%;
-    --ink: 210 30% 94%;
-    --muted: 215 15% 60%;
-    --brand: 156 64% 52%;
-    --brand-fg: 165 66% 8%;
-    --good: 152 56% 52%;
-    --warn: 40 92% 58%;
-    --danger: 356 78% 66%;
+    --canvas: 215 40% 9%; /* #0E1621 chat background */
+    --surface: 210 30% 13%; /* #17212B sidebar, panels */
+    --elevated: 211 36% 15%; /* #182533 inputs, hover */
+    --line: 208 35% 10%; /* #101921 dividers */
+    --ink: 0 0% 100%;
+    --muted: 210 12% 55%; /* #7D8B99 */
+    --brand: 210 83% 56%; /* #3390EC */
+    --brand-fg: 0 0% 100%;
+    --good: 128 56% 55%; /* #4DCD5E */
+    --warn: 40 92% 60%;
+    --danger: 360 100% 68%; /* #FF595A */
+
+    --bubble-in: 211 36% 15%; /* #182533 */
+    --bubble-in-fg: 0 0% 100%;
+    --bubble-out: 210 47% 32%; /* #2B5278 */
+    --bubble-out-fg: 0 0% 100%;
+    --tick: 205 85% 69%; /* #6AB3F3 read ticks on blue */
   }
 
   * {

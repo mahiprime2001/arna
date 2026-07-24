@@ -19,6 +19,13 @@ export default {
         good: "hsl(var(--good))",
         warn: "hsl(var(--warn))",
         danger: "hsl(var(--danger))",
+        bubble: {
+          in: "hsl(var(--bubble-in))",
+          "in-fg": "hsl(var(--bubble-in-fg))",
+          out: "hsl(var(--bubble-out))",
+          "out-fg": "hsl(var(--bubble-out-fg))",
+        },
+        tick: "hsl(var(--tick))",
       },
       borderColor: { DEFAULT: "hsl(var(--line))" },
       borderRadius: {

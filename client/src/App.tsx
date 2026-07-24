@@ -10,15 +10,15 @@ import { Notifications } from "@/views/Notifications";
 import { Profile } from "@/views/Profile";
 import { Settings } from "@/views/Settings";
 import {
-  type ChatMedia,
   type ChatMessage,
   type Friend,
   type FriendRequest,
-  type MsgKind,
   type Note,
   type OutgoingPayload,
   type Route,
   type SentRequest,
+  type ThreadMetas,
+  type WirePayload,
 } from "@/lib/mock";
 import * as api from "@/lib/api";
 import type { AuthUser } from "@/lib/api";
@@ -31,7 +31,18 @@ import {
   sendSignal,
   type Incoming,
 } from "@/lib/ws";
-import { hhmm, loadChats, nextMsgId, saveChats, type Threads } from "@/lib/chat";
+import {
+  hhmm,
+  loadChats,
+  loadMetas,
+  metaOf,
+  newMid,
+  nextMsgId,
+  saveChats,
+  saveMetas,
+  sweepExpired,
+  type Threads,
+} from "@/lib/chat";
 import { callEngine, type CallKind, type CallState } from "@/lib/webrtc";
 
 export type Theme = "dark" | "light";
@@ -64,12 +75,18 @@ export default function App({
 
   // Chat (device-local, E2E encrypted over the relay).
   const [chats, setChats] = useState<Threads>(() => loadChats(user.id));
+  const [metas, setMetas] = useState<ThreadMetas>(() => loadMetas(user.id));
   const [chatUnread, setChatUnread] = useState<Record<number, number>>({});
   const [openConv, setOpenConv] = useState<number | null>(null);
+  const [typing, setTyping] = useState<Record<number, boolean>>({});
 
   const openConvRef = useRef<number | null>(null);
   const friendsRef = useRef<Friend[]>(friends);
+  const metasRef = useRef<ThreadMetas>(metas);
   const seenRef = useRef<Set<number>>(new Set());
+  useEffect(() => {
+    metasRef.current = metas;
+  }, [metas]);
   useEffect(() => {
     openConvRef.current = openConv;
   }, [openConv]);
@@ -107,8 +124,16 @@ export default function App({
   // Incoming encrypted message: decrypt with the sender's public key, store,
   // and bump unread unless that conversation is open.
   const onIncoming = useCallback((e: Incoming) => {
-    // Call signaling (offer/answer/ice/end).
     if (e.type === "signal") {
+      // The signal path carries both call setup and live-only chat ops
+      // (typing), the latter still encrypted end-to-end.
+      if (e.signal?.t === "chat") {
+        const fr = friendsRef.current.find((f) => f.id === e.from);
+        if (!fr?.pubkey) return;
+        const plain = decryptFrom(fr.pubkey, e.signal.nonce, e.signal.ciphertext);
+        if (plain != null) applyOp(e.from, JSON.parse(plain) as WirePayload);
+        return;
+      }
       callEngine.onSignal(e.from, e.signal);
       return;
     }
@@ -142,29 +167,87 @@ export default function App({
     if (!fr?.pubkey) return;
     const plain = decryptFrom(fr.pubkey, e.nonce, e.ciphertext);
     if (plain == null) return;
-    let payload: { mid: string; kind: MsgKind; text?: string; media?: ChatMedia };
+    let payload: WirePayload;
     try {
       payload = JSON.parse(plain);
     } catch {
       return;
     }
-    const ts = e.ts || Date.now();
-    const msg: ChatMessage = {
-      id: nextMsgId(),
-      mid: payload.mid,
-      mine: false,
-      kind: payload.kind,
-      text: payload.text,
-      media: payload.media,
-      time: hhmm(ts),
-      ts,
-    };
-    setChats((prev) => ({ ...prev, [e.from]: [...(prev[e.from] || []), msg] }));
-    sendReceipt(e.from, "delivered", payload.mid);
-    if (openConvRef.current === e.from) {
-      sendReceipt(e.from, "read");
-    } else {
-      setChatUnread((u) => ({ ...u, [e.from]: (u[e.from] || 0) + 1 }));
+    applyOp(e.from, payload, e.ts);
+  }, []);
+
+  // Apply a decrypted op from the peer. Anything without an `op` is a plain
+  // message (which is also what older clients send).
+  const applyOp = useCallback((from: number, p: WirePayload, wireTs?: number) => {
+    switch (p.op) {
+      case "typing":
+        setTyping((t) => ({ ...t, [from]: p.on }));
+        return;
+
+      case "edit":
+        setChats((prev) => {
+          const thread = prev[from];
+          if (!thread) return prev;
+          return {
+            ...prev,
+            [from]: thread.map((m) => (m.mid === p.mid ? { ...m, text: p.text, edited: p.ts } : m)),
+          };
+        });
+        return;
+
+      case "delete":
+        setChats((prev) => {
+          const thread = prev[from];
+          if (!thread) return prev;
+          return { ...prev, [from]: thread.filter((m) => !p.mids.includes(m.mid)) };
+        });
+        return;
+
+      case "react":
+        setChats((prev) => {
+          const thread = prev[from];
+          if (!thread) return prev;
+          return {
+            ...prev,
+            [from]: thread.map((m) =>
+              m.mid === p.mid ? { ...m, theirReaction: p.emoji ?? undefined } : m,
+            ),
+          };
+        });
+        return;
+
+      case "ttl":
+        // The peer changed the disappearing timer; both sides must agree.
+        setMetas((prev) => ({ ...prev, [from]: { ...metaOf(prev, from), ttl: p.seconds } }));
+        return;
+
+      default: {
+        const ts = wireTs || Date.now();
+        const msg: ChatMessage = {
+          id: nextMsgId(),
+          mid: p.mid,
+          mine: false,
+          kind: p.kind,
+          text: p.text,
+          media: p.media,
+          replyTo: p.replyTo,
+          replyPreview: p.replyPreview,
+          // The quote's author is named from the receiver's point of view.
+          replyAuthor: p.replyAuthor === "You" ? "Them" : "You",
+          fwdFrom: p.fwdFrom,
+          time: hhmm(ts),
+          ts,
+          ...(p.ttl ? { expiresAt: Date.now() + p.ttl * 1000 } : {}),
+        };
+        setTyping((t) => (t[from] ? { ...t, [from]: false } : t));
+        setChats((prev) => ({ ...prev, [from]: [...(prev[from] || []), msg] }));
+        sendReceipt(from, "delivered", p.mid);
+        if (openConvRef.current === from) {
+          sendReceipt(from, "read");
+        } else {
+          setChatUnread((u) => ({ ...u, [from]: (u[from] || 0) + 1 }));
+        }
+      }
     }
   }, []);
 
@@ -189,6 +272,25 @@ export default function App({
   useEffect(() => {
     saveChats(user.id, chats);
   }, [chats, user.id]);
+  useEffect(() => {
+    saveMetas(user.id, metas);
+  }, [metas, user.id]);
+
+  // Disappearing messages: drop anything past its self-destruct time. Runs on a
+  // tick so a message vanishes while you are looking at it, as Telegram does.
+  useEffect(() => {
+    const id = window.setInterval(() => {
+      setChats((prev) => sweepExpired(prev) ?? prev);
+    }, 1000);
+    return () => clearInterval(id);
+  }, []);
+
+  // "typing…" is a claim with a short shelf life; expire it if they go quiet.
+  useEffect(() => {
+    if (!Object.values(typing).some(Boolean)) return;
+    const id = window.setTimeout(() => setTyping({}), 4000);
+    return () => clearTimeout(id);
+  }, [typing]);
 
   // Leaving Messages closes the active conversation.
   useEffect(() => {
@@ -226,10 +328,31 @@ export default function App({
     setRoute("messages");
   };
 
+  // Every chat feature below rides inside the encrypted envelope, so the relay
+  // cannot tell an edit from a reaction from a plain message -- it only ever
+  // sees ciphertext it must forward.
+  const sendOp = (friendId: number, op: WirePayload, live = false) => {
+    const fr = friendsRef.current.find((f) => f.id === friendId);
+    if (!fr?.pubkey) return;
+    const { nonce, ciphertext } = encryptFor(fr.pubkey, JSON.stringify(op));
+    // Live ops (typing) go down the signal path, which is never queued for
+    // offline delivery -- a stale "typing…" an hour later would be nonsense.
+    if (live) sendSignal(friendId, { t: "chat", nonce, ciphertext });
+    else sendMsg(friendId, nonce, ciphertext, Date.now());
+  };
+
+  const patchThread = (friendId: number, fn: (m: ChatMessage) => ChatMessage | null) =>
+    setChats((prev) => {
+      const thread = prev[friendId];
+      if (!thread) return prev;
+      const next = thread.map(fn).filter((m): m is ChatMessage => m !== null);
+      return { ...prev, [friendId]: next };
+    });
+
   const sendMessage = (friendId: number, payload: OutgoingPayload) => {
-    const fr = friends.find((f) => f.id === friendId);
     const ts = Date.now();
-    const mid = crypto.randomUUID();
+    const mid = newMid();
+    const ttl = metaOf(metasRef.current, friendId).ttl ?? 0;
     const msg: ChatMessage = {
       id: nextMsgId(),
       mid,
@@ -237,22 +360,65 @@ export default function App({
       kind: payload.kind,
       text: payload.text,
       media: payload.media,
+      replyTo: payload.replyTo,
+      replyPreview: payload.replyPreview,
+      replyAuthor: payload.replyAuthor,
+      fwdFrom: payload.fwdFrom,
       time: hhmm(ts),
       ts,
       status: "sent",
+      ...(ttl ? { expiresAt: ts + ttl * 1000 } : {}),
     };
     setChats((prev) => ({ ...prev, [friendId]: [...(prev[friendId] || []), msg] }));
-    if (fr?.pubkey) {
-      const wire = JSON.stringify({
-        mid,
-        kind: payload.kind,
-        text: payload.text,
-        media: payload.media,
-      });
-      const { nonce, ciphertext } = encryptFor(fr.pubkey, wire);
-      sendMsg(friendId, nonce, ciphertext, ts);
-    }
+    sendOp(friendId, { mid, ...payload, ttl });
   };
+
+  const editMessage = (friendId: number, mid: string, text: string) => {
+    const ts = Date.now();
+    patchThread(friendId, (m) => (m.mid === mid ? { ...m, text, edited: ts } : m));
+    sendOp(friendId, { op: "edit", mid, text, ts });
+  };
+
+  const deleteMessage = (friendId: number, m: ChatMessage, forEveryone: boolean) => {
+    patchThread(friendId, (x) => (x.mid === m.mid ? null : x));
+    if (forEveryone) sendOp(friendId, { op: "delete", mids: [m.mid] });
+  };
+
+  const reactToMessage = (friendId: number, m: ChatMessage, emoji: string | null) => {
+    patchThread(friendId, (x) =>
+      x.mid === m.mid ? { ...x, myReaction: emoji ?? undefined } : x,
+    );
+    sendOp(friendId, { op: "react", mid: m.mid, emoji });
+  };
+
+  const forwardMessage = (toFriendId: number, m: ChatMessage, fromName: string) =>
+    sendMessage(toFriendId, {
+      kind: m.kind,
+      text: m.text,
+      media: m.media,
+      fwdFrom: m.fwdFrom ?? fromName,
+    });
+
+  const setTtl = (friendId: number, seconds: number) => {
+    setMetas((prev) => ({ ...prev, [friendId]: { ...metaOf(prev, friendId), ttl: seconds } }));
+    sendOp(friendId, { op: "ttl", seconds });
+  };
+
+  const toggleMute = (friendId: number) =>
+    setMetas((prev) => ({
+      ...prev,
+      [friendId]: { ...metaOf(prev, friendId), muted: !metaOf(prev, friendId).muted },
+    }));
+
+  // Pinning is local: the spec for this app keeps per-device state per-device.
+  const pinMessage = (friendId: number, mid: string | null) =>
+    setMetas((prev) => ({
+      ...prev,
+      [friendId]: { ...metaOf(prev, friendId), pinned: mid ?? undefined },
+    }));
+
+  const setTypingTo = (friendId: number, on: boolean) =>
+    sendOp(friendId, { op: "typing", on }, true);
 
   const startCall = (peerId: number, name: string, kind: CallKind) =>
     callEngine.start(peerId, name, kind);
@@ -297,11 +463,21 @@ export default function App({
               <Messages
                 friends={friends}
                 chats={chats}
+                metas={metas}
                 unread={chatUnread}
+                typing={typing}
                 initialFriendId={dmFriend}
                 onOpen={openConversation}
                 onSend={sendMessage}
                 onCall={startCall}
+                onTyping={setTypingTo}
+                onSetTtl={setTtl}
+                onToggleMute={toggleMute}
+                onPin={pinMessage}
+                onEditMessage={editMessage}
+                onDeleteMessage={deleteMessage}
+                onReact={reactToMessage}
+                onForward={forwardMessage}
               />
             )}
             {route === "friends" && (
