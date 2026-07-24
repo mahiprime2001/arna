@@ -25,7 +25,10 @@ var db *sql.DB
 
 func main() {
 	var err error
-	db, err = sql.Open("sqlite", env("ARNA_DB", "arna.db"))
+	// Default to the DB the dev accounts actually live in, so a bare `go run .`
+	// finds them. Pointing at a different file silently gives you an empty DB
+	// and "invalid login" on accounts you know exist.
+	db, err = sql.Open("sqlite", env("ARNA_DB", "arna-social.db"))
 	if err != nil {
 		log.Fatal(err)
 	}
