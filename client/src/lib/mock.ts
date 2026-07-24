@@ -135,5 +135,3 @@ export type WirePayload =
 // Chat is device-local (E2E) and not wired yet; start with no threads.
 export const conversations: Record<number, ChatMessage[]> = {};
 
-// No workspaces yet, by design.
-export const workspaces: { id: string; name: string; state: string }[] = [];

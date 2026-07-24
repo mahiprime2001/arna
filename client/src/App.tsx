@@ -44,6 +44,14 @@ import {
   type Threads,
 } from "@/lib/chat";
 import { callEngine, type CallKind, type CallState } from "@/lib/webrtc";
+import {
+  canTransition,
+  loadWorkspaces,
+  newWorkspaceId,
+  saveWorkspaces,
+  type Workspace,
+  type WorkspaceState,
+} from "@/lib/workspace";
 
 export type Theme = "dark" | "light";
 
@@ -79,6 +87,13 @@ export default function App({
   const [chatUnread, setChatUnread] = useState<Record<number, number>>({});
   const [openConv, setOpenConv] = useState<number | null>(null);
   const [typing, setTyping] = useState<Record<number, boolean>>({});
+
+  // Workspaces are device-local for now; there is no platform layer to run
+  // them yet, so these records are policy, not processes.
+  const [workspaces, setWorkspaces] = useState<Workspace[]>(() => loadWorkspaces(user.id));
+  useEffect(() => {
+    saveWorkspaces(user.id, workspaces);
+  }, [workspaces, user.id]);
 
   const openConvRef = useRef<number | null>(null);
   const friendsRef = useRef<Friend[]>(friends);
@@ -420,6 +435,33 @@ export default function App({
   const setTypingTo = (friendId: number, on: boolean) =>
     sendOp(friendId, { op: "typing", on }, true);
 
+  // ── workspaces ────────────────────────────────────────────────────────────
+  const createWorkspace = (draft: Omit<Workspace, "id" | "state" | "createdAt">) =>
+    setWorkspaces((prev) => [
+      { ...draft, id: newWorkspaceId(), state: "created", createdAt: Date.now() },
+      ...prev,
+    ]);
+
+  // Refuse anything the spec's state machine doesn't permit, rather than
+  // trusting the UI to only offer legal buttons (SPEC §5.2).
+  const transitionWorkspace = (id: string, to: WorkspaceState) =>
+    setWorkspaces((prev) =>
+      prev.map((w) => (w.id === id && canTransition(w.state, to) ? { ...w, state: to } : w)),
+    );
+
+  // SPEC §5.5: deletion destroys contents, it does not merely unlist them.
+  const deleteWorkspace = (w: Workspace) => {
+    const wipes = w.persistence === "temporary";
+    const ok = window.confirm(
+      `Delete "${w.name}"?\n\n${
+        wipes
+          ? "Everything inside is destroyed for good."
+          : "Its saved contents are destroyed for good."
+      }\n\nThis cannot be undone.`,
+    );
+    if (ok) setWorkspaces((prev) => prev.filter((x) => x.id !== w.id));
+  };
+
   const startCall = (peerId: number, name: string, kind: CallKind) =>
     callEngine.start(peerId, name, kind);
 
@@ -479,10 +521,18 @@ export default function App({
                     friends={friends}
                     requestCount={requests.length}
                     unread={unread}
+                    workspaces={workspaces}
                     setRoute={setRoute}
                   />
                 )}
-                {route === "workspaces" && <Workspaces />}
+                {route === "workspaces" && (
+                  <Workspaces
+                    workspaces={workspaces}
+                    onCreate={createWorkspace}
+                    onTransition={transitionWorkspace}
+                    onDelete={deleteWorkspace}
+                  />
+                )}
                 {route === "friends" && (
                   <Friends
                     friends={friends}

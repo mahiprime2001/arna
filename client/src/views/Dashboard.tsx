@@ -10,7 +10,8 @@ import { Button } from "@/components/ui/Button";
 import { Avatar } from "@/components/Avatar";
 import { PageHeader } from "@/components/PageHeader";
 import { cn } from "@/lib/utils";
-import { workspaces, type Friend, type Route } from "@/lib/mock";
+import { type Friend, type Route } from "@/lib/mock";
+import type { Workspace } from "@/lib/workspace";
 import type { AuthUser } from "@/lib/api";
 
 export function Dashboard({
@@ -18,18 +19,24 @@ export function Dashboard({
   friends,
   requestCount,
   unread,
+  workspaces,
   setRoute,
 }: {
   user: AuthUser;
   friends: Friend[];
   requestCount: number;
   unread: number;
+  workspaces: Workspace[];
   setRoute: (r: Route) => void;
 }) {
   const online = friends.filter((f) => f.presence !== "offline");
   const first = user.name.split(" ")[0];
   const stats = [
-    { icon: StackSimple, value: workspaces.length, label: "Active workspaces" },
+    {
+      icon: StackSimple,
+      value: workspaces.filter((w) => w.state === "running" || w.state === "idle").length,
+      label: "Active workspaces",
+    },
     { icon: UsersThree, value: online.length, label: "Friends online" },
     { icon: BellRinging, value: unread, label: "Unread alerts" },
   ];
