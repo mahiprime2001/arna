@@ -24,10 +24,16 @@
     --elevated: 240 5% 96%; /* #F4F4F5 inputs, hover */
     --line: 220 10% 89%; /* #DFE1E5 dividers */
     --ink: 210 15% 10%; /* near-black message text */
-    --muted: 207 4% 46%; /* #707579 timestamps, secondary */
-    --brand: 210 83% 56%; /* #3390EC Telegram blue */
+    /* Telegram's own #707579 lands at 3.88:1 on the #E6EBF0 chat background,
+       which fails for the 11-12px timestamps we use it on. Darkened to 4.98:1;
+       the hue is unchanged so it still reads as Telegram grey. */
+    --muted: 207 5% 40%;
+    --brand: 210 83% 56%; /* #3390EC Telegram blue -- fills and buttons */
+    /* #3390EC is only 3.31:1 on white, so small brand-coloured TEXT (reply
+       author, "Pinned message", "Forwarded from") uses a darker blue at 5.1:1. */
+    --brand-strong: 210 76% 44%;
     --brand-fg: 0 0% 100%;
-    --good: 119 38% 49%; /* #4FAE4E online, ticks */
+    --good: 119 38% 49%; /* #4FAE4E online */
     --warn: 39 91% 55%;
     --danger: 1 77% 55%; /* #E53935 */
 
@@ -37,7 +43,9 @@
     --bubble-in-fg: 210 15% 10%;
     --bubble-out: 87 89% 93%; /* #EFFDDE */
     --bubble-out-fg: 210 15% 10%;
-    --tick: 119 38% 49%; /* #4FAE4E read ticks */
+    /* Telegram's #4FAE4E tick on its own #EFFDDE bubble is 2.64:1 -- below even
+       the 3:1 floor for meaningful icons. Darkened to 4.05:1. */
+    --tick: 119 41% 39%;
 
     --radius: 0.75rem;
   }
@@ -48,8 +56,9 @@
     --elevated: 211 36% 15%; /* #182533 inputs, hover */
     --line: 208 35% 10%; /* #101921 dividers */
     --ink: 0 0% 100%;
-    --muted: 210 12% 55%; /* #7D8B99 */
+    --muted: 210 12% 55%; /* #7D8B99 -- 5.21:1 on the night background, fine */
     --brand: 210 83% 56%; /* #3390EC */
+    --brand-strong: 205 85% 69%; /* #6AB3F3, Telegram's night link blue */
     --brand-fg: 0 0% 100%;
     --good: 128 56% 55%; /* #4DCD5E */
     --warn: 40 92% 60%;
@@ -70,6 +79,41 @@
   body,
   #root {
     height: 100%;
+  }
+
+  /* Never let the page scroll sideways; wide content scrolls in its own box. */
+  html,
+  body {
+    overflow-x: clip;
+  }
+
+  /* Keyboard users need to see where they are. :where() keeps specificity at 0
+     so any component can still override it. The ring is never animated -- it
+     must appear the instant focus lands. */
+  :where(button, a, input, textarea, select, summary, [tabindex]):focus-visible {
+    outline: 2px solid hsl(var(--brand));
+    outline-offset: 2px;
+    border-radius: 6px;
+  }
+
+  /* A press should feel like a press. */
+  :where(button):not(:disabled):active {
+    transform: translateY(0.5px);
+  }
+  :where(button):disabled {
+    cursor: not-allowed;
+    opacity: 0.5;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
   }
 
   body {

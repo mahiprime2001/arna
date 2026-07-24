@@ -447,59 +447,64 @@ export default function App({
           }}
           user={user}
         />
-        <main className="flex-1 overflow-y-auto">
-          <div className="mx-auto max-w-5xl px-8 py-8">
-            {route === "dashboard" && (
-              <Dashboard
-                user={user}
-                friends={friends}
-                requestCount={requests.length}
-                unread={unread}
-                setRoute={setRoute}
-              />
-            )}
-            {route === "workspaces" && <Workspaces />}
-            {route === "messages" && (
-              <Messages
-                friends={friends}
-                chats={chats}
-                metas={metas}
-                unread={chatUnread}
-                typing={typing}
-                initialFriendId={dmFriend}
-                onOpen={openConversation}
-                onSend={sendMessage}
-                onCall={startCall}
-                onTyping={setTypingTo}
-                onSetTtl={setTtl}
-                onToggleMute={toggleMute}
-                onPin={pinMessage}
-                onEditMessage={editMessage}
-                onDeleteMessage={deleteMessage}
-                onReact={reactToMessage}
-                onForward={forwardMessage}
-              />
-            )}
-            {route === "friends" && (
-              <Friends
-                friends={friends}
-                requests={requests}
-                sent={sent}
-                onAccept={acceptRequest}
-                onDecline={declineRequest}
-                onCancelSent={cancelSent}
-                onRemove={removeFriend}
-                onAdd={addFriend}
-                onMessage={openDm}
-                onCall={startCall}
-              />
-            )}
-            {route === "notifications" && (
-              <Notifications notes={notes} setNotes={setNotes} />
-            )}
-            {route === "profile" && <Profile user={user} onSignOut={onSignOut} />}
-            {route === "settings" && <Settings theme={theme} setTheme={setTheme} />}
-          </div>
+        <main className="flex-1 overflow-hidden">
+          {/* Messages runs full-bleed and full-height the way a chat app should.
+              Every other route keeps the centred document column. */}
+          {route === "messages" ? (
+            <Messages
+              friends={friends}
+              chats={chats}
+              metas={metas}
+              unread={chatUnread}
+              typing={typing}
+              initialFriendId={dmFriend}
+              onOpen={openConversation}
+              onSend={sendMessage}
+              onCall={startCall}
+              onTyping={setTypingTo}
+              onSetTtl={setTtl}
+              onToggleMute={toggleMute}
+              onPin={pinMessage}
+              onEditMessage={editMessage}
+              onDeleteMessage={deleteMessage}
+              onReact={reactToMessage}
+              onForward={forwardMessage}
+            />
+          ) : (
+            <div className="h-full overflow-y-auto">
+              <div className="mx-auto max-w-5xl px-8 py-8">
+                {route === "dashboard" && (
+                  <Dashboard
+                    user={user}
+                    friends={friends}
+                    requestCount={requests.length}
+                    unread={unread}
+                    setRoute={setRoute}
+                  />
+                )}
+                {route === "workspaces" && <Workspaces />}
+                {route === "friends" && (
+                  <Friends
+                    friends={friends}
+                    requests={requests}
+                    sent={sent}
+                    onAccept={acceptRequest}
+                    onDecline={declineRequest}
+                    onCancelSent={cancelSent}
+                    onRemove={removeFriend}
+                    onAdd={addFriend}
+                    onMessage={openDm}
+                    onCall={startCall}
+                  />
+                )}
+                {route === "notifications" && (
+                  <Notifications notes={notes} setNotes={setNotes} />
+                )}
+                {route === "profile" && <Profile user={user} onSignOut={onSignOut} />}
+                {route === "settings" && <Settings theme={theme} setTheme={setTheme} />}
+              </div>
+            </div>
+          )}
         </main>
       </div>
 

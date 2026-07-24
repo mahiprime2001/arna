@@ -117,7 +117,7 @@ export function Messages({
     : null;
 
   return (
-    <div className="animate-fade-up flex h-[calc(100vh-11rem)] overflow-hidden rounded-xl border border-line bg-surface">
+    <div className="flex h-full overflow-hidden bg-surface">
       {/* Conversation list */}
       <div className="flex w-72 shrink-0 flex-col border-r border-line">
         <div className="border-b border-line px-4 py-3">

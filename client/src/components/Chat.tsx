@@ -72,6 +72,11 @@ async function fileToPayload(file: File): Promise<OutgoingPayload> {
     },
   };
 }
+// Honour the OS "reduce motion" setting for programmatic scrolling too --
+// the CSS media query cannot reach scrollIntoView.
+const scrollBehavior = (): ScrollBehavior =>
+  window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth";
+
 function fmtBytes(n?: number): string {
   if (!n) return "";
   if (n < 1024) return `${n} B`;
@@ -90,6 +95,12 @@ const EMOJI = [
 ];
 
 function EmojiPicker({ onPick, onClose }: { onPick: (e: string) => void; onClose: () => void }) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
   return (
     <>
       <div className="fixed inset-0 z-20" onClick={onClose} />
@@ -152,6 +163,14 @@ function Bubble({
     setMenu(false);
     setPicker(false);
   };
+
+  // Anything that opens over the page must close on Escape.
+  useEffect(() => {
+    if (!menu && !picker) return;
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && close();
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [menu, picker]);
 
   // These sit in the row's flow next to the bubble. They must NOT be positioned
   // outside the row (right-full/left-full) -- the message list clips its
@@ -305,7 +324,7 @@ function Bubble({
           )}
         >
           {m.fwdFrom && (
-            <p className="px-3.5 pt-2 text-[12px] text-brand">
+            <p className="px-3.5 pt-2 text-[12px] text-brand-strong">
               Forwarded from <span className="font-medium">{m.fwdFrom}</span>
             </p>
           )}
@@ -317,7 +336,7 @@ function Bubble({
             >
               <span className="w-0.5 shrink-0 rounded-full bg-brand" />
               <span className="min-w-0">
-                <span className="block text-[12px] font-medium text-brand">{m.replyAuthor}</span>
+                <span className="block text-[12px] font-medium text-brand-strong">{m.replyAuthor}</span>
                 <span className="block truncate text-[12px] opacity-70">{m.replyPreview}</span>
               </span>
             </button>
@@ -435,7 +454,7 @@ export function Chat({
   const rowRefs = useRef<Record<string, HTMLDivElement | null>>({});
 
   useEffect(() => {
-    endRef.current?.scrollIntoView({ behavior: "smooth" });
+    endRef.current?.scrollIntoView({ behavior: scrollBehavior() });
   }, [messages.length]);
 
   // Stop announcing "typing" shortly after the last keystroke.
@@ -456,7 +475,7 @@ export function Chat({
   const pinned = pinnedMid ? messages.find((m) => m.mid === pinnedMid) : undefined;
 
   const jumpTo = (mid: string) => {
-    rowRefs.current[mid]?.scrollIntoView({ behavior: "smooth", block: "center" });
+    rowRefs.current[mid]?.scrollIntoView({ behavior: scrollBehavior(), block: "center" });
     setJumpMid(mid);
     window.setTimeout(() => setJumpMid(null), 1400);
   };
@@ -553,7 +572,7 @@ export function Chat({
         <div className="flex items-center gap-2.5 border-b border-line bg-surface px-4 py-2">
           <PushPin size={15} className="shrink-0 text-brand" weight="fill" />
           <button onClick={() => jumpTo(pinned.mid)} className="min-w-0 flex-1 text-left">
-            <p className="text-[11.5px] font-medium text-brand">Pinned message</p>
+            <p className="text-[11.5px] font-medium text-brand-strong">Pinned message</p>
             <p className="truncate text-[12.5px] text-muted">{summarize(pinned)}</p>
           </button>
           <button
@@ -615,7 +634,7 @@ export function Chat({
             <ArrowBendUpLeft size={15} className="shrink-0 text-brand" />
           )}
           <div className="min-w-0 flex-1">
-            <p className="text-[11.5px] font-medium text-brand">
+            <p className="text-[11.5px] font-medium text-brand-strong">
               {editing ? "Edit message" : `Reply to ${replyTo!.mine ? "yourself" : "them"}`}
             </p>
             <p className="truncate text-[12.5px] text-muted">

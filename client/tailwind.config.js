@@ -15,6 +15,9 @@ export default {
           DEFAULT: "hsl(var(--brand))",
           fg: "hsl(var(--brand-fg))",
           soft: "hsl(var(--brand) / 0.12)",
+          // For small brand-coloured TEXT, which needs more contrast than the
+          // fill colour provides on a light background.
+          strong: "hsl(var(--brand-strong))",
         },
         good: "hsl(var(--good))",
         warn: "hsl(var(--warn))",
