@@ -15,6 +15,8 @@ import {
   PushPin,
   Copy,
   SmileySticker,
+  Smiley,
+  DotsThree,
   Timer,
   X,
 } from "@phosphor-icons/react";
@@ -77,6 +79,37 @@ function fmtBytes(n?: number): string {
   return `${(n / 1024 / 1024).toFixed(1)} MB`;
 }
 
+// A compact emoji palette for the composer. Enough to be useful without
+// pulling in a multi-megabyte picker library.
+const EMOJI = [
+  "😀","😄","😁","😂","🤣","😊","😍","😘","😉","😎",
+  "🤔","🙄","😴","😢","😭","😡","🥺","😱","🤯","🤗",
+  "👍","👎","👏","🙌","🙏","💪","👀","🔥","✨","🎉",
+  "❤️","🧡","💛","💚","💙","💜","🖤","💔","💯","✅",
+  "😅","😇","🥳","🤝","👋","🤞","☕","🍕","🚀","⭐",
+];
+
+function EmojiPicker({ onPick, onClose }: { onPick: (e: string) => void; onClose: () => void }) {
+  return (
+    <>
+      <div className="fixed inset-0 z-20" onClick={onClose} />
+      <div className="absolute bottom-full left-0 z-30 mb-2 w-[19rem] rounded-xl bg-surface p-2 shadow-pop">
+        <div className="grid grid-cols-10 gap-0.5">
+          {EMOJI.map((e) => (
+            <button
+              key={e}
+              onClick={() => onPick(e)}
+              className="grid h-7 w-7 place-items-center rounded-md text-[17px] transition hover:bg-elevated"
+            >
+              {e}
+            </button>
+          ))}
+        </div>
+      </div>
+    </>
+  );
+}
+
 function Tick({ status }: { status?: "sent" | "delivered" | "read" }) {
   if (status === "sent") return <Check size={13} weight="bold" className="opacity-50" />;
   if (status === "delivered") return <Checks size={14} weight="bold" className="opacity-60" />;
@@ -120,10 +153,39 @@ function Bubble({
     setPicker(false);
   };
 
+  // These sit in the row's flow next to the bubble. They must NOT be positioned
+  // outside the row (right-full/left-full) -- the message list clips its
+  // overflow, so anything placed there is invisible.
+  const actionBar = (
+    <div className="flex shrink-0 items-center gap-0.5 pb-1 opacity-0 transition-opacity focus-within:opacity-100 group-hover:opacity-100">
+      <button
+        onClick={() => setPicker((v) => !v)}
+        aria-label="React"
+        className="grid h-7 w-7 place-items-center rounded-full text-muted transition hover:bg-elevated hover:text-ink"
+      >
+        <SmileySticker size={16} />
+      </button>
+      <button
+        onClick={() => actions.onReply(m)}
+        aria-label="Reply"
+        className="grid h-7 w-7 place-items-center rounded-full text-muted transition hover:bg-elevated hover:text-ink"
+      >
+        <ArrowBendUpLeft size={16} />
+      </button>
+      <button
+        onClick={() => setMenu((v) => !v)}
+        aria-label="More actions"
+        className="grid h-7 w-7 place-items-center rounded-full text-muted transition hover:bg-elevated hover:text-ink"
+      >
+        <DotsThree size={18} weight="bold" />
+      </button>
+    </div>
+  );
+
   return (
     <div
       className={cn(
-        "group relative flex px-1",
+        "group relative flex items-end gap-1 px-1",
         mine ? "justify-end" : "justify-start",
         highlight && "rounded-lg bg-brand/15",
       )}
@@ -132,35 +194,7 @@ function Bubble({
         setMenu((v) => !v);
       }}
     >
-      {/* hover actions */}
-      <div
-        className={cn(
-          "absolute top-1 z-10 hidden items-center gap-0.5 group-hover:flex",
-          mine ? "right-full mr-1" : "left-full ml-1",
-        )}
-      >
-        <button
-          onClick={() => setPicker((v) => !v)}
-          aria-label="React"
-          className="grid h-7 w-7 place-items-center rounded-full bg-surface text-muted shadow-card transition hover:text-ink"
-        >
-          <SmileySticker size={15} />
-        </button>
-        <button
-          onClick={() => actions.onReply(m)}
-          aria-label="Reply"
-          className="grid h-7 w-7 place-items-center rounded-full bg-surface text-muted shadow-card transition hover:text-ink"
-        >
-          <ArrowBendUpLeft size={15} />
-        </button>
-        <button
-          onClick={() => setMenu((v) => !v)}
-          aria-label="More"
-          className="grid h-7 w-7 place-items-center rounded-full bg-surface text-muted shadow-card transition hover:text-ink"
-        >
-          <span className="text-[15px] leading-none">⋯</span>
-        </button>
-      </div>
+      {mine && actionBar}
 
       {picker && (
         <>
@@ -352,6 +386,7 @@ function Bubble({
           </div>
         )}
       </div>
+      {!mine && actionBar}
     </div>
   );
 }
@@ -386,6 +421,7 @@ export function Chat({
   const [replyTo, setReplyTo] = useState<ChatMessage | null>(null);
   const [editing, setEditing] = useState<ChatMessage | null>(null);
   const [jumpMid, setJumpMid] = useState<string | null>(null);
+  const [emoji, setEmoji] = useState(false);
 
   const endRef = useRef<HTMLDivElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -626,6 +662,24 @@ export function Chat({
           </div>
         ) : (
           <>
+            <div className="relative shrink-0">
+              <button
+                onClick={() => setEmoji((v) => !v)}
+                aria-label="Emoji"
+                className={cn(
+                  "grid h-10 w-10 place-items-center rounded-lg transition-colors hover:bg-elevated",
+                  emoji ? "text-brand" : "text-muted hover:text-ink",
+                )}
+              >
+                <Smiley size={21} />
+              </button>
+              {emoji && (
+                <EmojiPicker
+                  onPick={(e) => keystroke(text + e)}
+                  onClose={() => setEmoji(false)}
+                />
+              )}
+            </div>
             <button
               onClick={() => fileRef.current?.click()}
               aria-label="Attach a file"
