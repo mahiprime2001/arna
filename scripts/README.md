@@ -1,40 +1,45 @@
 # Dev run scripts
 
-## Recommended: one port + ngrok
+## Recommended: one port + a tunnel
 
 Everything (app, `/api`, `/ws`) is served from **one port**, so **one tunnel**
-covers the whole app. ngrok puts trusted HTTPS in front, which means camera/mic
-work on every device with **no certs and no Chrome flags**.
+covers the whole app. The tunnel puts trusted HTTPS in front, which means
+camera/mic work on every device with **no certs and no Chrome flags**.
 
-One-time ngrok setup:
+Terminal 1 — build the client + serve app/API/WS on `:8787`:
 
 ```powershell
-winget install ngrok.ngrok          # or download from https://ngrok.com/download
-ngrok config add-authtoken <your-token>   # free account -> dashboard
+scripts\serve.ps1
 ```
 
-Then, two terminals:
+Terminal 2 — pick either tunnel:
 
 ```powershell
-# 1) build the client + serve app/API/WS on :8787
-scripts\serve.ps1
+# A) Cloudflare quick tunnel: NO account, NO token, nothing to sign up for.
+#    Prints a https://<random>.trycloudflare.com URL. New URL each restart.
+cloudflared tunnel --url http://localhost:8787
 
-# 2) tunnel that one port
+# B) ngrok: needs a free account once, but gives a PERMANENT url.
+#    winget install ngrok.ngrok ; ngrok config add-authtoken <token>
 ngrok http 8787
 ```
 
-ngrok prints a `https://<something>.ngrok-free.app` URL. Open it on any device —
-sign up, add friends, chat, call. Done.
+Open the printed https URL on any device — sign in, chat, call. Done.
+
+Use **A** to test right now; use **B** when you want a link that survives
+restarts (a free ngrok account includes one static domain — claim it under
+Domains, then `ngrok http 8787 --url=<your-name>.ngrok-free.app`).
 
 Notes:
-- A **free ngrok account includes one static domain**, so the URL stops changing:
-  grab it from the dashboard (Domains) and run
-  `ngrok http 8787 --url=<your-name>.ngrok-free.app`.
+- ngrok shows a one-time "You are about to visit..." interstitial per device;
+  click through it. Cloudflare quick tunnels have no interstitial.
 - `scripts\serve.ps1 -NoBuild` skips the client rebuild. After editing client
   code, re-run without `-NoBuild` (the served files are the built ones).
 - The backend stays plain HTTP on purpose — the tunnel terminates TLS.
 - Calls between devices on **different** networks may still need a TURN server
   for the P2P media (the tunnel only carries signaling). Same-network is fine.
+- A tunnel makes the app reachable by anyone with the URL while it runs. Stop
+  the tunnel (Ctrl-C) when you're done testing.
 
 ---
 
