@@ -29,6 +29,12 @@ export default {
           "out-fg": "hsl(var(--bubble-out-fg))",
         },
         tick: "hsl(var(--tick))",
+        call: {
+          bg: "hsl(var(--call-bg))",
+          bg2: "hsl(var(--call-bg-2))",
+          accept: "hsl(var(--call-accept))",
+          end: "hsl(var(--call-end))",
+        },
       },
       borderColor: { DEFAULT: "hsl(var(--line))" },
       borderRadius: {

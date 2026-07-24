@@ -48,6 +48,15 @@
     --tick: 119 41% 39%;
 
     --radius: 0.75rem;
+
+    /* Call screen. Always dark regardless of app theme -- WhatsApp does the
+       same, because a full-bleed video needs a dark surround either way, so
+       these are deliberately NOT overridden in .dark below.
+       #0B141A -> #1F2C34 backdrop · #25D366 accept · #E5453B end */
+    --call-bg: 204 41% 7%;
+    --call-bg-2: 203 25% 16%;
+    --call-accept: 142 70% 49%;
+    --call-end: 4 77% 56%;
   }
 
   .dark {
