@@ -56,9 +56,15 @@ func wsl(args ...string) (string, error) {
 	return run(ctx, "wsl.exe", args...)
 }
 
-// exec runs a command *inside* a workspace as root.
+// inside runs a command *inside* a workspace as root, with the default timeout.
 func inside(id string, argv ...string) (string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	return insideFor(id, 60*time.Second, argv...)
+}
+
+// insideFor is inside with a caller-chosen timeout, for slow operations like
+// installing packages (the display stack pulls ~150 packages).
+func insideFor(id string, d time.Duration, argv ...string) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), d)
 	defer cancel()
 	full := append([]string{"-d", DistroName(id), "--user", "root", "--"}, argv...)
 	return run(ctx, "wsl.exe", full...)

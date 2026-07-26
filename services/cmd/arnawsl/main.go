@@ -4,9 +4,10 @@
 // adapter, so the create -> harden -> verify -> run -> destroy pipeline can be
 // exercised and watched without the rest of Arna.
 //
-//	go run ./cmd/arnawsl detect         # is WSL2 usable? (read-only)
-//	go run ./cmd/arnawsl demo           # full lifecycle on a throwaway ws, then clean up
-//	go run ./cmd/arnawsl provision <id> # create + harden + verify (leaves it)
+//	go run ./cmd/arnawsl detect          # is WSL2 usable? (read-only)
+//	go run ./cmd/arnawsl demo            # full lifecycle on a throwaway ws, then clean up
+//	go run ./cmd/arnawsl provision <id>  # create + harden + verify (leaves it)
+//	go run ./cmd/arnawsl desktop <id>    # setup + start the desktop, print the browser URL
 //	go run ./cmd/arnawsl status <id>
 //	go run ./cmd/arnawsl destroy <id>
 package main
@@ -80,6 +81,32 @@ func main() {
 		printJSON("isolation", rep)
 		check(err)
 		fmt.Println("provisioned:", wsl.DistroName(id))
+
+	case "desktop":
+		id := arg(2)
+		a, err := wsl.New(dataDir)
+		check(err)
+		// Make sure it exists (provision if not), then set up + start the desktop.
+		if st, _ := a.Status(id); !st.Exists {
+			fmt.Println("provisioning", wsl.DistroName(id), "…")
+			if _, err := a.Provision(id); err != nil {
+				check(err)
+			}
+		}
+		fmt.Println("starting it…")
+		if _, err := a.Start(id); err != nil {
+			check(err)
+		}
+		fmt.Println("installing the display stack (first time downloads a few MB)…")
+		check(a.SetupDisplay(id))
+		fmt.Println("bringing up the desktop…")
+		info, err := a.StartSession(id, "")
+		check(err)
+		fmt.Println()
+		fmt.Println("  ✓ workspace desktop is live. Open this in a browser:")
+		fmt.Println("    " + info.URL)
+		fmt.Println()
+		fmt.Println("  when done:  go run ./cmd/arnawsl destroy " + id)
 
 	case "status":
 		a, err := wsl.New(dataDir)
