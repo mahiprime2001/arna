@@ -49,6 +49,7 @@ func main() {
 	mux.HandleFunc("/api/friends/remove", friendRemove)
 	mux.HandleFunc("/api/users/search", userSearch)
 	mux.HandleFunc("/api/keys", setKeys)
+	mux.HandleFunc("/api/host", hostCapabilities)
 	mux.HandleFunc("/ws", wsHandler)
 
 	// Serve the built client (single-origin) when ARNA_WEB_DIR is set, with an
