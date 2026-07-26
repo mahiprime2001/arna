@@ -4,6 +4,7 @@ import { Sidebar } from "@/components/Sidebar";
 import { CallOverlay } from "@/components/CallOverlay";
 import { Dashboard } from "@/views/Dashboard";
 import { Workspaces } from "@/views/Workspaces";
+import { WorkspaceStage } from "@/components/WorkspaceStage";
 import { Friends } from "@/views/Friends";
 import { Messages } from "@/views/Messages";
 import { Notifications } from "@/views/Notifications";
@@ -91,6 +92,7 @@ export default function App({
   // Workspaces are device-local for now; there is no platform layer to run
   // them yet, so these records are policy, not processes.
   const [workspaces, setWorkspaces] = useState<Workspace[]>(() => loadWorkspaces(user.id));
+  const [openWorkspace, setOpenWorkspace] = useState<Workspace | null>(null);
   useEffect(() => {
     saveWorkspaces(user.id, workspaces);
   }, [workspaces, user.id]);
@@ -531,6 +533,7 @@ export default function App({
                     onCreate={createWorkspace}
                     onTransition={transitionWorkspace}
                     onDelete={deleteWorkspace}
+                    onOpen={setOpenWorkspace}
                   />
                 )}
                 {route === "friends" && (
@@ -559,6 +562,15 @@ export default function App({
       </div>
 
       <CallOverlay state={callState} />
+
+      {openWorkspace && (
+        <WorkspaceStage
+          workspace={openWorkspace}
+          onClose={() => setOpenWorkspace(null)}
+          onLaunch={(appId) => api.workspaceLaunch(openWorkspace.id, appId).catch(() => {})}
+          onLayout={(layout) => api.workspaceLayout(openWorkspace.id, layout).catch(() => {})}
+        />
+      )}
     </div>
   );
 }

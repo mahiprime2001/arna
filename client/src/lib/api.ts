@@ -119,3 +119,23 @@ export async function ping() {
 export async function setPubkey(pubkey: string) {
   return req("/api/keys", { method: "POST", body: JSON.stringify({ pubkey }) });
 }
+
+// ── workspaces (host-side; only meaningful on a machine running the adapter) ──
+
+/** Launch an app inside a running workspace; it appears as a window on the
+ *  canvas. The backend picks a display and streams the whole canvas. */
+export async function workspaceLaunch(id: string, app: string) {
+  return req("/api/workspaces/launch", {
+    method: "POST",
+    body: JSON.stringify({ id, app }),
+  });
+}
+
+/** Arrange the workspace's open windows: full | split | grid | free. The
+ *  workspace's own window manager does the snapping. */
+export async function workspaceLayout(id: string, layout: string) {
+  return req("/api/workspaces/layout", {
+    method: "POST",
+    body: JSON.stringify({ id, layout }),
+  });
+}

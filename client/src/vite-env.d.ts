@@ -9,6 +9,8 @@ interface ImportMetaEnv {
   readonly VITE_ARNA_TURN_URL?: string;
   readonly VITE_ARNA_TURN_USERNAME?: string;
   readonly VITE_ARNA_TURN_CREDENTIAL?: string;
+  /** Base URL of the workspace canvas stream (noVNC). Same-origin in prod. */
+  readonly VITE_ARNA_STREAM?: string;
 }
 
 interface ImportMeta {

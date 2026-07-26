@@ -10,6 +10,7 @@ import {
   Globe,
   GlobeX,
   Clock,
+  Monitor,
 } from "@phosphor-icons/react";
 import { Card } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
@@ -39,10 +40,12 @@ function WorkspaceCard({
   w,
   onTransition,
   onDelete,
+  onOpen,
 }: {
   w: Workspace;
   onTransition: (id: string, to: WorkspaceState) => void;
   onDelete: (w: Workspace) => void;
+  onOpen: (w: Workspace) => void;
 }) {
   const [copied, setCopied] = useState(false);
   const copyId = () => {
@@ -105,8 +108,13 @@ function WorkspaceCard({
       </div>
 
       <div className="mt-4 flex flex-wrap gap-2 border-t border-line pt-3.5">
+        {(w.state === "running" || w.state === "idle") && (
+          <Button size="sm" onClick={() => onOpen(w)}>
+            <Monitor size={14} weight="fill" /> Open
+          </Button>
+        )}
         {can("running") && (
-          <Button size="sm" onClick={() => onTransition(w.id, "running")}>
+          <Button size="sm" variant={w.state === "created" ? "primary" : "outline"} onClick={() => onTransition(w.id, "running")}>
             <Play size={14} weight="fill" /> {w.state === "created" ? "Start" : "Resume"}
           </Button>
         )}
@@ -138,11 +146,13 @@ export function Workspaces({
   onCreate,
   onTransition,
   onDelete,
+  onOpen,
 }: {
   workspaces: Workspace[];
   onCreate: (draft: Omit<Workspace, "id" | "state" | "createdAt">) => void;
   onTransition: (id: string, to: WorkspaceState) => void;
   onDelete: (w: Workspace) => void;
+  onOpen: (w: Workspace) => void;
 }) {
   const [creating, setCreating] = useState(false);
 
@@ -177,7 +187,13 @@ export function Workspaces({
       ) : (
         <div className="grid gap-4 sm:grid-cols-2">
           {workspaces.map((w) => (
-            <WorkspaceCard key={w.id} w={w} onTransition={onTransition} onDelete={onDelete} />
+            <WorkspaceCard
+              key={w.id}
+              w={w}
+              onTransition={onTransition}
+              onDelete={onDelete}
+              onOpen={onOpen}
+            />
           ))}
         </div>
       )}
