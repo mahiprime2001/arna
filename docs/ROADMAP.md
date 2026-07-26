@@ -73,17 +73,21 @@ moving house.**
 
 ### Stage A — furnished apartment (WSL2) 🔨
 > Use the sealed room Windows already ships. Fastest path to a workspace that actually
-> runs. This is what we're building now.
+> runs. Core streaming path is proven; wiring it into the app is next.
 
-- 🔨 **Host check** — at startup, can this machine make a sealed room at all? If not,
-  Arna refuses rather than pretending. *(first piece, starting now)*
-- ⬜ Adapter that creates/starts/pauses/stops a real workspace via WSL2
-- ⬜ Lock the two unsafe doors (`interop`, `automount`) or refuse to start
-- ⬜ Launch an app inside it (VS Code / Chrome / terminal)
-- ⬜ Stream its screen to the browser
-- ⬜ Send keyboard & mouse into it (and *only* it)
+- ✅ **Host check** — at startup, can this machine make a sealed room? If not, Arna
+  refuses rather than pretending.
+- ✅ Adapter that creates/starts/stops/destroys a real workspace via WSL2
+- ✅ Lock the two unsafe doors (`interop`, `automount`) — and *verify* the seal on
+  every start, or refuse to run it
+- ✅ Launch an app inside it (a Linux terminal, for now)
+- ✅ Stream its screen to the browser (VNC → WebSocket → noVNC)
+- ✅ Send keyboard & mouse into it, and *only* it
+- 🔨 **Wire it into the app** — a "Start / Open" button on the workspace card that
+  launches the desktop, viewable inside Arna and through the tunnel *(next)*
 - ⬜ Shared-folder grants actually mount
 - ⬜ Enforce roles — observers can watch but never touch
+- ⬜ Richer apps than a terminal (a browser, an editor)
 
 ### Stage B — our own furniture (bundled image) 💤
 > Same sealed room, but we bring our own slimmed-down Linux packed inside Arna. No
@@ -112,10 +116,16 @@ moving house.**
 
 ## Right now
 
-**Building:** Stage A, first piece — the **host check** that tells Arna whether this
-machine can run a workspace, and refuses honestly if it can't.
+**Just finished:** a workspace you can actually watch and use. Arna creates a sealed
+Linux VM, runs a desktop inside it, and streams it to a browser — verified live on the
+dev machine. Test it with `cd services && go run ./cmd/arnawsl desktop myws`, then open
+the URL it prints.
+
+**Building next:** wiring that into the app — a "Start / Open" button on the workspace
+card, so it's a click instead of a command, and viewable inside Arna (and over the
+tunnel for a remote friend).
 
 **Your machine (for reference):** i5-9400F · 6 cores · 16 GB · hypervisor already
-running · VirtualMachinePlatform on · WSL2 with Ubuntu present. Good to go for Stage A.
+running · VirtualMachinePlatform on · WSL2 present. Runs workspaces fine.
 
 _Last updated: 2026-07-26_
