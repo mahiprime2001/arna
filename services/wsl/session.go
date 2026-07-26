@@ -14,8 +14,11 @@ import (
 // with noVNC. Everything here targets the workspace's OWN display (:1) -- never
 // the host's, and never WSL's built-in WSLg bridge, which we actively detach.
 //
-// The Alpine display stack. Small (musl); ~a few MB installed.
-const displayStack = "xvfb x11vnc xterm openbox novnc websockify ttf-dejavu xdotool"
+// The Alpine display stack. ttf-dejavu matters: the default xterm bitmap font
+// doesn't render on musl, so without a TrueType font the terminal window maps
+// but draws nothing (a black screen). xsetroot paints the root so it's never
+// bare black.
+const displayStack = "xvfb x11vnc xterm openbox novnc websockify ttf-dejavu xdotool xsetroot"
 
 // Ports inside the workspace VM. x11vnc serves RFB on vncPort (localhost only);
 // websockify bridges it to wsPort, which WSL2 forwards to Windows localhost.
@@ -41,7 +44,8 @@ const sessionScript = `#!/bin/sh
 # the launching shell) and no stale-process races (a leftover Xvfb kept the
 # socket dir from being rebuilt).
 PORT="${1:-6080}"
-APP="${2:-xterm -geometry 100x30+30+30}"
+# -fa/-fs force a TrueType font; the default bitmap font renders nothing on musl.
+APP="${2:-xterm -fa Monospace -fs 11 -geometry 110x32+24+24}"
 export DISPLAY=:1
 unset WAYLAND_DISPLAY          # WSLg sets this; it makes x11vnc quit thinking it is Wayland
 mkdir -p /run/arna
@@ -64,9 +68,15 @@ Xvfb :1 -screen 0 1280x800x24 -nolisten tcp >/tmp/xvfb.log 2>&1 & echo $! >/run/
 i=0; while [ ! -S /tmp/.X11-unix/X1 ] && [ $i -lt 40 ]; do sleep 0.25; i=$((i+1)); done
 [ -S /tmp/.X11-unix/X1 ] || { echo "ERR: no display"; exit 1; }
 
-# (3) window manager + the app
+# (3) window manager, then the app. openbox must be up and managing before the
+#     app maps, or the app window never gets exposed and stays blank. Give it a
+#     moment, set the root colour after it (so openbox doesn't clear it), then
+#     launch the app and let it paint before anyone connects.
 openbox >/tmp/openbox.log 2>&1 & echo $! >/run/arna/openbox.pid
+sleep 1
+xsetroot -solid '#0e1621' 2>/dev/null || true   # Arna-dark root, never bare black
 $APP >/tmp/app.log 2>&1 & echo $! >/run/arna/app.pid
+sleep 2
 
 # (4) VNC server on the private display, localhost only (plain bg so we own the pid)
 x11vnc -display :1 -forever -shared -rfbport 5901 -localhost -nopw -quiet >/tmp/x11vnc.log 2>&1 &
@@ -114,9 +124,11 @@ type SessionInfo struct {
 // SetupDisplay to have run.
 func (a *Adapter) StartSession(id, app string) (SessionInfo, error) {
 	var zero SessionInfo
-	if app == "" {
-		app = "xterm -geometry 100x30+30+30"
-	}
+	// Empty app -> let the session script's own default apply (which carries the
+	// -fa Monospace font flags; without a TrueType font xterm renders nothing on
+	// musl). Passing a default here would override the script's and silently
+	// drop the font.
+	_ = app
 
 	// Deploy the launcher. We base64-encode it in Go and decode inside the
 	// workspace: a quoted heredoc's escaping does NOT survive the
