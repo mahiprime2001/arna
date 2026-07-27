@@ -10,7 +10,41 @@
 use std::collections::HashMap;
 
 use wse_common::*;
-use wse_contract::{IsolationReport, WorkspaceAdapter, WorkspaceDef};
+use wse_contract::{
+    IsolationAttestation, WorkspaceAdapter, WorkspaceDef, CONTRACT_VERSION,
+};
+
+/// The engine's isolation policy — what it *requires* of an adapter's
+/// attestation before it will run a workspace. The adapter provides evidence;
+/// this policy is how the engine evaluates it (SPEC §18.3). Policy lives in the
+/// engine, never in the adapter.
+#[derive(Clone, Copy, Debug)]
+pub struct IsolationPolicy {
+    /// The mandatory core. There is no partial-isolation tier, so this is true
+    /// by default and cannot be relaxed away in a conforming deployment.
+    pub require_sealed: bool,
+}
+
+impl Default for IsolationPolicy {
+    fn default() -> Self {
+        Self { require_sealed: true }
+    }
+}
+
+impl IsolationPolicy {
+    /// Evaluate an adapter's attestation. Returns Ok, or the reasons it fails.
+    pub fn evaluate(&self, att: &IsolationAttestation) -> std::result::Result<(), Vec<String>> {
+        if self.require_sealed && !att.sealed {
+            let mut why = att.details.clone();
+            if why.is_empty() {
+                why.push("adapter did not attest the workspace is sealed".into());
+            }
+            Err(why)
+        } else {
+            Ok(())
+        }
+    }
+}
 
 /// What the caller asks for when creating a workspace.
 pub struct WorkspaceConfig {
@@ -77,6 +111,7 @@ pub struct Engine<A: WorkspaceAdapter> {
     adapter: A,
     workspaces: HashMap<WorkspaceId, Record>,
     events: Vec<Event>,
+    isolation_policy: IsolationPolicy,
 }
 
 impl<A: WorkspaceAdapter> Engine<A> {
@@ -85,7 +120,13 @@ impl<A: WorkspaceAdapter> Engine<A> {
             adapter,
             workspaces: HashMap::new(),
             events: Vec::new(),
+            isolation_policy: IsolationPolicy::default(),
         }
+    }
+
+    /// The isolation policy the engine evaluates attestations against.
+    pub fn isolation_policy(&self) -> IsolationPolicy {
+        self.isolation_policy
     }
 
     /// The declared capabilities of the underlying adapter (SPEC §18.2).
@@ -104,6 +145,13 @@ impl<A: WorkspaceAdapter> Engine<A> {
 
     /// Create a workspace. It exists (Created) but does not execute yet.
     pub fn create_workspace(&mut self, cfg: WorkspaceConfig) -> Result<WorkspaceId> {
+        // The adapter must speak a compatible contract version (SPEC §18.4).
+        let v = self.adapter.contract_version();
+        if !v.compatible_with(CONTRACT_VERSION) {
+            return Err(WseError::Adapter(format!(
+                "adapter speaks contract {v}, engine speaks {CONTRACT_VERSION}"
+            )));
+        }
         let id = WorkspaceId::new();
         let def = WorkspaceDef {
             id: id.clone(),
@@ -126,19 +174,22 @@ impl<A: WorkspaceAdapter> Engine<A> {
         Ok(id)
     }
 
-    /// Start (or resume) a workspace. The engine ONLY marks it running once the
-    /// adapter proves it is sealed (SPEC §18.3). If not, it stops it and errors.
+    /// Start (or resume) a workspace. The adapter *attests* to isolation; the
+    /// engine *evaluates* that attestation against its policy and only then
+    /// marks the workspace running (SPEC §18.3). If the evidence is rejected,
+    /// the engine stops it and errors — no partial-isolation tier.
     pub fn start(&mut self, id: &WorkspaceId) -> Result<()> {
         let from = self.require_state(id)?;
         self.check_transition(from, WorkspaceState::Running)?;
 
-        let report: IsolationReport = self.adapter.start(id)?;
-        if !report.sealed {
-            // Refuse to present an unsealed workspace as running. Best-effort stop.
+        let attestation: IsolationAttestation = self.adapter.start(id)?;
+        if let Err(details) = self.isolation_policy.evaluate(&attestation) {
+            // Reject the evidence; do not present an unsealed workspace as
+            // running. Best-effort stop.
             let _ = self.adapter.stop(id);
             return Err(WseError::NotIsolated {
                 workspace: id.clone(),
-                details: report.details,
+                details,
             });
         }
         self.set_state(id, WorkspaceState::Running);

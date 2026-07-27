@@ -15,6 +15,16 @@ name = "wse-common"
 version = "0.1.0"
 
 [[package]]
+name = "wse-conformance"
+version = "0.1.0"
+dependencies = [
+ "wse-adapter-mock",
+ "wse-common",
+ "wse-contract",
+ "wse-engine",
+]
+
+[[package]]
 name = "wse-contract"
 version = "0.1.0"
 dependencies = [

@@ -6,7 +6,7 @@
 #   wse-adapter-mock  the reference adapter: proves the engine with no OS
 [workspace]
 resolver = "2"
-members = ["common", "contract", "core", "adapters/mock"]
+members = ["common", "contract", "core", "adapters/mock", "conformance"]
 
 [workspace.package]
 version = "0.1.0"

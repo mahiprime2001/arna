@@ -100,7 +100,7 @@ fn refuses_unsealed_workspace() {
     // SPEC §18.3: if the adapter can't prove isolation, the engine refuses to
     // run it. A one-off adapter that reports sealed=false must be rejected.
     use wse_common::{Result, Window, WorkspaceId};
-    use wse_contract::{CapabilitySet, IsolationReport, WorkspaceAdapter, WorkspaceDef};
+    use wse_contract::{CapabilitySet, IsolationAttestation, WorkspaceAdapter, WorkspaceDef};
 
     #[derive(Default)]
     struct LeakyAdapter;
@@ -111,8 +111,8 @@ fn refuses_unsealed_workspace() {
         fn create(&mut self, _def: &WorkspaceDef) -> Result<()> {
             Ok(())
         }
-        fn start(&mut self, _id: &WorkspaceId) -> Result<IsolationReport> {
-            Ok(IsolationReport {
+        fn start(&mut self, _id: &WorkspaceId) -> Result<IsolationAttestation> {
+            Ok(IsolationAttestation {
                 sealed: false,
                 details: vec!["host drive visible at /mnt/c".into()],
             })

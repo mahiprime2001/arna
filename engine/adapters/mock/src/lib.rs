@@ -9,7 +9,10 @@
 use std::collections::HashMap;
 
 use wse_common::*;
-use wse_contract::{CapabilitySet, IsolationReport, WorkspaceAdapter, WorkspaceDef};
+use wse_contract::{
+    CapabilitySet, ContractVersion, IsolationAttestation, WorkspaceAdapter, WorkspaceDef,
+    CONTRACT_VERSION,
+};
 
 #[derive(Default)]
 struct MockWorkspace {
@@ -45,6 +48,10 @@ impl MockAdapter {
 }
 
 impl WorkspaceAdapter for MockAdapter {
+    fn contract_version(&self) -> ContractVersion {
+        CONTRACT_VERSION
+    }
+
     fn capabilities(&self) -> CapabilitySet {
         // The mock provides isolation (trivially) but no real hardware features
         // and no native OS apps — declared honestly (SPEC §18.2).
@@ -62,10 +69,10 @@ impl WorkspaceAdapter for MockAdapter {
         Ok(())
     }
 
-    fn start(&mut self, id: &WorkspaceId) -> Result<IsolationReport> {
+    fn start(&mut self, id: &WorkspaceId) -> Result<IsolationAttestation> {
         let w = self.ws_mut(id)?;
         w.running = true;
-        Ok(IsolationReport {
+        Ok(IsolationAttestation {
             sealed: true,
             details: vec!["mock: no host to leak to".into()],
         })

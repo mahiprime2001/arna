@@ -1,0 +1,16 @@
+[package]
+name = "wse-conformance"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# The reusable conformance suite. Any adapter runs this SAME suite -- mock,
+# windows, linux. No adapter gets special tests. No platform code.
+[dependencies]
+wse-common = { path = "../common" }
+wse-contract = { path = "../contract" }
+wse-engine = { path = "../core" }
+
+[dev-dependencies]
+# Only to prove the harness itself works, by running it against the mock.
+wse-adapter-mock = { path = "../adapters/mock" }
