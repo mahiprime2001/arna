@@ -59,6 +59,7 @@ macro_rules! id_type {
 
 id_type!(WorkspaceId);
 id_type!(WindowId);
+id_type!(MemberId);
 
 // ── lifecycle (SPEC §5) ─────────────────────────────────────────────────────
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -109,7 +110,7 @@ pub enum Persistence {
     Saved,
 }
 
-// ── roles & capabilities (SPEC §4) ──────────────────────────────────────────
+// ── roles & access rights (SPEC §4) ─────────────────────────────────────────
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Role {
     Owner,
@@ -117,8 +118,11 @@ pub enum Role {
     Observer,
 }
 
+/// A per-role access right (SPEC §4.6). Distinct from a workspace *capability*:
+/// a capability is what the workspace *provides* (e.g. Clipboard exists); an
+/// access right is what a member may *do* with it (e.g. read the clipboard out).
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub enum Capability {
+pub enum AccessRight {
     ViewDisplay,
     Keyboard,
     Pointer,
@@ -133,6 +137,105 @@ pub enum Permission {
     Allowed,
     Configurable,
     Denied,
+}
+
+// ── capabilities (the workspace-service model) ──────────────────────────────
+/// What a workspace *provides*. The engine negotiates on these, never on
+/// platform names: it asks "does this workspace provide Clipboard?", never "am
+/// I on Windows?". Each capability gets its own mini-spec + conformance suite.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum Capability {
+    Applications,
+    Windows,
+    Clipboard,
+    Storage,
+    Devices,
+    Network,
+    Audio,
+    Camera,
+}
+
+impl Capability {
+    pub const ALL: [Capability; 8] = [
+        Capability::Applications,
+        Capability::Windows,
+        Capability::Clipboard,
+        Capability::Storage,
+        Capability::Devices,
+        Capability::Network,
+        Capability::Audio,
+        Capability::Camera,
+    ];
+}
+
+/// The set of capabilities an adapter/workspace declares (SPEC §18.2). Declared
+/// only — undeclared means absent. Never faked.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub struct CapabilitySet {
+    applications: bool,
+    windows: bool,
+    clipboard: bool,
+    storage: bool,
+    devices: bool,
+    network: bool,
+    audio: bool,
+    camera: bool,
+}
+
+impl CapabilitySet {
+    pub fn none() -> Self {
+        Self::default()
+    }
+
+    /// Builder: declare a capability. `CapabilitySet::none().with(Applications)`.
+    pub fn with(mut self, c: Capability) -> Self {
+        self.set(c, true);
+        self
+    }
+
+    pub fn set(&mut self, c: Capability, on: bool) {
+        use Capability::*;
+        match c {
+            Applications => self.applications = on,
+            Windows => self.windows = on,
+            Clipboard => self.clipboard = on,
+            Storage => self.storage = on,
+            Devices => self.devices = on,
+            Network => self.network = on,
+            Audio => self.audio = on,
+            Camera => self.camera = on,
+        }
+    }
+
+    pub fn supports(&self, c: Capability) -> bool {
+        use Capability::*;
+        match c {
+            Applications => self.applications,
+            Windows => self.windows,
+            Clipboard => self.clipboard,
+            Storage => self.storage,
+            Devices => self.devices,
+            Network => self.network,
+            Audio => self.audio,
+            Camera => self.camera,
+        }
+    }
+
+    /// The capabilities actually declared, in a stable order.
+    pub fn declared(&self) -> Vec<Capability> {
+        Capability::ALL
+            .iter()
+            .copied()
+            .filter(|c| self.supports(*c))
+            .collect()
+    }
+}
+
+// ── members (SPEC §4, §15) ──────────────────────────────────────────────────
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct Member {
+    pub id: MemberId,
+    pub role: Role,
 }
 
 // ── applications & windows (SPEC §10, §14) ──────────────────────────────────
@@ -177,42 +280,72 @@ pub struct ResourceLimits {
     pub storage_gb: Option<u32>,
 }
 
-// ── errors ──────────────────────────────────────────────────────────────────
+// ── the error contract ──────────────────────────────────────────────────────
+/// The contract's error vocabulary. **Adapters never invent error kinds** —
+/// they map platform-specific failures into these. This is what lets multiple
+/// adapters and SDKs share one error model.
 #[derive(Debug, PartialEq, Eq)]
 pub enum WseError {
-    /// SPEC §5.2 — an illegal state transition was requested.
+    /// SPEC §6.5 — a non-granted resource is reported as *not found*, never as
+    /// "denied". A workspace must not distinguish "does not exist" from "exists
+    /// but not granted". Probing must not reveal existence.
+    NotFound(String),
+    /// SPEC §5.2 — the state machine forbids this transition.
     InvalidTransition {
         from: WorkspaceState,
         to: WorkspaceState,
     },
-    /// SPEC §6.5 — a non-granted resource is reported as *not found*, never as
-    /// "denied". A workspace must not distinguish "does not exist" from
-    /// "exists but not granted".
-    NotFound(String),
-    /// The workspace is not in a state where this operation is valid.
-    NotRunning(WorkspaceId),
-    /// SPEC §18.3 — the adapter could not prove the workspace is sealed, so the
-    /// engine refuses to run it. There is no partial-isolation tier.
-    NotIsolated {
+    /// The operation requires a different state than the workspace is in.
+    InvalidState {
+        operation: &'static str,
+        state: WorkspaceState,
+    },
+    /// SPEC §18.2 — the workspace does not provide this capability. Declared-only.
+    CapabilityUnavailable(Capability),
+    /// SPEC §4.3 / §4.6 — a role is refused an access right. Unlike NotFound,
+    /// this is a *visible* refusal: the resource's existence is not a secret.
+    PermissionDenied {
+        right: AccessRight,
+        role: Role,
+    },
+    /// SPEC §18.4 — the adapter speaks an incompatible contract version.
+    ContractMismatch {
+        adapter: String,
+        engine: String,
+    },
+    /// SPEC §7 — a resource limit or dependency is unavailable.
+    ResourceUnavailable(String),
+    /// SPEC §18.3 — the engine rejected the adapter's isolation attestation.
+    IsolationRejected {
         workspace: WorkspaceId,
         details: Vec<String>,
     },
-    /// The adapter failed for a platform-specific reason.
-    Adapter(String),
+    /// A platform/adapter failure mapped into the contract. Adapters map their
+    /// native failures to this (or a more specific kind) — never a new kind.
+    Internal(String),
 }
 
 impl fmt::Display for WseError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        use WseError::*;
         match self {
-            WseError::InvalidTransition { from, to } => {
-                write!(f, "illegal transition {from:?} -> {to:?}")
+            NotFound(what) => write!(f, "not found: {what}"),
+            InvalidTransition { from, to } => write!(f, "illegal transition {from:?} -> {to:?}"),
+            InvalidState { operation, state } => {
+                write!(f, "cannot {operation}: workspace is {state:?}")
             }
-            WseError::NotFound(what) => write!(f, "not found: {what}"),
-            WseError::NotRunning(id) => write!(f, "workspace {id} is not running"),
-            WseError::NotIsolated { workspace, details } => {
-                write!(f, "workspace {workspace} is not sealed: {}", details.join("; "))
+            CapabilityUnavailable(c) => write!(f, "capability unavailable: {c:?}"),
+            PermissionDenied { right, role } => {
+                write!(f, "permission denied: {role:?} may not {right:?}")
             }
-            WseError::Adapter(msg) => write!(f, "adapter error: {msg}"),
+            ContractMismatch { adapter, engine } => {
+                write!(f, "contract mismatch: adapter {adapter}, engine {engine}")
+            }
+            ResourceUnavailable(what) => write!(f, "resource unavailable: {what}"),
+            IsolationRejected { workspace, details } => {
+                write!(f, "isolation rejected for {workspace}: {}", details.join("; "))
+            }
+            Internal(msg) => write!(f, "internal: {msg}"),
         }
     }
 }

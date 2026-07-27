@@ -14,7 +14,7 @@
 //! will be gated by what an adapter declares, and added as those capabilities
 //! land — never before.
 
-use wse_common::{AppSpec, Persistence, WorkspaceState, WseError};
+use wse_common::{AppSpec, Capability, Persistence, WorkspaceState, WseError};
 use wse_contract::{WorkspaceAdapter, CONTRACT_VERSION};
 use wse_engine::{Engine, WorkspaceConfig};
 
@@ -36,6 +36,10 @@ impl ConformanceReport {
             name,
             outcome: f(),
         });
+    }
+
+    fn absorb(&mut self, other: ConformanceReport) {
+        self.results.extend(other.results);
     }
 
     pub fn passed(&self) -> usize {
@@ -147,8 +151,8 @@ where
         let mut e = Engine::new(make());
         let ws = e.create_workspace(cfg()).map_err(|e| e.to_string())?;
         match e.launch(&ws, "browser") {
-            Err(WseError::NotRunning(_)) => Ok(()),
-            other => Err(format!("expected NotRunning, got {other:?}")),
+            Err(WseError::InvalidState { .. }) => Ok(()),
+            other => Err(format!("expected InvalidState, got {other:?}")),
         }
     });
 
@@ -185,5 +189,102 @@ where
         }
     });
 
+    r.check("identity_reflects_declared_capabilities", || {
+        let mut e = Engine::new(make());
+        let ws = e.create_workspace(cfg()).map_err(|e| e.to_string())?;
+        let adapter_caps = make().capabilities();
+        let id = e.identity(&ws).ok_or("no identity")?;
+        ok(
+            id.capabilities == adapter_caps,
+            "workspace identity must reflect the adapter's declared capabilities",
+        )
+    });
+
     r
+}
+
+// ── capability-gated suites ─────────────────────────────────────────────────
+// Each capability has its own suite. An adapter only runs the suites for the
+// capabilities it declares. `run_all` wires it together: no adapter is tested
+// for something it never claimed to provide.
+
+/// SPEC §10 — the Applications capability. Deeper than core: multiple instances
+/// of an app are permitted (§10.3).
+pub fn run_applications<A, F>(make: F) -> ConformanceReport
+where
+    A: WorkspaceAdapter,
+    F: Fn() -> A,
+{
+    let mut r = ConformanceReport::default();
+
+    r.check("applications/multiple_instances_permitted", || {
+        // SPEC §10.3 — launching the same app twice yields two windows.
+        let mut e = Engine::new(make());
+        let ws = e.create_workspace(cfg()).map_err(|e| e.to_string())?;
+        e.start(&ws).map_err(|e| e.to_string())?;
+        e.launch(&ws, "browser").map_err(|e| e.to_string())?;
+        e.launch(&ws, "browser").map_err(|e| e.to_string())?;
+        let n = e.list_windows(&ws).map_err(|e| e.to_string())?.len();
+        ok(n == 2, format!("expected 2 instances, got {n}"))
+    });
+
+    r
+}
+
+/// SPEC §14 — the Windows capability. Focus semantics: at most one window is
+/// focused, and it is the most recently launched.
+pub fn run_windows<A, F>(make: F) -> ConformanceReport
+where
+    A: WorkspaceAdapter,
+    F: Fn() -> A,
+{
+    let mut r = ConformanceReport::default();
+
+    r.check("windows/at_most_one_focused", || {
+        let mut e = Engine::new(make());
+        let ws = e.create_workspace(cfg()).map_err(|e| e.to_string())?;
+        e.start(&ws).map_err(|e| e.to_string())?;
+        e.launch(&ws, "browser").map_err(|e| e.to_string())?;
+        e.launch(&ws, "editor").map_err(|e| e.to_string())?;
+        let windows = e.list_windows(&ws).map_err(|e| e.to_string())?;
+        let focused = windows.iter().filter(|w| w.focused).count();
+        ok(focused == 1, format!("expected exactly 1 focused, got {focused}"))
+    });
+
+    r.check("windows/newest_is_focused", || {
+        let mut e = Engine::new(make());
+        let ws = e.create_workspace(cfg()).map_err(|e| e.to_string())?;
+        e.start(&ws).map_err(|e| e.to_string())?;
+        e.launch(&ws, "browser").map_err(|e| e.to_string())?;
+        e.launch(&ws, "editor").map_err(|e| e.to_string())?;
+        let windows = e.list_windows(&ws).map_err(|e| e.to_string())?;
+        ok(
+            windows.last().map(|w| w.focused).unwrap_or(false),
+            "the most recently launched window must be focused",
+        )
+    });
+
+    r
+}
+
+/// Run the full conformance suite an adapter is *eligible* for: the mandatory
+/// core, plus one suite per declared capability. An adapter is never tested for
+/// a capability it didn't declare (SPEC §18.2). This is capability negotiation
+/// applied to conformance itself.
+pub fn run_all<A, F>(make: F) -> ConformanceReport
+where
+    A: WorkspaceAdapter,
+    F: Fn() -> A,
+{
+    let caps = make().capabilities();
+    let mut report = run_core(&make);
+    if caps.supports(Capability::Applications) {
+        report.absorb(run_applications(&make));
+    }
+    if caps.supports(Capability::Windows) {
+        report.absorb(run_windows(&make));
+    }
+    // Clipboard, Storage, Devices, Network, Audio, Camera suites slot in here as
+    // each capability's mini-spec is written — never before.
+    report
 }

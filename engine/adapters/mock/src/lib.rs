@@ -10,8 +10,7 @@ use std::collections::HashMap;
 
 use wse_common::*;
 use wse_contract::{
-    CapabilitySet, ContractVersion, IsolationAttestation, WorkspaceAdapter, WorkspaceDef,
-    CONTRACT_VERSION,
+    ContractVersion, IsolationAttestation, WorkspaceAdapter, WorkspaceDef, CONTRACT_VERSION,
 };
 
 #[derive(Default)]
@@ -53,9 +52,12 @@ impl WorkspaceAdapter for MockAdapter {
     }
 
     fn capabilities(&self) -> CapabilitySet {
-        // The mock provides isolation (trivially) but no real hardware features
-        // and no native OS apps — declared honestly (SPEC §18.2).
-        CapabilitySet::default()
+        // The mock provides the two capabilities its behaviour actually
+        // implements — launching apps and window metadata — and declares
+        // nothing it doesn't (SPEC §18.2). No clipboard, storage, devices, etc.
+        CapabilitySet::none()
+            .with(Capability::Applications)
+            .with(Capability::Windows)
     }
 
     fn create(&mut self, def: &WorkspaceDef) -> Result<()> {
@@ -95,7 +97,10 @@ impl WorkspaceAdapter for MockAdapter {
     fn launch(&mut self, id: &WorkspaceId, app: &AppSpec) -> Result<Window> {
         let w = self.ws_mut(id)?;
         if !w.running {
-            return Err(WseError::NotRunning(id.clone()));
+            return Err(WseError::InvalidState {
+                operation: "launch",
+                state: WorkspaceState::Created,
+            });
         }
         w.next_window += 1;
         let window = Window {

@@ -109,6 +109,36 @@ Workspace
 
 ---
 
+## Principles
+
+These are load-bearing. They are how the boundary stays honest as the platform
+grows.
+
+> **Adapters are consumers of the contract, never authors of it.**
+
+When you discover something a platform can't do, resist changing the contract.
+Ask first: is this truly part of the Workspace Contract, or a limitation of one
+implementation? Often the adapter simply declares the capability unavailable
+(§18.2) or implements it differently. Only sometimes does the contract need to
+evolve — and when it does, the change benefits *every* adapter, not one. This is
+what keeps the engine from slowly becoming "Windows with abstractions."
+
+> **The engine negotiates on capabilities, never on platform names.**
+
+The engine asks "does this workspace provide Clipboard?", never "am I on
+Windows?". Capabilities are *declared*, never assumed. Conformance itself is
+capability-gated: an adapter runs the suites for what it declares, and nothing
+it doesn't.
+
+> **Adapters map failures into the contract's error vocabulary; they never
+> invent error kinds.** One error model spans every adapter and SDK
+> (`NotFound`, `InvalidState`, `CapabilityUnavailable`, `PermissionDenied`,
+> `ContractMismatch`, `ResourceUnavailable`, `IsolationRejected`, `Internal`).
+
+> **The adapter attests; the engine decides.** An adapter cannot *prove*
+> isolation — it provides evidence (an attestation). The engine holds the
+> policy and evaluates the evidence against it (§18.3).
+
 ## The real IP
 
 Not the streaming. Not the VM. Not the sandbox. Not the SDK in isolation. It is the

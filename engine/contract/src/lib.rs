@@ -39,21 +39,6 @@ impl fmt::Display for ContractVersion {
 /// The version this build of the contract defines.
 pub const CONTRACT_VERSION: ContractVersion = ContractVersion::new(0, 1);
 
-/// Declared capabilities (SPEC §18.2). MAY differ per adapter; undeclared means
-/// absent. These never include isolation — that is the mandatory core (§18.3).
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
-pub struct CapabilitySet {
-    pub gpu_acceleration: bool,
-    pub live_memory_snapshot: bool,
-    pub usb_passthrough: bool,
-    pub audio: bool,
-    pub display_hotplug: bool,
-    /// Tier-1 native application support for the platform's own OS (e.g. real
-    /// Windows .exe on the Windows adapter). A Linux-in-VM adapter declares
-    /// this false and offers Linux apps (plus Wine as its own capability).
-    pub native_apps: bool,
-}
-
 /// What the engine hands an adapter to create a workspace. Platform-neutral.
 #[derive(Clone, Debug)]
 pub struct WorkspaceDef {
@@ -87,7 +72,8 @@ pub trait WorkspaceAdapter {
         CONTRACT_VERSION
     }
 
-    /// SPEC §18.2 — declare capabilities honestly.
+    /// SPEC §18.2 — declare the workspace capabilities this adapter provides,
+    /// honestly. Undeclared means absent. `CapabilitySet` lives in wse-common.
     fn capabilities(&self) -> CapabilitySet;
 
     /// SPEC §5.1 / §3 — define a workspace; not yet executing.

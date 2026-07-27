@@ -73,7 +73,7 @@ fn cannot_launch_before_running() {
     // Not started yet.
     assert!(matches!(
         engine.launch(&ws, "browser"),
-        Err(WseError::NotRunning(_))
+        Err(WseError::InvalidState { .. })
     ));
 }
 
@@ -99,8 +99,8 @@ fn state_machine_rejects_illegal_transitions() {
 fn refuses_unsealed_workspace() {
     // SPEC §18.3: if the adapter can't prove isolation, the engine refuses to
     // run it. A one-off adapter that reports sealed=false must be rejected.
-    use wse_common::{Result, Window, WorkspaceId};
-    use wse_contract::{CapabilitySet, IsolationAttestation, WorkspaceAdapter, WorkspaceDef};
+    use wse_common::{CapabilitySet, Result, Window, WorkspaceId};
+    use wse_contract::{IsolationAttestation, WorkspaceAdapter, WorkspaceDef};
 
     #[derive(Default)]
     struct LeakyAdapter;
@@ -141,7 +141,7 @@ fn refuses_unsealed_workspace() {
         .unwrap();
     assert!(matches!(
         engine.start(&ws),
-        Err(WseError::NotIsolated { .. })
+        Err(WseError::IsolationRejected { .. })
     ));
     // And it must NOT be left in a running state.
     assert_eq!(engine.state(&ws), Some(WorkspaceState::Created));

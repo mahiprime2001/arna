@@ -11,7 +11,7 @@ use std::collections::HashMap;
 
 use wse_common::*;
 use wse_contract::{
-    IsolationAttestation, WorkspaceAdapter, WorkspaceDef, CONTRACT_VERSION,
+    ContractVersion, IsolationAttestation, WorkspaceAdapter, WorkspaceDef, CONTRACT_VERSION,
 };
 
 /// The engine's isolation policy — what it *requires* of an adapter's
@@ -54,29 +54,54 @@ pub struct WorkspaceConfig {
     /// not here is *not found*, never *denied* (SPEC §6.5).
     pub apps: Vec<AppSpec>,
     pub limits: ResourceLimits,
-    /// Collaborator grants, within what host policy allows (SPEC §4.6.2).
-    /// Defaults are deny-by-default except view (SPEC §6.1, §4.6).
-    pub collaborator_grants: HashMap<Capability, bool>,
+    /// Collaborator access rights, within what host policy allows (§4.6.2).
+    /// Defaults are deny-by-default except view/input (SPEC §6.1, §4.6).
+    pub collaborator_rights: HashMap<AccessRight, bool>,
+    /// The workspace owner (SPEC §4). Optional at this stage; a fresh one is
+    /// minted if absent.
+    pub owner: Option<MemberId>,
+    /// Free-form metadata the owner attaches (labels, project id, …).
+    pub metadata: HashMap<String, String>,
 }
 
 impl WorkspaceConfig {
-    /// Spec-faithful defaults: deny-by-default, except viewing the display.
+    /// Spec-faithful defaults: deny-by-default, except viewing + input.
     pub fn new(name: impl Into<String>, persistence: Persistence, apps: Vec<AppSpec>) -> Self {
-        let mut grants = HashMap::new();
-        grants.insert(Capability::ViewDisplay, true);
-        grants.insert(Capability::Keyboard, true);
-        grants.insert(Capability::Pointer, true);
-        grants.insert(Capability::ClipboardRead, false);
-        grants.insert(Capability::ClipboardWrite, false);
-        grants.insert(Capability::FileTransfer, false);
+        let mut rights = HashMap::new();
+        rights.insert(AccessRight::ViewDisplay, true);
+        rights.insert(AccessRight::Keyboard, true);
+        rights.insert(AccessRight::Pointer, true);
+        rights.insert(AccessRight::ClipboardRead, false);
+        rights.insert(AccessRight::ClipboardWrite, false);
+        rights.insert(AccessRight::FileTransfer, false);
         Self {
             name: name.into(),
             persistence,
             apps,
             limits: ResourceLimits::default(),
-            collaborator_grants: grants,
+            collaborator_rights: rights,
+            owner: None,
+            metadata: HashMap::new(),
         }
     }
+}
+
+/// The identity of a workspace — everything the engine knows about *what a
+/// workspace is*, independent of the adapter running it (SPEC §4, §18.4).
+#[derive(Clone, Debug)]
+pub struct WorkspaceIdentity {
+    pub id: WorkspaceId,
+    pub name: String,
+    pub state: WorkspaceState,
+    pub persistence: Persistence,
+    pub owner: MemberId,
+    pub members: Vec<Member>,
+    /// The capabilities this workspace provides (adapter-declared, §18.2).
+    pub capabilities: CapabilitySet,
+    pub contract_version: ContractVersion,
+    /// The most recent isolation attestation the engine evaluated (§18.3).
+    pub last_attestation: Option<IsolationAttestation>,
+    pub metadata: HashMap<String, String>,
 }
 
 /// Things the outside world can subscribe to. Never used as control flow.
@@ -104,7 +129,15 @@ struct Record {
     persistence: Persistence,
     catalog: Vec<AppSpec>,
     #[allow(dead_code)]
-    collaborator_grants: HashMap<Capability, bool>,
+    collaborator_rights: HashMap<AccessRight, bool>,
+    owner: MemberId,
+    members: Vec<Member>,
+    /// The effective capabilities of this workspace (SPEC §18.2). Today this is
+    /// what the adapter declares; §6.4's host∩owner narrowing lands here later.
+    capabilities: CapabilitySet,
+    contract_version: ContractVersion,
+    last_attestation: Option<IsolationAttestation>,
+    metadata: HashMap<String, String>,
 }
 
 pub struct Engine<A: WorkspaceAdapter> {
@@ -129,11 +162,6 @@ impl<A: WorkspaceAdapter> Engine<A> {
         self.isolation_policy
     }
 
-    /// The declared capabilities of the underlying adapter (SPEC §18.2).
-    pub fn capabilities(&self) -> wse_contract::CapabilitySet {
-        self.adapter.capabilities()
-    }
-
     /// Everything the outside world may observe, in order.
     pub fn events(&self) -> &[Event] {
         &self.events
@@ -148,9 +176,10 @@ impl<A: WorkspaceAdapter> Engine<A> {
         // The adapter must speak a compatible contract version (SPEC §18.4).
         let v = self.adapter.contract_version();
         if !v.compatible_with(CONTRACT_VERSION) {
-            return Err(WseError::Adapter(format!(
-                "adapter speaks contract {v}, engine speaks {CONTRACT_VERSION}"
-            )));
+            return Err(WseError::ContractMismatch {
+                adapter: v.to_string(),
+                engine: CONTRACT_VERSION.to_string(),
+            });
         }
         let id = WorkspaceId::new();
         let def = WorkspaceDef {
@@ -160,6 +189,17 @@ impl<A: WorkspaceAdapter> Engine<A> {
             limits: cfg.limits,
         };
         self.adapter.create(&def)?;
+
+        // Capability negotiation: the workspace provides what the adapter
+        // declares (SPEC §18.2). The engine will decide on capabilities, never
+        // on platform names.
+        let capabilities = self.adapter.capabilities();
+        let owner = cfg.owner.unwrap_or_default();
+        let members = vec![Member {
+            id: owner.clone(),
+            role: Role::Owner,
+        }];
+
         self.workspaces.insert(
             id.clone(),
             Record {
@@ -167,11 +207,47 @@ impl<A: WorkspaceAdapter> Engine<A> {
                 state: WorkspaceState::Created,
                 persistence: cfg.persistence,
                 catalog: cfg.apps,
-                collaborator_grants: cfg.collaborator_grants,
+                collaborator_rights: cfg.collaborator_rights,
+                owner,
+                members,
+                capabilities,
+                contract_version: v,
+                last_attestation: None,
+                metadata: cfg.metadata,
             },
         );
         self.events.push(Event::WorkspaceCreated(id.clone()));
         Ok(id)
+    }
+
+    /// Capability negotiation — the engine asks *what a workspace provides*,
+    /// never *what platform it runs on* (SPEC §18.2).
+    pub fn capabilities(&self, id: &WorkspaceId) -> Option<CapabilitySet> {
+        self.workspaces.get(id).map(|r| r.capabilities)
+    }
+
+    /// Does this workspace provide a given capability?
+    pub fn supports(&self, id: &WorkspaceId, cap: Capability) -> bool {
+        self.workspaces
+            .get(id)
+            .map(|r| r.capabilities.supports(cap))
+            .unwrap_or(false)
+    }
+
+    /// The full identity of a workspace (SPEC §4, §18.4).
+    pub fn identity(&self, id: &WorkspaceId) -> Option<WorkspaceIdentity> {
+        self.workspaces.get(id).map(|r| WorkspaceIdentity {
+            id: id.clone(),
+            name: r.name.clone(),
+            state: r.state,
+            persistence: r.persistence,
+            owner: r.owner.clone(),
+            members: r.members.clone(),
+            capabilities: r.capabilities,
+            contract_version: r.contract_version,
+            last_attestation: r.last_attestation.clone(),
+            metadata: r.metadata.clone(),
+        })
     }
 
     /// Start (or resume) a workspace. The adapter *attests* to isolation; the
@@ -183,11 +259,15 @@ impl<A: WorkspaceAdapter> Engine<A> {
         self.check_transition(from, WorkspaceState::Running)?;
 
         let attestation: IsolationAttestation = self.adapter.start(id)?;
+        // Record the evidence on the workspace's identity either way.
+        if let Some(rec) = self.workspaces.get_mut(id) {
+            rec.last_attestation = Some(attestation.clone());
+        }
         if let Err(details) = self.isolation_policy.evaluate(&attestation) {
             // Reject the evidence; do not present an unsealed workspace as
             // running. Best-effort stop.
             let _ = self.adapter.stop(id);
-            return Err(WseError::NotIsolated {
+            return Err(WseError::IsolationRejected {
                 workspace: id.clone(),
                 details,
             });
@@ -212,7 +292,10 @@ impl<A: WorkspaceAdapter> Engine<A> {
             "workspace {id}"
         )))?;
         if rec.state != WorkspaceState::Running {
-            return Err(WseError::NotRunning(id.clone()));
+            return Err(WseError::InvalidState {
+                operation: "launch",
+                state: rec.state,
+            });
         }
         let app = rec
             .catalog
