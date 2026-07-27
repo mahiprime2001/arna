@@ -131,16 +131,45 @@ pub enum Event {
     WorkspaceDestroyed(WorkspaceId),
 }
 
-impl Record {
-    /// Does a member in `role` hold `right` in this workspace? Encodes the
-    /// SPEC §4.6 capability matrix: Owner has all; Observer sees but never
-    /// extracts or injects (only ViewDisplay); Collaborator gets what host
-    /// policy granted, deny-by-default.
-    fn role_has(&self, role: Role, right: AccessRight) -> bool {
-        match role {
+/// Who is asking — the authorization context. Today just a Role; a MemberId
+/// that *resolves* to a role arrives with collaboration, and capability
+/// operations will still see no more than this. A capability never learns about
+/// identity, sessions, or networking (good layering).
+#[derive(Clone, Copy, Debug)]
+pub struct AuthContext {
+    pub role: Role,
+}
+
+impl AuthContext {
+    pub fn role(role: Role) -> Self {
+        Self { role }
+    }
+}
+
+/// The grants in effect for a workspace, as the authorizer sees them (§4.6.2).
+pub struct GrantView<'a> {
+    pub collaborator_rights: &'a HashMap<AccessRight, bool>,
+}
+
+/// The policy interface. **The engine asks; the policy system answers.** The
+/// engine depends on this trait, never on a concrete policy — today a simple
+/// role matrix, tomorrow a full Permission Manager (role → right → capability →
+/// decision) without touching a single capability.
+pub trait Authorizer {
+    fn allows(&self, ctx: &AuthContext, grants: &GrantView, right: AccessRight) -> bool;
+}
+
+/// The default policy: the SPEC §4.6 capability matrix. Owner has all; Observer
+/// may only ViewDisplay (observing is not extracting, §4.6.1); Collaborator gets
+/// what host policy granted, deny-by-default (§6.1).
+pub struct RoleMatrixAuthorizer;
+
+impl Authorizer for RoleMatrixAuthorizer {
+    fn allows(&self, ctx: &AuthContext, grants: &GrantView, right: AccessRight) -> bool {
+        match ctx.role {
             Role::Owner => true,
             Role::Observer => right == AccessRight::ViewDisplay,
-            Role::Collaborator => self
+            Role::Collaborator => grants
                 .collaborator_rights
                 .get(&right)
                 .copied()
@@ -173,6 +202,7 @@ pub struct Engine<A: WorkspaceAdapter> {
     workspaces: HashMap<WorkspaceId, Record>,
     events: Vec<Event>,
     isolation_policy: IsolationPolicy,
+    authorizer: Box<dyn Authorizer>,
 }
 
 impl<A: WorkspaceAdapter> Engine<A> {
@@ -182,7 +212,14 @@ impl<A: WorkspaceAdapter> Engine<A> {
             workspaces: HashMap::new(),
             events: Vec::new(),
             isolation_policy: IsolationPolicy::default(),
+            authorizer: Box::new(RoleMatrixAuthorizer),
         }
+    }
+
+    /// Swap the policy system. Defaults to the SPEC §4.6 role matrix.
+    pub fn with_authorizer(mut self, authorizer: Box<dyn Authorizer>) -> Self {
+        self.authorizer = authorizer;
+        self
     }
 
     /// The isolation policy the engine evaluates attestations against.
@@ -362,7 +399,7 @@ impl<A: WorkspaceAdapter> Engine<A> {
         &mut self,
         id: &WorkspaceId,
         role: Role,
-    ) -> Result<Option<ClipboardData>> {
+    ) -> Result<Option<ClipboardItem>> {
         // Policy first (extract booleans so the record borrow ends here).
         {
             let rec = self
@@ -372,7 +409,14 @@ impl<A: WorkspaceAdapter> Engine<A> {
             if !rec.capabilities.supports(Capability::Clipboard) {
                 return Err(WseError::CapabilityUnavailable(Capability::Clipboard));
             }
-            if !rec.role_has(role, AccessRight::ClipboardRead) {
+            let allowed = self.authorizer.allows(
+                &AuthContext::role(role),
+                &GrantView {
+                    collaborator_rights: &rec.collaborator_rights,
+                },
+                AccessRight::ClipboardRead,
+            );
+            if !allowed {
                 return Err(WseError::PermissionDenied {
                     right: AccessRight::ClipboardRead,
                     role,
@@ -398,7 +442,7 @@ impl<A: WorkspaceAdapter> Engine<A> {
         &mut self,
         id: &WorkspaceId,
         role: Role,
-        data: ClipboardData,
+        data: ClipboardItem,
     ) -> Result<()> {
         {
             let rec = self
@@ -408,7 +452,14 @@ impl<A: WorkspaceAdapter> Engine<A> {
             if !rec.capabilities.supports(Capability::Clipboard) {
                 return Err(WseError::CapabilityUnavailable(Capability::Clipboard));
             }
-            if !rec.role_has(role, AccessRight::ClipboardWrite) {
+            let allowed = self.authorizer.allows(
+                &AuthContext::role(role),
+                &GrantView {
+                    collaborator_rights: &rec.collaborator_rights,
+                },
+                AccessRight::ClipboardWrite,
+            );
+            if !allowed {
                 return Err(WseError::PermissionDenied {
                     right: AccessRight::ClipboardWrite,
                     role,

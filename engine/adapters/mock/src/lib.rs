@@ -21,7 +21,7 @@ struct MockWorkspace {
     windows: Vec<Window>,
     next_window: u32,
     /// SPEC §9.1 — the workspace's own clipboard, isolated per workspace.
-    clipboard: Option<ClipboardData>,
+    clipboard: Option<ClipboardItem>,
 }
 
 #[derive(Default)]
@@ -137,11 +137,11 @@ impl WorkspaceAdapter for MockAdapter {
 }
 
 impl ClipboardCapability for MockAdapter {
-    fn clipboard_peek(&self, id: &WorkspaceId) -> Result<Option<ClipboardData>> {
+    fn clipboard_peek(&self, id: &WorkspaceId) -> Result<Option<ClipboardItem>> {
         Ok(self.ws(id)?.clipboard.clone())
     }
 
-    fn clipboard_put(&mut self, id: &WorkspaceId, data: ClipboardData) -> Result<()> {
+    fn clipboard_put(&mut self, id: &WorkspaceId, data: ClipboardItem) -> Result<()> {
         self.ws_mut(id)?.clipboard = Some(data);
         Ok(())
     }

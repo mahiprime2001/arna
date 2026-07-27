@@ -20,18 +20,19 @@ boundary-crossing transfers.
 
 ## 2. Contract
 
-**Data model.** A clipboard payload is one of:
+**Data model.** A clipboard payload is a MIME/content-type plus its bytes:
 
 ```
-ClipboardData
-├── Text(String)
-└── Image { mime: String, bytes: Vec<u8> }
+ClipboardItem { mime: String, payload: Vec<u8> }
 ```
 
-Text is the baseline every Clipboard implementation must support. Image support
-is real but may vary; a v0.1 adapter that cannot carry image data maps an image
-transfer to `CapabilityUnavailable` (see §5). *(Format granularity is the main
-open question that keeps this capability at Draft.)*
+Formats are **data, not capabilities** — `text/plain`, `text/html`, `image/png`,
+`image/jpeg`, `application/json` all flow through this one model, so the contract
+never changes when a new format appears (Windows/Linux/macOS all think in
+MIME/UTI/content-type terms anyway). `text/plain` is the baseline every
+implementation carries; richer types are best-effort per adapter. An adapter
+that cannot place a given content-type on its native clipboard maps that to
+`Internal` (a mechanical failure), not a capability or permission error.
 
 **Interface (adapter, mechanical).** The adapter only reads/writes the
 workspace's own clipboard. It never decides *who* may do so — that is the
@@ -89,7 +90,7 @@ Only these `WseError` values may arise from a Clipboard operation:
 | Workspace doesn't provide Clipboard | `CapabilityUnavailable(Clipboard)` |
 | Role lacks the required right (incl. Observer) | `PermissionDenied { right, role }` |
 | Workspace id unknown | `NotFound` |
-| Image payload on a text-only adapter (v0.1) | `CapabilityUnavailable(Clipboard)` |
+| A content-type the adapter can't represent natively | `Internal` |
 | Adapter/platform failure | `Internal` |
 
 `PermissionDenied` is a **visible** refusal (the clipboard's existence is not a
@@ -130,8 +131,8 @@ None of them changes this spec.
 
 ## Open questions (why this is Draft, not Stable)
 
-- Format granularity: should image support be its own declared sub-capability
-  rather than a text/image split inside one capability?
-- Multiple simultaneous formats on one payload (text + image together), as real
-  OS clipboards do.
+- Multiple simultaneous representations on one clipboard write (text + html +
+  image together), as real OS clipboards do — likely `Vec<ClipboardItem>`.
 - Size limits and whether they are a Resource concern or a Clipboard one.
+
+*(Resolved: formats are data, not sub-capabilities — hence the single MIME model.)*

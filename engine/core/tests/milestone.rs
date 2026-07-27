@@ -152,7 +152,7 @@ fn clipboard_op_on_non_declaring_adapter_is_unavailable() {
     // clipboard spec I6 — a capability op on a workspace that does not declare
     // the capability fails as CapabilityUnavailable, not a permission refusal.
     use wse_common::{
-        Capability, CapabilitySet, ClipboardData, Result, Role, Window, WorkspaceId,
+        Capability, CapabilitySet, ClipboardItem, Result, Role, Window, WorkspaceId,
     };
     use wse_contract::{IsolationAttestation, WorkspaceAdapter, WorkspaceDef};
 
@@ -202,7 +202,7 @@ fn clipboard_op_on_non_declaring_adapter_is_unavailable() {
         Err(WseError::CapabilityUnavailable(Capability::Clipboard))
     ));
     assert!(matches!(
-        engine.clipboard_write_in(&ws, Role::Owner, ClipboardData::text("x")),
+        engine.clipboard_write_in(&ws, Role::Owner, ClipboardItem::text("x")),
         Err(WseError::CapabilityUnavailable(Capability::Clipboard))
     ));
 }

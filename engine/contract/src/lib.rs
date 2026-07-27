@@ -113,7 +113,7 @@ pub trait WorkspaceAdapter {
 /// right, direction) lives in the engine. See contract/capabilities/clipboard.md.
 pub trait ClipboardCapability {
     /// The workspace clipboard's current content, or None if empty.
-    fn clipboard_peek(&self, id: &WorkspaceId) -> Result<Option<ClipboardData>>;
+    fn clipboard_peek(&self, id: &WorkspaceId) -> Result<Option<ClipboardItem>>;
     /// Replace the workspace clipboard content.
-    fn clipboard_put(&mut self, id: &WorkspaceId, data: ClipboardData) -> Result<()>;
+    fn clipboard_put(&mut self, id: &WorkspaceId, data: ClipboardItem) -> Result<()>;
 }

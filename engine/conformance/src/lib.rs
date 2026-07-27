@@ -17,7 +17,7 @@
 use std::collections::HashMap;
 
 use wse_common::{
-    AccessRight, AppSpec, Capability, ClipboardData, Persistence, Role, WorkspaceState, WseError,
+    AccessRight, AppSpec, Capability, ClipboardItem, Persistence, Role, WorkspaceState, WseError,
 };
 use wse_contract::{WorkspaceAdapter, CONTRACT_VERSION};
 use wse_engine::{Engine, WorkspaceConfig};
@@ -296,7 +296,7 @@ where
         let mut e = Engine::new(make());
         let a = e.create_workspace(cfg()).map_err(|e| e.to_string())?;
         let b = e.create_workspace(cfg()).map_err(|e| e.to_string())?;
-        e.clipboard_write_in(&a, Role::Owner, ClipboardData::text("secret"))
+        e.clipboard_write_in(&a, Role::Owner, ClipboardItem::text("secret"))
             .map_err(|e| e.to_string())?;
         let seen = e
             .clipboard_read_out(&b, Role::Owner)
@@ -308,13 +308,13 @@ where
         // I4 — Owner may write then read the same payload back.
         let mut e = Engine::new(make());
         let ws = e.create_workspace(cfg()).map_err(|e| e.to_string())?;
-        e.clipboard_write_in(&ws, Role::Owner, ClipboardData::text("hello"))
+        e.clipboard_write_in(&ws, Role::Owner, ClipboardItem::text("hello"))
             .map_err(|e| e.to_string())?;
         let got = e
             .clipboard_read_out(&ws, Role::Owner)
             .map_err(|e| e.to_string())?;
         ok(
-            got == Some(ClipboardData::text("hello")),
+            got == Some(ClipboardItem::text("hello")),
             "Owner read_out must return what was written_in",
         )
     });
@@ -325,7 +325,7 @@ where
         let ws = e
             .create_workspace(write_only_collaborator())
             .map_err(|e| e.to_string())?;
-        e.clipboard_write_in(&ws, Role::Collaborator, ClipboardData::text("x"))
+        e.clipboard_write_in(&ws, Role::Collaborator, ClipboardItem::text("x"))
             .map_err(|e| format!("write_in should be allowed: {e}"))?;
         match e.clipboard_read_out(&ws, Role::Collaborator) {
             Err(WseError::PermissionDenied { .. }) => Ok(()),
@@ -346,7 +346,7 @@ where
     r.check("clipboard/observer_refused_write_in", || {
         let mut e = Engine::new(make());
         let ws = e.create_workspace(cfg()).map_err(|e| e.to_string())?;
-        match e.clipboard_write_in(&ws, Role::Observer, ClipboardData::text("x")) {
+        match e.clipboard_write_in(&ws, Role::Observer, ClipboardItem::text("x")) {
             Err(WseError::PermissionDenied { .. }) => Ok(()),
             other => Err(format!("Observer write_in must be denied, got {other:?}")),
         }

@@ -296,20 +296,38 @@ pub struct Window {
 }
 
 // ── clipboard (SPEC §9) ─────────────────────────────────────────────────────
-/// A clipboard payload. Text is the baseline every implementation supports;
-/// image support may vary by adapter. See contract/capabilities/clipboard.md.
+/// A single clipboard item: a MIME/content-type and its bytes. Formats are
+/// DATA, not capabilities — `text/plain`, `text/html`, `image/png`,
+/// `application/json` all flow through one model, so the contract needn't change
+/// per format. `text/plain` is the baseline every implementation carries.
+/// See contract/capabilities/clipboard.md.
 #[derive(Clone, PartialEq, Eq, Debug)]
-pub enum ClipboardData {
-    Text(String),
-    Image { mime: String, bytes: Vec<u8> },
+pub struct ClipboardItem {
+    pub mime: String,
+    pub payload: Vec<u8>,
 }
 
-impl ClipboardData {
-    pub fn text(s: impl Into<String>) -> Self {
-        ClipboardData::Text(s.into())
+impl ClipboardItem {
+    pub fn new(mime: impl Into<String>, payload: impl Into<Vec<u8>>) -> Self {
+        Self {
+            mime: mime.into(),
+            payload: payload.into(),
+        }
     }
-    pub fn is_image(&self) -> bool {
-        matches!(self, ClipboardData::Image { .. })
+    /// Convenience for the baseline format.
+    pub fn text(s: impl Into<String>) -> Self {
+        Self::new("text/plain", s.into().into_bytes())
+    }
+    pub fn is_text(&self) -> bool {
+        self.mime.starts_with("text/")
+    }
+    /// The payload as UTF-8 text, if it is a text item and valid UTF-8.
+    pub fn as_text(&self) -> Option<&str> {
+        if self.is_text() {
+            std::str::from_utf8(&self.payload).ok()
+        } else {
+            None
+        }
     }
 }
 
