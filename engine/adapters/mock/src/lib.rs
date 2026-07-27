@@ -10,7 +10,8 @@ use std::collections::HashMap;
 
 use wse_common::*;
 use wse_contract::{
-    ContractVersion, IsolationAttestation, WorkspaceAdapter, WorkspaceDef, CONTRACT_VERSION,
+    ClipboardCapability, ContractVersion, IsolationAttestation, WorkspaceAdapter, WorkspaceDef,
+    CONTRACT_VERSION,
 };
 
 #[derive(Default)]
@@ -19,6 +20,8 @@ struct MockWorkspace {
     running: bool,
     windows: Vec<Window>,
     next_window: u32,
+    /// SPEC §9.1 — the workspace's own clipboard, isolated per workspace.
+    clipboard: Option<ClipboardData>,
 }
 
 #[derive(Default)]
@@ -58,6 +61,7 @@ impl WorkspaceAdapter for MockAdapter {
         CapabilitySet::none()
             .with(Capability::Applications)
             .with(Capability::Windows)
+            .with(Capability::Clipboard)
     }
 
     fn create(&mut self, def: &WorkspaceDef) -> Result<()> {
@@ -125,5 +129,20 @@ impl WorkspaceAdapter for MockAdapter {
 
     fn list_windows(&self, id: &WorkspaceId) -> Result<Vec<Window>> {
         Ok(self.ws(id)?.windows.clone())
+    }
+
+    fn clipboard(&mut self) -> Option<&mut dyn ClipboardCapability> {
+        Some(self)
+    }
+}
+
+impl ClipboardCapability for MockAdapter {
+    fn clipboard_peek(&self, id: &WorkspaceId) -> Result<Option<ClipboardData>> {
+        Ok(self.ws(id)?.clipboard.clone())
+    }
+
+    fn clipboard_put(&mut self, id: &WorkspaceId, data: ClipboardData) -> Result<()> {
+        self.ws_mut(id)?.clipboard = Some(data);
+        Ok(())
     }
 }

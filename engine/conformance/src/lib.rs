@@ -14,7 +14,11 @@
 //! will be gated by what an adapter declares, and added as those capabilities
 //! land — never before.
 
-use wse_common::{AppSpec, Capability, Persistence, WorkspaceState, WseError};
+use std::collections::HashMap;
+
+use wse_common::{
+    AccessRight, AppSpec, Capability, ClipboardData, Persistence, Role, WorkspaceState, WseError,
+};
 use wse_contract::{WorkspaceAdapter, CONTRACT_VERSION};
 use wse_engine::{Engine, WorkspaceConfig};
 
@@ -267,6 +271,90 @@ where
     r
 }
 
+/// SPEC §9 — the Clipboard capability. See contract/capabilities/clipboard.md.
+/// Runs only for adapters that declare Capability::Clipboard.
+pub fn run_clipboard<A, F>(make: F) -> ConformanceReport
+where
+    A: WorkspaceAdapter,
+    F: Fn() -> A,
+{
+    let mut r = ConformanceReport::default();
+
+    // A config where the Collaborator may write into the workspace but not read
+    // out of it — to prove the two directions are independent (I2).
+    let write_only_collaborator = || {
+        let mut c = cfg();
+        let mut rights = HashMap::new();
+        rights.insert(AccessRight::ClipboardWrite, true);
+        rights.insert(AccessRight::ClipboardRead, false);
+        c.collaborator_rights = rights;
+        c
+    };
+
+    r.check("clipboard/isolated_per_workspace", || {
+        // I1 — one workspace's clipboard is invisible to another.
+        let mut e = Engine::new(make());
+        let a = e.create_workspace(cfg()).map_err(|e| e.to_string())?;
+        let b = e.create_workspace(cfg()).map_err(|e| e.to_string())?;
+        e.clipboard_write_in(&a, Role::Owner, ClipboardData::text("secret"))
+            .map_err(|e| e.to_string())?;
+        let seen = e
+            .clipboard_read_out(&b, Role::Owner)
+            .map_err(|e| e.to_string())?;
+        ok(seen.is_none(), "workspace B must not see workspace A's clipboard")
+    });
+
+    r.check("clipboard/owner_roundtrips", || {
+        // I4 — Owner may write then read the same payload back.
+        let mut e = Engine::new(make());
+        let ws = e.create_workspace(cfg()).map_err(|e| e.to_string())?;
+        e.clipboard_write_in(&ws, Role::Owner, ClipboardData::text("hello"))
+            .map_err(|e| e.to_string())?;
+        let got = e
+            .clipboard_read_out(&ws, Role::Owner)
+            .map_err(|e| e.to_string())?;
+        ok(
+            got == Some(ClipboardData::text("hello")),
+            "Owner read_out must return what was written_in",
+        )
+    });
+
+    r.check("clipboard/read_and_write_are_separate_rights", || {
+        // I2 — a Collaborator with write-but-not-read may write, is refused read.
+        let mut e = Engine::new(make());
+        let ws = e
+            .create_workspace(write_only_collaborator())
+            .map_err(|e| e.to_string())?;
+        e.clipboard_write_in(&ws, Role::Collaborator, ClipboardData::text("x"))
+            .map_err(|e| format!("write_in should be allowed: {e}"))?;
+        match e.clipboard_read_out(&ws, Role::Collaborator) {
+            Err(WseError::PermissionDenied { .. }) => Ok(()),
+            other => Err(format!("read_out should be denied, got {other:?}")),
+        }
+    });
+
+    r.check("clipboard/observer_refused_read_out", || {
+        // I3 — observing is not extracting.
+        let mut e = Engine::new(make());
+        let ws = e.create_workspace(cfg()).map_err(|e| e.to_string())?;
+        match e.clipboard_read_out(&ws, Role::Observer) {
+            Err(WseError::PermissionDenied { .. }) => Ok(()),
+            other => Err(format!("Observer read_out must be denied, got {other:?}")),
+        }
+    });
+
+    r.check("clipboard/observer_refused_write_in", || {
+        let mut e = Engine::new(make());
+        let ws = e.create_workspace(cfg()).map_err(|e| e.to_string())?;
+        match e.clipboard_write_in(&ws, Role::Observer, ClipboardData::text("x")) {
+            Err(WseError::PermissionDenied { .. }) => Ok(()),
+            other => Err(format!("Observer write_in must be denied, got {other:?}")),
+        }
+    });
+
+    r
+}
+
 /// Run the full conformance suite an adapter is *eligible* for: the mandatory
 /// core, plus one suite per declared capability. An adapter is never tested for
 /// a capability it didn't declare (SPEC §18.2). This is capability negotiation
@@ -284,7 +372,10 @@ where
     if caps.supports(Capability::Windows) {
         report.absorb(run_windows(&make));
     }
-    // Clipboard, Storage, Devices, Network, Audio, Camera suites slot in here as
-    // each capability's mini-spec is written — never before.
+    if caps.supports(Capability::Clipboard) {
+        report.absorb(run_clipboard(&make));
+    }
+    // Storage, Devices, Network, Audio, Camera suites slot in here as each
+    // capability's mini-spec is written — never before.
     report
 }

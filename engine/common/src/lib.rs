@@ -166,6 +166,29 @@ impl Capability {
         Capability::Audio,
         Capability::Camera,
     ];
+
+    /// How settled this capability's specification is. See
+    /// contract/capabilities/README.md.
+    pub fn maturity(self) -> CapabilityStatus {
+        use Capability::*;
+        use CapabilityStatus::*;
+        match self {
+            Applications | Windows => Stable,
+            Clipboard => Draft,
+            Storage | Devices | Network | Audio | Camera => Planned,
+        }
+    }
+}
+
+/// Maturity of a capability's specification.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum CapabilityStatus {
+    /// Shape settled; changes are additive.
+    Stable,
+    /// Specified and conformance-tested, but the shape may still change.
+    Draft,
+    /// Named in the model; not yet specified.
+    Planned,
 }
 
 /// The set of capabilities an adapter/workspace declares (SPEC §18.2). Declared
@@ -270,6 +293,24 @@ pub struct Window {
     pub title: String,
     pub bounds: Bounds,
     pub focused: bool,
+}
+
+// ── clipboard (SPEC §9) ─────────────────────────────────────────────────────
+/// A clipboard payload. Text is the baseline every implementation supports;
+/// image support may vary by adapter. See contract/capabilities/clipboard.md.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub enum ClipboardData {
+    Text(String),
+    Image { mime: String, bytes: Vec<u8> },
+}
+
+impl ClipboardData {
+    pub fn text(s: impl Into<String>) -> Self {
+        ClipboardData::Text(s.into())
+    }
+    pub fn is_image(&self) -> bool {
+        matches!(self, ClipboardData::Image { .. })
+    }
 }
 
 // ── resources (SPEC §7) ─────────────────────────────────────────────────────

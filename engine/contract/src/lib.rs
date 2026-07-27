@@ -96,4 +96,24 @@ pub trait WorkspaceAdapter {
 
     /// SPEC §14 — the windows currently open in the workspace (metadata only).
     fn list_windows(&self, id: &WorkspaceId) -> Result<Vec<Window>>;
+
+    // ── capability interfaces ────────────────────────────────────────────────
+    // Each capability is its own trait. An adapter exposes the interface for a
+    // capability it declares, and None for one it doesn't. The engine negotiates
+    // via these hooks, gates on policy, then calls the mechanical interface.
+
+    /// SPEC §9 — the Clipboard capability, if this adapter provides it.
+    fn clipboard(&mut self) -> Option<&mut dyn ClipboardCapability> {
+        None
+    }
+}
+
+/// SPEC §9 — the mechanical Clipboard interface. The adapter reads/writes the
+/// workspace's OWN clipboard; it never decides who may. Policy (role, access
+/// right, direction) lives in the engine. See contract/capabilities/clipboard.md.
+pub trait ClipboardCapability {
+    /// The workspace clipboard's current content, or None if empty.
+    fn clipboard_peek(&self, id: &WorkspaceId) -> Result<Option<ClipboardData>>;
+    /// Replace the workspace clipboard content.
+    fn clipboard_put(&mut self, id: &WorkspaceId, data: ClipboardData) -> Result<()>;
 }

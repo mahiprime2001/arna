@@ -118,7 +118,35 @@ pub enum Event {
         app: String,
         window: WindowId,
     },
+    /// SPEC §17.1 — clipboard transfers are auditable. The event carries who and
+    /// which direction, NEVER the content (I5 in the clipboard spec).
+    ClipboardReadOut {
+        workspace: WorkspaceId,
+        by: Role,
+    },
+    ClipboardWrittenIn {
+        workspace: WorkspaceId,
+        by: Role,
+    },
     WorkspaceDestroyed(WorkspaceId),
+}
+
+impl Record {
+    /// Does a member in `role` hold `right` in this workspace? Encodes the
+    /// SPEC §4.6 capability matrix: Owner has all; Observer sees but never
+    /// extracts or injects (only ViewDisplay); Collaborator gets what host
+    /// policy granted, deny-by-default.
+    fn role_has(&self, role: Role, right: AccessRight) -> bool {
+        match role {
+            Role::Owner => true,
+            Role::Observer => right == AccessRight::ViewDisplay,
+            Role::Collaborator => self
+                .collaborator_rights
+                .get(&right)
+                .copied()
+                .unwrap_or(false),
+        }
+    }
 }
 
 /// The engine's own record of a workspace (its policy + state). The adapter
@@ -321,6 +349,82 @@ impl<A: WorkspaceAdapter> Engine<A> {
             return Err(WseError::NotFound(format!("workspace {id}")));
         }
         self.adapter.list_windows(id)
+    }
+
+    // ── Clipboard capability (SPEC §9) ───────────────────────────────────────
+    // The engine owns the policy (capability declared? role holds the right?),
+    // then calls the adapter's mechanical interface. See
+    // contract/capabilities/clipboard.md.
+
+    /// A member copies OUT of the workspace clipboard (SPEC §9.2 direction:
+    /// read). Requires the Clipboard capability and the ClipboardRead right.
+    pub fn clipboard_read_out(
+        &mut self,
+        id: &WorkspaceId,
+        role: Role,
+    ) -> Result<Option<ClipboardData>> {
+        // Policy first (extract booleans so the record borrow ends here).
+        {
+            let rec = self
+                .workspaces
+                .get(id)
+                .ok_or_else(|| WseError::NotFound(format!("workspace {id}")))?;
+            if !rec.capabilities.supports(Capability::Clipboard) {
+                return Err(WseError::CapabilityUnavailable(Capability::Clipboard));
+            }
+            if !rec.role_has(role, AccessRight::ClipboardRead) {
+                return Err(WseError::PermissionDenied {
+                    right: AccessRight::ClipboardRead,
+                    role,
+                });
+            }
+        }
+        // Mechanics.
+        let clip = self
+            .adapter
+            .clipboard()
+            .ok_or(WseError::CapabilityUnavailable(Capability::Clipboard))?;
+        let data = clip.clipboard_peek(id)?;
+        self.events.push(Event::ClipboardReadOut {
+            workspace: id.clone(),
+            by: role,
+        });
+        Ok(data)
+    }
+
+    /// A member pastes INTO the workspace clipboard (SPEC §9.2 direction:
+    /// write). Requires the Clipboard capability and the ClipboardWrite right.
+    pub fn clipboard_write_in(
+        &mut self,
+        id: &WorkspaceId,
+        role: Role,
+        data: ClipboardData,
+    ) -> Result<()> {
+        {
+            let rec = self
+                .workspaces
+                .get(id)
+                .ok_or_else(|| WseError::NotFound(format!("workspace {id}")))?;
+            if !rec.capabilities.supports(Capability::Clipboard) {
+                return Err(WseError::CapabilityUnavailable(Capability::Clipboard));
+            }
+            if !rec.role_has(role, AccessRight::ClipboardWrite) {
+                return Err(WseError::PermissionDenied {
+                    right: AccessRight::ClipboardWrite,
+                    role,
+                });
+            }
+        }
+        let clip = self
+            .adapter
+            .clipboard()
+            .ok_or(WseError::CapabilityUnavailable(Capability::Clipboard))?;
+        clip.clipboard_put(id, data)?;
+        self.events.push(Event::ClipboardWrittenIn {
+            workspace: id.clone(),
+            by: role,
+        });
+        Ok(())
     }
 
     /// SPEC §5.5 — destroy irrecoverably.
