@@ -1,0 +1,10 @@
+[package]
+name = "wse-adapter-mock"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# The reference adapter. No OS. Proves the engine and defines "conforming".
+[dependencies]
+wse-common = { path = "../../common" }
+wse-contract = { path = "../../contract" }

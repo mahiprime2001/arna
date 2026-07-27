@@ -1,0 +1,14 @@
+# WSE — the Workspace Engine. A Rust cargo workspace, zero platform code above
+# the adapter boundary. The crates mirror the concepts in /contract/*.md:
+#   wse-common    shared models (the vocabulary)
+#   wse-contract  the Workspace Contract expressed as Rust traits (pure)
+#   wse-engine    the orchestrator + managers (knows the trait, never an OS)
+#   wse-adapter-mock  the reference adapter: proves the engine with no OS
+[workspace]
+resolver = "2"
+members = ["common", "contract", "core", "adapters/mock"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"

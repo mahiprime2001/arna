@@ -1,0 +1,8 @@
+[package]
+name = "wse-common"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# NO platform dependencies. Ever. This crate is pure vocabulary.
+[dependencies]

@@ -1,0 +1,9 @@
+[package]
+name = "wse-contract"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# The Workspace Contract in code. Depends ONLY on the vocabulary. No platform.
+[dependencies]
+wse-common = { path = "../common" }

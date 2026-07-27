@@ -1,0 +1,13 @@
+[package]
+name = "wse-engine"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# The orchestrator. Knows the contract, never an OS.
+[dependencies]
+wse-common = { path = "../common" }
+wse-contract = { path = "../contract" }
+
+[dev-dependencies]
+wse-adapter-mock = { path = "../adapters/mock" }
