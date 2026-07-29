@@ -21,6 +21,9 @@ struct MockWorkspace {
     running: bool,
     windows: Vec<Window>,
     next_window: u32,
+    /// SPEC §10 — running application instances, keyed by their stable id (a
+    /// real adapter maps this id onto a PID; the mock just holds the record).
+    instances: HashMap<ApplicationInstanceId, ApplicationInstance>,
     /// SPEC §9.1 — the workspace's own clipboard, isolated per workspace.
     clipboard: Option<ClipboardItem>,
     /// SPEC §8 — the workspace's own persistent resources, isolated per
@@ -185,7 +188,11 @@ impl DevicesCapability for MockAdapter {
 }
 
 impl ApplicationsCapability for MockAdapter {
-    fn launch(&mut self, id: &WorkspaceId, app: &AppSpec) -> Result<Window> {
+    fn app_launch(
+        &mut self,
+        id: &WorkspaceId,
+        app: &ApplicationDescriptor,
+    ) -> Result<ApplicationInstance> {
         let w = self.ws_mut(id)?;
         if !w.running {
             return Err(WseError::InvalidState {
@@ -194,9 +201,11 @@ impl ApplicationsCapability for MockAdapter {
             });
         }
         w.next_window += 1;
+        // A launched app opens one window in this reference implementation. The
+        // instance *owns* that window; the Windows capability lists it.
         let window = Window {
             id: WindowId::new(),
-            app: app.id.clone(),
+            app: app.entry.clone(),
             title: app.name.clone(),
             bounds: Bounds {
                 x: 40 * w.next_window as i32,
@@ -206,12 +215,34 @@ impl ApplicationsCapability for MockAdapter {
             },
             focused: true,
         };
-        // Only the newest window is focused.
         for existing in &mut w.windows {
-            existing.focused = false;
+            existing.focused = false; // only the newest window is focused
         }
         w.windows.push(window.clone());
-        Ok(window)
+
+        let instance = ApplicationInstance {
+            id: ApplicationInstanceId::new(),
+            application: app.id.clone(),
+            state: ApplicationState::Running,
+            windows: vec![window.id],
+        };
+        w.instances.insert(instance.id.clone(), instance.clone());
+        Ok(instance)
+    }
+
+    fn app_stop(&mut self, id: &WorkspaceId, instance: &ApplicationInstanceId) -> Result<()> {
+        let w = self.ws_mut(id)?;
+        let inst = w
+            .instances
+            .remove(instance)
+            .ok_or_else(|| WseError::NotFound(format!("instance {instance}")))?;
+        // Its windows close with it.
+        w.windows.retain(|win| !inst.windows.contains(&win.id));
+        Ok(())
+    }
+
+    fn app_instances(&self, id: &WorkspaceId) -> Result<Vec<ApplicationInstance>> {
+        Ok(self.ws(id)?.instances.values().cloned().collect())
     }
 }
 

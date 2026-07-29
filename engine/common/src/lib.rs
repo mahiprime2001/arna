@@ -64,6 +64,8 @@ id_type!(MemberId);
 id_type!(ResourceId);
 id_type!(EventId);
 id_type!(DeviceId);
+id_type!(ApplicationId); // identity of a catalog *definition*
+id_type!(ApplicationInstanceId); // identity of a *running instance* — never a PID
 
 fn now_nanos() -> u128 {
     SystemTime::now()
@@ -288,19 +290,63 @@ pub struct Member {
 }
 
 // ── applications & windows (SPEC §10, §14) ──────────────────────────────────
+// The Applications capability is a *lifecycle*, not a launch call. It follows
+// the same identity/handle split as Storage (resource≠handle) and Devices
+// (descriptor≠handle):
+//
+//     ApplicationDescriptor  →  launch  →  ApplicationInstance
+//        (immutable defn)                    (runtime state)
+//
+// A descriptor is a host-curated catalog definition. An instance is a running
+// thing with its own stable ApplicationInstanceId — which is NOT a PID. The
+// adapter may map that id onto a PID, a container, or a remote session; that
+// mapping never escapes into the contract.
+
+/// An immutable application definition in a workspace's catalog. `entry` is the
+/// platform-neutral launch key ("browser"); the adapter maps it to whatever the
+/// platform needs (an exe, a container, a remote process).
 #[derive(Clone, PartialEq, Eq, Debug)]
-pub struct AppSpec {
-    pub id: String,
+pub struct ApplicationDescriptor {
+    pub id: ApplicationId,
+    pub entry: String,
     pub name: String,
+    pub metadata: HashMap<String, String>,
 }
 
-impl AppSpec {
-    pub fn new(id: impl Into<String>, name: impl Into<String>) -> Self {
+impl ApplicationDescriptor {
+    pub fn new(entry: impl Into<String>, name: impl Into<String>) -> Self {
         Self {
-            id: id.into(),
+            id: ApplicationId::new(),
+            entry: entry.into(),
             name: name.into(),
+            metadata: HashMap::new(),
         }
     }
+}
+
+/// The contract lifecycle of a running application. Platforms map their own
+/// process/job/session states into these; the contract never exposes the
+/// platform's own state names.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ApplicationState {
+    Declared,
+    Launching,
+    Running,
+    Suspended,
+    Resuming,
+    Stopping,
+    Stopped,
+}
+
+/// A running application: runtime state, not a definition. Its `id` is stable and
+/// unguessable and is never a PID. It *owns* zero or more windows — Applications
+/// establishes the association; the Windows capability owns window behaviour.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct ApplicationInstance {
+    pub id: ApplicationInstanceId,
+    pub application: ApplicationId,
+    pub state: ApplicationState,
+    pub windows: Vec<WindowId>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
@@ -464,10 +510,20 @@ pub enum EventKind {
         to: WorkspaceState,
     },
     WorkspaceDestroyed,
-    // Applications (§10)
-    ApplicationStarted {
+    // Applications (§10) — the lifecycle, through the one envelope. Payloads
+    // carry the instance identity and the catalog entry, never a PID or bytes.
+    ApplicationLaunchRequested {
         app: String,
-        window: WindowId,
+    },
+    ApplicationStarted {
+        instance: ApplicationInstanceId,
+        app: String,
+    },
+    ApplicationStopping {
+        instance: ApplicationInstanceId,
+    },
+    ApplicationStopped {
+        instance: ApplicationInstanceId,
     },
     // Windows (§14)
     WindowOpened {

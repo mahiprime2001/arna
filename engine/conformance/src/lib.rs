@@ -17,8 +17,9 @@
 use std::collections::HashMap;
 
 use wse_common::{
-    AccessRight, Actor, AppSpec, Capability, CapabilityState, ClipboardItem, DeviceClass, EventKind,
-    EventSource, Persistence, ResourceKind, Role, WorkspaceState, WseError,
+    AccessRight, Actor, ApplicationDescriptor, ApplicationState, Capability, CapabilityState,
+    ClipboardItem, DeviceClass, EventKind, EventSource, Persistence, ResourceKind, Role,
+    WorkspaceState, WseError,
 };
 use std::ops::{Deref, DerefMut};
 
@@ -121,10 +122,10 @@ fn ok(cond: bool, msg: impl Into<String>) -> std::result::Result<(), String> {
     }
 }
 
-fn catalog() -> Vec<AppSpec> {
+fn catalog() -> Vec<ApplicationDescriptor> {
     vec![
-        AppSpec::new("browser", "Browser"),
-        AppSpec::new("editor", "Editor"),
+        ApplicationDescriptor::new("browser", "Browser"),
+        ApplicationDescriptor::new("editor", "Editor"),
     ]
 }
 
@@ -249,7 +250,10 @@ where
                 EventKind::WorkspaceCreated
                 | EventKind::WorkspaceDestroyed
                 | EventKind::StateChanged { .. }
+                | EventKind::ApplicationLaunchRequested { .. }
                 | EventKind::ApplicationStarted { .. }
+                | EventKind::ApplicationStopping { .. }
+                | EventKind::ApplicationStopped { .. }
                 | EventKind::WindowOpened { .. }
                 | EventKind::WindowFocused { .. }
                 | EventKind::WindowClosed { .. }
@@ -286,24 +290,87 @@ where
 {
     let mut r = ConformanceReport::default();
 
-    r.check("applications/launch_when_running_opens_a_window", || {
+    // The capability is a *lifecycle*, not a launch call. These checks validate
+    // the model — descriptor≠instance, stable instance id (never a PID), window
+    // ownership, and the lifecycle transitions — not "an app can be started".
+
+    r.check("applications/launch_yields_a_running_instance", || {
         let mut e = TestEngine::new(make());
         let ws = e.create_workspace(cfg()).map_err(|e| e.to_string())?;
         e.start(&ws).map_err(|e| e.to_string())?;
-        e.launch(&ws, "browser").map_err(|e| e.to_string())?;
-        let n = e.list_windows(&ws).map_err(|e| e.to_string())?.len();
-        ok(n == 1, format!("expected 1 window, got {n}"))
+        let iid = e.launch(&ws, "browser").map_err(|e| e.to_string())?;
+        let instances = e.app_instances(&ws).map_err(|e| e.to_string())?;
+        let inst = instances
+            .iter()
+            .find(|i| i.id == iid)
+            .ok_or("launched instance id not present in app_instances")?;
+        ok(
+            inst.state == ApplicationState::Running,
+            format!("expected Running instance, got {:?}", inst.state),
+        )
     });
 
-    r.check("applications/multiple_instances_permitted", || {
-        // SPEC §10.3 — launching the same app twice yields two windows.
+    r.check("applications/instance_owns_its_windows", || {
+        // Applications establishes the association; the Windows capability lists
+        // the windows. The instance's windows must be real, listed windows.
         let mut e = TestEngine::new(make());
         let ws = e.create_workspace(cfg()).map_err(|e| e.to_string())?;
         e.start(&ws).map_err(|e| e.to_string())?;
-        e.launch(&ws, "browser").map_err(|e| e.to_string())?;
-        e.launch(&ws, "browser").map_err(|e| e.to_string())?;
-        let n = e.list_windows(&ws).map_err(|e| e.to_string())?.len();
-        ok(n == 2, format!("expected 2 instances, got {n}"))
+        let iid = e.launch(&ws, "browser").map_err(|e| e.to_string())?;
+        let instances = e.app_instances(&ws).map_err(|e| e.to_string())?;
+        let inst = instances.iter().find(|i| i.id == iid).ok_or("no instance")?;
+        let listed = e.list_windows(&ws).map_err(|e| e.to_string())?;
+        ok(
+            inst.windows.iter().all(|w| listed.iter().any(|lw| &lw.id == w)),
+            "every window an instance owns must be a real, listed window",
+        )
+    });
+
+    r.check("applications/instances_have_distinct_identities", || {
+        // SPEC §10.3 — launching the same app twice yields two distinct instances
+        // with distinct ids (a PID would collide across reuse; an instance id
+        // must not).
+        let mut e = TestEngine::new(make());
+        let ws = e.create_workspace(cfg()).map_err(|e| e.to_string())?;
+        e.start(&ws).map_err(|e| e.to_string())?;
+        let a = e.launch(&ws, "browser").map_err(|e| e.to_string())?;
+        let b = e.launch(&ws, "browser").map_err(|e| e.to_string())?;
+        let n = e.app_instances(&ws).map_err(|e| e.to_string())?.len();
+        ok(a != b && n == 2, format!("expected 2 distinct instances, got {n}"))
+    });
+
+    r.check("applications/stop_ends_the_instance", || {
+        // After stop the instance no longer exists (SPEC §10 lifecycle terminal).
+        let mut e = TestEngine::new(make());
+        let ws = e.create_workspace(cfg()).map_err(|e| e.to_string())?;
+        e.start(&ws).map_err(|e| e.to_string())?;
+        let iid = e.launch(&ws, "browser").map_err(|e| e.to_string())?;
+        e.stop_app(&ws, &iid).map_err(|e| e.to_string())?;
+        let gone = e
+            .app_instances(&ws)
+            .map_err(|e| e.to_string())?
+            .iter()
+            .all(|i| i.id != iid);
+        ok(gone, "a stopped instance must no longer be listed")
+    });
+
+    r.check("applications/lifecycle_is_observable_as_events", || {
+        // The lifecycle flows through the one event envelope: LaunchRequested →
+        // Started, then Stopping → Stopped. No second event system.
+        let mut e = TestEngine::new(make());
+        let ws = e.create_workspace(cfg()).map_err(|e| e.to_string())?;
+        e.start(&ws).map_err(|e| e.to_string())?;
+        let iid = e.launch(&ws, "browser").map_err(|e| e.to_string())?;
+        e.stop_app(&ws, &iid).map_err(|e| e.to_string())?;
+        let kinds: Vec<_> = e.events_for(&ws).iter().map(|ev| ev.kind.clone()).collect();
+        let has = |want: &EventKind| kinds.iter().any(|k| k == want);
+        ok(
+            has(&EventKind::ApplicationLaunchRequested { app: "browser".into() })
+                && has(&EventKind::ApplicationStarted { instance: iid.clone(), app: "browser".into() })
+                && has(&EventKind::ApplicationStopping { instance: iid.clone() })
+                && has(&EventKind::ApplicationStopped { instance: iid.clone() }),
+            "expected LaunchRequested→Started→Stopping→Stopped for the instance",
+        )
     });
 
     r.check("applications/cannot_launch_before_running", || {

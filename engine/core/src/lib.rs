@@ -52,7 +52,7 @@ pub struct WorkspaceConfig {
     pub persistence: Persistence,
     /// The catalog the workspace may launch from (SPEC §7.1 / §10.1). Anything
     /// not here is *not found*, never *denied* (SPEC §6.5).
-    pub apps: Vec<AppSpec>,
+    pub apps: Vec<ApplicationDescriptor>,
     pub limits: ResourceLimits,
     /// Collaborator access rights, within what host policy allows (§4.6.2).
     /// Defaults are deny-by-default except view/input (SPEC §6.1, §4.6).
@@ -66,7 +66,7 @@ pub struct WorkspaceConfig {
 
 impl WorkspaceConfig {
     /// Spec-faithful defaults: deny-by-default, except viewing + input.
-    pub fn new(name: impl Into<String>, persistence: Persistence, apps: Vec<AppSpec>) -> Self {
+    pub fn new(name: impl Into<String>, persistence: Persistence, apps: Vec<ApplicationDescriptor>) -> Self {
         let mut rights = HashMap::new();
         rights.insert(AccessRight::ViewDisplay, true);
         rights.insert(AccessRight::Keyboard, true);
@@ -161,7 +161,7 @@ struct Record {
     name: String,
     state: WorkspaceState,
     persistence: Persistence,
-    catalog: Vec<AppSpec>,
+    catalog: Vec<ApplicationDescriptor>,
     #[allow(dead_code)]
     collaborator_rights: HashMap<AccessRight, bool>,
     owner: MemberId,
@@ -359,9 +359,12 @@ impl<A: WorkspaceAdapter> Engine<A> {
         Ok(())
     }
 
-    /// Launch a catalog app. It must be running, and the app must be in the
-    /// catalog — otherwise it is *not found*, never *denied* (SPEC §6.5).
-    pub fn launch(&mut self, id: &WorkspaceId, app_id: &str) -> Result<WindowId> {
+    /// Launch a catalog app — the start of an application *lifecycle*. The
+    /// workspace must be running and the app must be in the catalog by its
+    /// `entry`; otherwise it is *not found*, never *denied* (SPEC §6.5). Returns
+    /// the running instance's stable id (never a PID). The lifecycle is observable
+    /// through events: LaunchRequested → Started.
+    pub fn launch(&mut self, id: &WorkspaceId, entry: &str) -> Result<ApplicationInstanceId> {
         let rec = self.workspaces.get(id).ok_or(WseError::NotFound(format!(
             "workspace {id}"
         )))?;
@@ -377,27 +380,73 @@ impl<A: WorkspaceAdapter> Engine<A> {
         let app = rec
             .catalog
             .iter()
-            .find(|a| a.id == app_id)
+            .find(|a| a.entry == entry)
             .cloned()
             // §6.5: an un-granted app is indistinguishable from a nonexistent one.
-            .ok_or_else(|| WseError::NotFound(format!("app {app_id}")))?;
+            .ok_or_else(|| WseError::NotFound(format!("app {entry}")))?;
+
+        self.emit(
+            id,
+            Actor::System,
+            EventSource::Capability(Capability::Applications),
+            EventKind::ApplicationLaunchRequested {
+                app: app.entry.clone(),
+            },
+        );
 
         let apps = self
             .adapter
             .applications()
             .ok_or(WseError::CapabilityUnavailable(Capability::Applications))?;
-        let window = apps.launch(id, &app)?;
-        let wid = window.id.clone();
+        let instance = apps.app_launch(id, &app)?;
+        let iid = instance.id.clone();
         self.emit(
             id,
             Actor::System,
             EventSource::Capability(Capability::Applications),
             EventKind::ApplicationStarted {
-                app: app.id,
-                window: wid.clone(),
+                instance: iid.clone(),
+                app: app.entry,
             },
         );
-        Ok(wid)
+        Ok(iid)
+    }
+
+    /// Stop a running application instance. Observable as Stopping → Stopped.
+    pub fn stop_app(&mut self, id: &WorkspaceId, instance: &ApplicationInstanceId) -> Result<()> {
+        self.require_capability(id, Capability::Applications)?;
+        self.emit(
+            id,
+            Actor::System,
+            EventSource::Capability(Capability::Applications),
+            EventKind::ApplicationStopping {
+                instance: instance.clone(),
+            },
+        );
+        let apps = self
+            .adapter
+            .applications()
+            .ok_or(WseError::CapabilityUnavailable(Capability::Applications))?;
+        apps.app_stop(id, instance)?;
+        self.emit(
+            id,
+            Actor::System,
+            EventSource::Capability(Capability::Applications),
+            EventKind::ApplicationStopped {
+                instance: instance.clone(),
+            },
+        );
+        Ok(())
+    }
+
+    /// The application instances currently alive in the workspace (runtime state).
+    pub fn app_instances(&mut self, id: &WorkspaceId) -> Result<Vec<ApplicationInstance>> {
+        self.require_capability(id, Capability::Applications)?;
+        let apps = self
+            .adapter
+            .applications()
+            .ok_or(WseError::CapabilityUnavailable(Capability::Applications))?;
+        apps.app_instances(id)
     }
 
     /// The windows open in the workspace (SPEC §14, metadata only).

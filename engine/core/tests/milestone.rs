@@ -4,14 +4,14 @@
 //! reference; every real adapter must pass the equivalent.
 
 use wse_adapter_mock::MockAdapter;
-use wse_common::{AppSpec, EventKind, Persistence, WorkspaceState, WseError};
+use wse_common::{ApplicationDescriptor, EventKind, Persistence, WorkspaceState, WseError};
 use wse_engine::{Engine, WorkspaceConfig};
 
-fn catalog() -> Vec<AppSpec> {
+fn catalog() -> Vec<ApplicationDescriptor> {
     vec![
-        AppSpec::new("browser", "Browser"),
-        AppSpec::new("editor", "Editor"),
-        AppSpec::new("terminal", "Terminal"),
+        ApplicationDescriptor::new("browser", "Browser"),
+        ApplicationDescriptor::new("editor", "Editor"),
+        ApplicationDescriptor::new("terminal", "Terminal"),
     ]
 }
 

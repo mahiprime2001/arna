@@ -124,11 +124,27 @@ pub trait WorkspaceAdapter {
     }
 }
 
-/// SPEC §10 — the mechanical Applications interface: launch a catalog app
-/// inside the workspace; it becomes a window on the canvas. The engine has
-/// already checked the app is granted.
+/// SPEC §10 — the mechanical Applications interface: an application *lifecycle*,
+/// not a one-shot launch. The adapter maps a platform-neutral descriptor onto
+/// whatever the platform runs (process, container, remote session) and reports
+/// it back as an `ApplicationInstance` with a stable id — never a PID. The engine
+/// has already checked the descriptor is in the catalog and the workspace runs;
+/// the adapter is mechanical (create the instance, tear it down, report state).
 pub trait ApplicationsCapability {
-    fn launch(&mut self, id: &WorkspaceId, app: &AppSpec) -> Result<Window>;
+    /// Launch a catalog descriptor; return the new running instance. Any windows
+    /// it opens are associated on the instance — window *behaviour* stays with
+    /// the Windows capability.
+    fn app_launch(
+        &mut self,
+        id: &WorkspaceId,
+        app: &ApplicationDescriptor,
+    ) -> Result<ApplicationInstance>;
+
+    /// Stop a running instance. After this the instance no longer exists.
+    fn app_stop(&mut self, id: &WorkspaceId, instance: &ApplicationInstanceId) -> Result<()>;
+
+    /// The instances currently alive in the workspace (runtime state).
+    fn app_instances(&self, id: &WorkspaceId) -> Result<Vec<ApplicationInstance>>;
 }
 
 /// SPEC §14 — the mechanical Windows interface: the windows currently open in

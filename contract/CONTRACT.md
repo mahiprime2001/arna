@@ -68,10 +68,11 @@ Normative per capability; the engine runs each one's conformance suite only for
 adapters that declare it. See [capabilities/README.md](capabilities/README.md) for
 the maturity table.
 
+- [capabilities/applications.md](capabilities/applications.md) — Stable (§10)
 - [capabilities/clipboard.md](capabilities/clipboard.md) — Draft (§9)
 - [capabilities/storage.md](capabilities/storage.md) — Draft (§8)
 - [capabilities/devices.md](capabilities/devices.md) — Draft (§12)
-- Applications, Windows — Stable (specified in-engine + core conformance)
+- Windows — Stable (specified in-engine + core conformance)
 
 ## The rules that bind it together
 

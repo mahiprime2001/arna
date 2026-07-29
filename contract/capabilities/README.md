@@ -13,7 +13,7 @@ contributors later — of which parts of the contract are expected to still move
 
 | Capability   | Status  | Spec |
 |--------------|---------|------|
-| Applications | Stable  | (in engine + core conformance) |
+| Applications | Stable  | [applications.md](applications.md) |
 | Windows      | Stable  | (in engine + core conformance) |
 | **Clipboard**| **Draft** | [clipboard.md](clipboard.md) |
 | **Storage**  | **Draft** | [storage.md](storage.md) |

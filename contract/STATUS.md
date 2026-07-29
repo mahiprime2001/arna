@@ -12,14 +12,14 @@ Legend: ✓ passes its suite · ⏳ declared next, not yet · – not started ·
 | Capability | Suite checks | Mock | Windows (WSL2) | Linux | macOS |
 |------------|:---:|:---:|:---:|:---:|:---:|
 | **Core** (lifecycle, isolation, events, identity) | 9 | ✓ | ✓ (live) | – | – |
-| Applications | 4 | ✓ | ⏳ | – | – |
+| Applications (lifecycle: descriptor→instance) | 7 | ✓ | ⏳ | – | – |
 | Windows | 2 | ✓ | ⏳ | – | – |
 | Clipboard | 5 | ✓ | ⏳ | – | – |
 | Storage | 8 | ✓ | ⏳ | – | – |
 | Devices | 9 | ✓ | ⏳ | – | – |
-| **run_all total** | **37** | **37/37** | **9/9** | – | – |
+| **run_all total** | **40** | **40/40** | **9/9** | – | – |
 
-- **Mock** — the reference implementation; declares everything; 37/37.
+- **Mock** — the reference implementation; declares everything; 40/40.
 - **Windows** — the first real platform adapter; declares only Core today
   (minimal + truthful), so `run_all` == the core suite, passing 9/9 live
   against real WSL2 and leaving zero orphan distros. Capabilities are turned on
