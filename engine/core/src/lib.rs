@@ -358,6 +358,9 @@ impl<A: WorkspaceAdapter> Engine<A> {
         let rec = self.workspaces.get(id).ok_or(WseError::NotFound(format!(
             "workspace {id}"
         )))?;
+        if !rec.capabilities.supports(Capability::Applications) {
+            return Err(WseError::CapabilityUnavailable(Capability::Applications));
+        }
         if rec.state != WorkspaceState::Running {
             return Err(WseError::InvalidState {
                 operation: "launch",
@@ -372,7 +375,11 @@ impl<A: WorkspaceAdapter> Engine<A> {
             // §6.5: an un-granted app is indistinguishable from a nonexistent one.
             .ok_or_else(|| WseError::NotFound(format!("app {app_id}")))?;
 
-        let window = self.adapter.launch(id, &app)?;
+        let apps = self
+            .adapter
+            .applications()
+            .ok_or(WseError::CapabilityUnavailable(Capability::Applications))?;
+        let window = apps.launch(id, &app)?;
         let wid = window.id.clone();
         self.emit(
             id,
@@ -387,11 +394,13 @@ impl<A: WorkspaceAdapter> Engine<A> {
     }
 
     /// The windows open in the workspace (SPEC §14, metadata only).
-    pub fn list_windows(&self, id: &WorkspaceId) -> Result<Vec<Window>> {
-        if !self.workspaces.contains_key(id) {
-            return Err(WseError::NotFound(format!("workspace {id}")));
-        }
-        self.adapter.list_windows(id)
+    pub fn list_windows(&mut self, id: &WorkspaceId) -> Result<Vec<Window>> {
+        self.require_capability(id, Capability::Windows)?;
+        let win = self
+            .adapter
+            .windows()
+            .ok_or(WseError::CapabilityUnavailable(Capability::Windows))?;
+        win.list_windows(id)
     }
 
     // ── Clipboard capability (SPEC §9) ───────────────────────────────────────

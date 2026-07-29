@@ -10,8 +10,9 @@ use std::collections::{HashMap, HashSet};
 
 use wse_common::*;
 use wse_contract::{
-    ClipboardCapability, ContractVersion, DevicesCapability, IsolationAttestation,
-    StorageCapability, WorkspaceAdapter, WorkspaceDef, CONTRACT_VERSION,
+    ApplicationsCapability, ClipboardCapability, ContractVersion, DevicesCapability,
+    IsolationAttestation, StorageCapability, WindowsCapability, WorkspaceAdapter, WorkspaceDef,
+    CONTRACT_VERSION,
 };
 
 #[derive(Default)]
@@ -107,37 +108,12 @@ impl WorkspaceAdapter for MockAdapter {
             .ok_or_else(|| WseError::NotFound(format!("workspace {id}")))
     }
 
-    fn launch(&mut self, id: &WorkspaceId, app: &AppSpec) -> Result<Window> {
-        let w = self.ws_mut(id)?;
-        if !w.running {
-            return Err(WseError::InvalidState {
-                operation: "launch",
-                state: WorkspaceState::Created,
-            });
-        }
-        w.next_window += 1;
-        let window = Window {
-            id: WindowId::new(),
-            app: app.id.clone(),
-            title: app.name.clone(),
-            bounds: Bounds {
-                x: 40 * w.next_window as i32,
-                y: 40 * w.next_window as i32,
-                w: 900,
-                h: 600,
-            },
-            focused: true,
-        };
-        // Only the newest window is focused.
-        for existing in &mut w.windows {
-            existing.focused = false;
-        }
-        w.windows.push(window.clone());
-        Ok(window)
+    fn applications(&mut self) -> Option<&mut dyn ApplicationsCapability> {
+        Some(self)
     }
 
-    fn list_windows(&self, id: &WorkspaceId) -> Result<Vec<Window>> {
-        Ok(self.ws(id)?.windows.clone())
+    fn windows(&mut self) -> Option<&mut dyn WindowsCapability> {
+        Some(self)
     }
 
     fn clipboard(&mut self) -> Option<&mut dyn ClipboardCapability> {
@@ -205,6 +181,43 @@ impl DevicesCapability for MockAdapter {
         } else {
             CapabilityState::Available
         })
+    }
+}
+
+impl ApplicationsCapability for MockAdapter {
+    fn launch(&mut self, id: &WorkspaceId, app: &AppSpec) -> Result<Window> {
+        let w = self.ws_mut(id)?;
+        if !w.running {
+            return Err(WseError::InvalidState {
+                operation: "launch",
+                state: WorkspaceState::Created,
+            });
+        }
+        w.next_window += 1;
+        let window = Window {
+            id: WindowId::new(),
+            app: app.id.clone(),
+            title: app.name.clone(),
+            bounds: Bounds {
+                x: 40 * w.next_window as i32,
+                y: 40 * w.next_window as i32,
+                w: 900,
+                h: 600,
+            },
+            focused: true,
+        };
+        // Only the newest window is focused.
+        for existing in &mut w.windows {
+            existing.focused = false;
+        }
+        w.windows.push(window.clone());
+        Ok(window)
+    }
+}
+
+impl WindowsCapability for MockAdapter {
+    fn list_windows(&self, id: &WorkspaceId) -> Result<Vec<Window>> {
+        Ok(self.ws(id)?.windows.clone())
     }
 }
 

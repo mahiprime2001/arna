@@ -99,14 +99,15 @@ fn state_machine_rejects_illegal_transitions() {
 fn refuses_unsealed_workspace() {
     // SPEC §18.3: if the adapter can't prove isolation, the engine refuses to
     // run it. A one-off adapter that reports sealed=false must be rejected.
-    use wse_common::{CapabilitySet, Result, Window, WorkspaceId};
+    use wse_common::{CapabilitySet, Result, WorkspaceId};
     use wse_contract::{IsolationAttestation, WorkspaceAdapter, WorkspaceDef};
 
+    // A minimal adapter: lifecycle + isolation only, no capabilities.
     #[derive(Default)]
     struct LeakyAdapter;
     impl WorkspaceAdapter for LeakyAdapter {
         fn capabilities(&self) -> CapabilitySet {
-            CapabilitySet::default()
+            CapabilitySet::none()
         }
         fn create(&mut self, _def: &WorkspaceDef) -> Result<()> {
             Ok(())
@@ -122,12 +123,6 @@ fn refuses_unsealed_workspace() {
         }
         fn destroy(&mut self, _id: &WorkspaceId) -> Result<()> {
             Ok(())
-        }
-        fn launch(&mut self, _id: &WorkspaceId, _app: &AppSpec) -> Result<Window> {
-            unreachable!()
-        }
-        fn list_windows(&self, _id: &WorkspaceId) -> Result<Vec<Window>> {
-            Ok(vec![])
         }
     }
 
@@ -151,19 +146,15 @@ fn refuses_unsealed_workspace() {
 fn clipboard_op_on_non_declaring_adapter_is_unavailable() {
     // clipboard spec I6 — a capability op on a workspace that does not declare
     // the capability fails as CapabilityUnavailable, not a permission refusal.
-    use wse_common::{
-        Capability, CapabilitySet, ClipboardItem, Result, Role, Window, WorkspaceId,
-    };
+    use wse_common::{Capability, CapabilitySet, ClipboardItem, Result, Role, WorkspaceId};
     use wse_contract::{IsolationAttestation, WorkspaceAdapter, WorkspaceDef};
 
+    // A minimal adapter that declares NO optional capabilities.
     #[derive(Default)]
     struct NoClipboardAdapter;
     impl WorkspaceAdapter for NoClipboardAdapter {
         fn capabilities(&self) -> CapabilitySet {
-            // Declares Applications/Windows but NOT Clipboard.
             CapabilitySet::none()
-                .with(Capability::Applications)
-                .with(Capability::Windows)
         }
         fn create(&mut self, _def: &WorkspaceDef) -> Result<()> {
             Ok(())
@@ -180,13 +171,7 @@ fn clipboard_op_on_non_declaring_adapter_is_unavailable() {
         fn destroy(&mut self, _id: &WorkspaceId) -> Result<()> {
             Ok(())
         }
-        fn launch(&mut self, _id: &WorkspaceId, _app: &AppSpec) -> Result<Window> {
-            unreachable!()
-        }
-        fn list_windows(&self, _id: &WorkspaceId) -> Result<Vec<Window>> {
-            Ok(vec![])
-        }
-        // No clipboard() override -> None.
+        // No capability hooks -> all None.
     }
 
     let mut engine = Engine::new(NoClipboardAdapter);

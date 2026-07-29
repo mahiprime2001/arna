@@ -133,45 +133,6 @@ where
         )
     });
 
-    r.check("launch_when_running_opens_a_window", || {
-        let mut e = Engine::new(make());
-        let ws = e.create_workspace(cfg()).map_err(|e| e.to_string())?;
-        e.start(&ws).map_err(|e| e.to_string())?;
-        e.launch(&ws, "browser").map_err(|e| e.to_string())?;
-        let n = e.list_windows(&ws).map_err(|e| e.to_string())?.len();
-        ok(n == 1, format!("expected 1 window, got {n}"))
-    });
-
-    r.check("multiple_launches_are_registered", || {
-        let mut e = Engine::new(make());
-        let ws = e.create_workspace(cfg()).map_err(|e| e.to_string())?;
-        e.start(&ws).map_err(|e| e.to_string())?;
-        e.launch(&ws, "browser").map_err(|e| e.to_string())?;
-        e.launch(&ws, "editor").map_err(|e| e.to_string())?;
-        let n = e.list_windows(&ws).map_err(|e| e.to_string())?.len();
-        ok(n == 2, format!("expected 2 windows, got {n}"))
-    });
-
-    r.check("cannot_launch_before_running", || {
-        let mut e = Engine::new(make());
-        let ws = e.create_workspace(cfg()).map_err(|e| e.to_string())?;
-        match e.launch(&ws, "browser") {
-            Err(WseError::InvalidState { .. }) => Ok(()),
-            other => Err(format!("expected InvalidState, got {other:?}")),
-        }
-    });
-
-    r.check("ungranted_app_is_not_found_not_denied", || {
-        // SPEC §6.5 undetectability — the single most important behavioural check.
-        let mut e = Engine::new(make());
-        let ws = e.create_workspace(cfg()).map_err(|e| e.to_string())?;
-        e.start(&ws).map_err(|e| e.to_string())?;
-        match e.launch(&ws, "photoshop") {
-            Err(WseError::NotFound(_)) => Ok(()),
-            other => Err(format!("expected NotFound, got {other:?}")),
-        }
-    });
-
     r.check("illegal_transition_is_rejected", || {
         // SPEC §5.2 — Created -> Saved (stop before start) is not permitted.
         let mut e = Engine::new(make());
@@ -188,10 +149,10 @@ where
         let ws = e.create_workspace(cfg()).map_err(|e| e.to_string())?;
         e.start(&ws).map_err(|e| e.to_string())?;
         e.destroy(&ws).map_err(|e| e.to_string())?;
-        match e.list_windows(&ws) {
-            Err(WseError::NotFound(_)) => Ok(()),
-            other => Err(format!("expected NotFound after destroy, got {other:?}")),
-        }
+        ok(
+            e.state(&ws).is_none() && e.identity(&ws).is_none(),
+            "the workspace must no longer exist after destroy",
+        )
     });
 
     r.check("identity_reflects_declared_capabilities", || {
@@ -284,6 +245,15 @@ where
 {
     let mut r = ConformanceReport::default();
 
+    r.check("applications/launch_when_running_opens_a_window", || {
+        let mut e = Engine::new(make());
+        let ws = e.create_workspace(cfg()).map_err(|e| e.to_string())?;
+        e.start(&ws).map_err(|e| e.to_string())?;
+        e.launch(&ws, "browser").map_err(|e| e.to_string())?;
+        let n = e.list_windows(&ws).map_err(|e| e.to_string())?.len();
+        ok(n == 1, format!("expected 1 window, got {n}"))
+    });
+
     r.check("applications/multiple_instances_permitted", || {
         // SPEC §10.3 — launching the same app twice yields two windows.
         let mut e = Engine::new(make());
@@ -293,6 +263,26 @@ where
         e.launch(&ws, "browser").map_err(|e| e.to_string())?;
         let n = e.list_windows(&ws).map_err(|e| e.to_string())?.len();
         ok(n == 2, format!("expected 2 instances, got {n}"))
+    });
+
+    r.check("applications/cannot_launch_before_running", || {
+        let mut e = Engine::new(make());
+        let ws = e.create_workspace(cfg()).map_err(|e| e.to_string())?;
+        match e.launch(&ws, "browser") {
+            Err(WseError::InvalidState { .. }) => Ok(()),
+            other => Err(format!("expected InvalidState, got {other:?}")),
+        }
+    });
+
+    r.check("applications/ungranted_app_is_not_found_not_denied", || {
+        // SPEC §6.5 undetectability — an app not in the catalog is not found.
+        let mut e = Engine::new(make());
+        let ws = e.create_workspace(cfg()).map_err(|e| e.to_string())?;
+        e.start(&ws).map_err(|e| e.to_string())?;
+        match e.launch(&ws, "photoshop") {
+            Err(WseError::NotFound(_)) => Ok(()),
+            other => Err(format!("expected NotFound, got {other:?}")),
+        }
     });
 
     r

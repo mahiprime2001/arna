@@ -90,17 +90,23 @@ pub trait WorkspaceAdapter {
     /// SPEC §5.5 — destroy contents irrecoverably; not merely unlist.
     fn destroy(&mut self, id: &WorkspaceId) -> Result<()>;
 
-    /// SPEC §10 — launch a catalog app inside the workspace; it becomes a
-    /// window on the canvas. The engine has already checked the app is granted.
-    fn launch(&mut self, id: &WorkspaceId, app: &AppSpec) -> Result<Window>;
-
-    /// SPEC §14 — the windows currently open in the workspace (metadata only).
-    fn list_windows(&self, id: &WorkspaceId) -> Result<Vec<Window>>;
-
     // ── capability interfaces ────────────────────────────────────────────────
-    // Each capability is its own trait. An adapter exposes the interface for a
-    // capability it declares, and None for one it doesn't. The engine negotiates
-    // via these hooks, gates on policy, then calls the mechanical interface.
+    // Every capability is its own trait behind a negotiation hook. An adapter
+    // exposes the interface for a capability it declares, and None for one it
+    // doesn't. The engine negotiates via these hooks, gates on policy, then
+    // calls the mechanical interface. Nothing capability-specific is mandatory:
+    // a minimal adapter implements only lifecycle + isolation and declares no
+    // capabilities.
+
+    /// SPEC §10 — the Applications capability, if this adapter provides it.
+    fn applications(&mut self) -> Option<&mut dyn ApplicationsCapability> {
+        None
+    }
+
+    /// SPEC §14 — the Windows capability, if this adapter provides it.
+    fn windows(&mut self) -> Option<&mut dyn WindowsCapability> {
+        None
+    }
 
     /// SPEC §9 — the Clipboard capability, if this adapter provides it.
     fn clipboard(&mut self) -> Option<&mut dyn ClipboardCapability> {
@@ -116,6 +122,19 @@ pub trait WorkspaceAdapter {
     fn devices(&mut self) -> Option<&mut dyn DevicesCapability> {
         None
     }
+}
+
+/// SPEC §10 — the mechanical Applications interface: launch a catalog app
+/// inside the workspace; it becomes a window on the canvas. The engine has
+/// already checked the app is granted.
+pub trait ApplicationsCapability {
+    fn launch(&mut self, id: &WorkspaceId, app: &AppSpec) -> Result<Window>;
+}
+
+/// SPEC §14 — the mechanical Windows interface: the windows currently open in
+/// the workspace (metadata only; the window manager never renders here).
+pub trait WindowsCapability {
+    fn list_windows(&self, id: &WorkspaceId) -> Result<Vec<Window>>;
 }
 
 /// SPEC §9 — the mechanical Clipboard interface. The adapter reads/writes the
