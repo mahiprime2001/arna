@@ -197,6 +197,7 @@ fn clipboard_op_on_non_declaring_adapter_is_unavailable() {
             catalog(),
         ))
         .unwrap();
+    // Neither Clipboard nor Storage is declared by NoClipboardAdapter.
     assert!(matches!(
         engine.clipboard_read_out(&ws, Role::Owner),
         Err(WseError::CapabilityUnavailable(Capability::Clipboard))
@@ -204,6 +205,10 @@ fn clipboard_op_on_non_declaring_adapter_is_unavailable() {
     assert!(matches!(
         engine.clipboard_write_in(&ws, Role::Owner, ClipboardItem::text("x")),
         Err(WseError::CapabilityUnavailable(Capability::Clipboard))
+    ));
+    assert!(matches!(
+        engine.storage_create(&ws, Role::Owner, "x", wse_common::ResourceKind::Blob),
+        Err(WseError::CapabilityUnavailable(Capability::Storage))
     ));
 }
 

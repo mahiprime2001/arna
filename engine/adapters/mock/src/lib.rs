@@ -10,8 +10,8 @@ use std::collections::HashMap;
 
 use wse_common::*;
 use wse_contract::{
-    ClipboardCapability, ContractVersion, IsolationAttestation, WorkspaceAdapter, WorkspaceDef,
-    CONTRACT_VERSION,
+    ClipboardCapability, ContractVersion, IsolationAttestation, StorageCapability, WorkspaceAdapter,
+    WorkspaceDef, CONTRACT_VERSION,
 };
 
 #[derive(Default)]
@@ -22,6 +22,9 @@ struct MockWorkspace {
     next_window: u32,
     /// SPEC §9.1 — the workspace's own clipboard, isolated per workspace.
     clipboard: Option<ClipboardItem>,
+    /// SPEC §8 — the workspace's own persistent resources, isolated per
+    /// workspace. A deleted ResourceId is removed and never reused.
+    resources: HashMap<ResourceId, (ResourceMetadata, Vec<u8>)>,
 }
 
 #[derive(Default)]
@@ -62,6 +65,7 @@ impl WorkspaceAdapter for MockAdapter {
             .with(Capability::Applications)
             .with(Capability::Windows)
             .with(Capability::Clipboard)
+            .with(Capability::Storage)
     }
 
     fn create(&mut self, def: &WorkspaceDef) -> Result<()> {
@@ -134,6 +138,10 @@ impl WorkspaceAdapter for MockAdapter {
     fn clipboard(&mut self) -> Option<&mut dyn ClipboardCapability> {
         Some(self)
     }
+
+    fn storage(&mut self) -> Option<&mut dyn StorageCapability> {
+        Some(self)
+    }
 }
 
 impl ClipboardCapability for MockAdapter {
@@ -144,5 +152,63 @@ impl ClipboardCapability for MockAdapter {
     fn clipboard_put(&mut self, id: &WorkspaceId, data: ClipboardItem) -> Result<()> {
         self.ws_mut(id)?.clipboard = Some(data);
         Ok(())
+    }
+}
+
+impl StorageCapability for MockAdapter {
+    fn resource_create(
+        &mut self,
+        id: &WorkspaceId,
+        name: String,
+        kind: ResourceKind,
+    ) -> Result<ResourceMetadata> {
+        let ws = self.ws_mut(id)?;
+        let meta = ResourceMetadata {
+            id: ResourceId::new(),
+            name,
+            kind,
+            size: 0,
+        };
+        ws.resources.insert(meta.id.clone(), (meta.clone(), Vec::new()));
+        Ok(meta)
+    }
+
+    fn resource_write(
+        &mut self,
+        id: &WorkspaceId,
+        resource: &ResourceId,
+        bytes: Vec<u8>,
+    ) -> Result<()> {
+        let ws = self.ws_mut(id)?;
+        let entry = ws
+            .resources
+            .get_mut(resource)
+            // deletion is terminal / unknown id -> NotFound (I3).
+            .ok_or_else(|| WseError::NotFound(format!("resource {resource}")))?;
+        entry.0.size = bytes.len() as u64;
+        entry.1 = bytes;
+        Ok(())
+    }
+
+    fn resource_read(&self, id: &WorkspaceId, resource: &ResourceId) -> Result<Vec<u8>> {
+        let ws = self.ws(id)?;
+        ws.resources
+            .get(resource)
+            .map(|(_, bytes)| bytes.clone())
+            .ok_or_else(|| WseError::NotFound(format!("resource {resource}")))
+    }
+
+    fn resource_delete(&mut self, id: &WorkspaceId, resource: &ResourceId) -> Result<bool> {
+        let ws = self.ws_mut(id)?;
+        Ok(ws.resources.remove(resource).is_some())
+    }
+
+    fn resource_list(&self, id: &WorkspaceId) -> Result<Vec<ResourceMetadata>> {
+        Ok(self
+            .ws(id)?
+            .resources
+            .values()
+            .map(|(meta, _)| meta.clone())
+            .collect())
     }
 }

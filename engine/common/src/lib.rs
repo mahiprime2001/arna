@@ -60,6 +60,7 @@ macro_rules! id_type {
 id_type!(WorkspaceId);
 id_type!(WindowId);
 id_type!(MemberId);
+id_type!(ResourceId);
 
 // ── lifecycle (SPEC §5) ─────────────────────────────────────────────────────
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -174,8 +175,8 @@ impl Capability {
         use CapabilityStatus::*;
         match self {
             Applications | Windows => Stable,
-            Clipboard => Draft,
-            Storage | Devices | Network | Audio | Camera => Planned,
+            Clipboard | Storage => Draft,
+            Devices | Network | Audio | Camera => Planned,
         }
     }
 }
@@ -331,7 +332,29 @@ impl ClipboardItem {
     }
 }
 
-// ── resources (SPEC §7) ─────────────────────────────────────────────────────
+// ── storage / workspace persistence (SPEC §8) ───────────────────────────────
+// The Storage capability owns RESOURCES, not files. No File/Folder/Path/Drive
+// vocabulary. See contract/capabilities/storage.md.
+
+/// The kind of a persistent resource. Deliberately minimal; a `Collection` kind
+/// (with children) is a future addition, not a v0.1 concern.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ResourceKind {
+    Blob,
+}
+
+/// Contract metadata for a resource — no platform fields. The `ResourceId` is
+/// the stable, immutable identity (universal rule: every persistent object the
+/// engine exposes has a stable contract identity).
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct ResourceMetadata {
+    pub id: ResourceId,
+    pub name: String,
+    pub kind: ResourceKind,
+    pub size: u64,
+}
+
+// ── resource limits (SPEC §7) ───────────────────────────────────────────────
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub struct ResourceLimits {
     pub cpu_cores: Option<u32>,

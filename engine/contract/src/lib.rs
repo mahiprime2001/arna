@@ -106,6 +106,11 @@ pub trait WorkspaceAdapter {
     fn clipboard(&mut self) -> Option<&mut dyn ClipboardCapability> {
         None
     }
+
+    /// SPEC §8 — the Storage capability (workspace persistence), if provided.
+    fn storage(&mut self) -> Option<&mut dyn StorageCapability> {
+        None
+    }
 }
 
 /// SPEC §9 — the mechanical Clipboard interface. The adapter reads/writes the
@@ -116,4 +121,27 @@ pub trait ClipboardCapability {
     fn clipboard_peek(&self, id: &WorkspaceId) -> Result<Option<ClipboardItem>>;
     /// Replace the workspace clipboard content.
     fn clipboard_put(&mut self, id: &WorkspaceId, data: ClipboardItem) -> Result<()>;
+}
+
+/// SPEC §8 — the mechanical Storage interface: persistent workspace-owned
+/// resources, no filesystem vocabulary. The adapter stores/retrieves resources;
+/// it never decides who may. Policy (FileTransfer right) lives in the engine.
+/// See contract/capabilities/storage.md.
+pub trait StorageCapability {
+    /// Create a resource and mint its stable, immutable id.
+    fn resource_create(
+        &mut self,
+        id: &WorkspaceId,
+        name: String,
+        kind: ResourceKind,
+    ) -> Result<ResourceMetadata>;
+    /// Replace a resource's bytes. `NotFound` if the id is unknown or deleted.
+    fn resource_write(&mut self, id: &WorkspaceId, resource: &ResourceId, bytes: Vec<u8>)
+        -> Result<()>;
+    /// Read a resource's bytes. `NotFound` if the id is unknown or deleted.
+    fn resource_read(&self, id: &WorkspaceId, resource: &ResourceId) -> Result<Vec<u8>>;
+    /// Delete a resource. Returns whether it existed. Deletion is terminal.
+    fn resource_delete(&mut self, id: &WorkspaceId, resource: &ResourceId) -> Result<bool>;
+    /// Metadata for every resource in the workspace (no bytes).
+    fn resource_list(&self, id: &WorkspaceId) -> Result<Vec<ResourceMetadata>>;
 }

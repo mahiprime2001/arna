@@ -16,7 +16,7 @@ contributors later — of which parts of the contract are expected to still move
 | Applications | Stable  | (in engine + core conformance) |
 | Windows      | Stable  | (in engine + core conformance) |
 | **Clipboard**| **Draft** | [clipboard.md](clipboard.md) |
-| Storage      | Planned | — |
+| **Storage**  | **Draft** | [storage.md](storage.md) |
 | Devices      | Planned | — |
 | Network      | Planned | — |
 | Audio        | Planned | — |
@@ -63,6 +63,17 @@ Two ideas to introduce when they earn their place — deliberately *not* built y
   without versioning everything at once. For now, maturity (Stable/Draft/Planned)
   is the only per-capability signal; explicit per-capability versions come when
   the first capability needs a breaking change.
+
+## Universal rule: stable contract identity
+
+> **Every persistent object the Workspace Engine exposes has a stable,
+> unguessable, immutable contract identity.**
+
+`WorkspaceId`, `ResourceId`, `WindowId`, `MemberId` — and future `ApplicationId`,
+`DeviceId` — all follow the one pattern. An id names one object for its whole
+life; changing the object's metadata never changes its id; a deleted id never
+resolves again and is never reused. This is what lets any object be referenced,
+audited, and reasoned about the same way across every capability.
 
 ## Policy note
 

@@ -17,7 +17,8 @@
 use std::collections::HashMap;
 
 use wse_common::{
-    AccessRight, AppSpec, Capability, ClipboardItem, Persistence, Role, WorkspaceState, WseError,
+    AccessRight, AppSpec, Capability, ClipboardItem, Persistence, ResourceKind, Role,
+    WorkspaceState, WseError,
 };
 use wse_contract::{WorkspaceAdapter, CONTRACT_VERSION};
 use wse_engine::{Engine, WorkspaceConfig};
@@ -355,6 +356,140 @@ where
     r
 }
 
+/// SPEC §8 — the Storage capability (workspace persistence). See
+/// contract/capabilities/storage.md. Runs only for adapters declaring Storage.
+pub fn run_storage<A, F>(make: F) -> ConformanceReport
+where
+    A: WorkspaceAdapter,
+    F: Fn() -> A,
+{
+    let mut r = ConformanceReport::default();
+
+    let write_only_collaborator = || {
+        let mut c = cfg();
+        let mut rights = HashMap::new();
+        rights.insert(AccessRight::FileTransfer, false);
+        c.collaborator_rights = rights;
+        c
+    };
+
+    r.check("storage/owner_roundtrips", || {
+        let mut e = Engine::new(make());
+        let ws = e.create_workspace(cfg()).map_err(|e| e.to_string())?;
+        let meta = e
+            .storage_create(&ws, Role::Owner, "notes", ResourceKind::Blob)
+            .map_err(|e| e.to_string())?;
+        e.storage_write(&ws, Role::Owner, &meta.id, b"hello".to_vec())
+            .map_err(|e| e.to_string())?;
+        let got = e
+            .storage_read(&ws, Role::Owner, &meta.id)
+            .map_err(|e| e.to_string())?;
+        ok(got == b"hello".to_vec(), "read must return what was written")
+    });
+
+    r.check("storage/resource_id_is_stable", || {
+        let mut e = Engine::new(make());
+        let ws = e.create_workspace(cfg()).map_err(|e| e.to_string())?;
+        let meta = e
+            .storage_create(&ws, Role::Owner, "a", ResourceKind::Blob)
+            .map_err(|e| e.to_string())?;
+        let listed = e.storage_list(&ws).map_err(|e| e.to_string())?;
+        ok(
+            listed.iter().any(|m| m.id == meta.id),
+            "the created resource id must appear in the list",
+        )
+    });
+
+    r.check("storage/isolated_per_workspace", || {
+        // I2 — a resource in one workspace is not readable from another.
+        let mut e = Engine::new(make());
+        let a = e.create_workspace(cfg()).map_err(|e| e.to_string())?;
+        let b = e.create_workspace(cfg()).map_err(|e| e.to_string())?;
+        let meta = e
+            .storage_create(&a, Role::Owner, "secret", ResourceKind::Blob)
+            .map_err(|e| e.to_string())?;
+        match e.storage_read(&b, Role::Owner, &meta.id) {
+            Err(WseError::NotFound(_)) => Ok(()),
+            other => Err(format!("B must not read A's resource, got {other:?}")),
+        }
+    });
+
+    r.check("storage/deletion_is_terminal", || {
+        // I3 — after delete, the id never resolves again.
+        let mut e = Engine::new(make());
+        let ws = e.create_workspace(cfg()).map_err(|e| e.to_string())?;
+        let meta = e
+            .storage_create(&ws, Role::Owner, "tmp", ResourceKind::Blob)
+            .map_err(|e| e.to_string())?;
+        let existed = e
+            .storage_delete(&ws, Role::Owner, &meta.id)
+            .map_err(|e| e.to_string())?;
+        if !existed {
+            return Err("delete of an existing resource must return true".into());
+        }
+        match e.storage_read(&ws, Role::Owner, &meta.id) {
+            Err(WseError::NotFound(_)) => {}
+            other => return Err(format!("read after delete must be NotFound, got {other:?}")),
+        }
+        let again = e
+            .storage_delete(&ws, Role::Owner, &meta.id)
+            .map_err(|e| e.to_string())?;
+        ok(!again, "deleting a missing resource must return false")
+    });
+
+    r.check("storage/list_reflects_resources", || {
+        let mut e = Engine::new(make());
+        let ws = e.create_workspace(cfg()).map_err(|e| e.to_string())?;
+        e.storage_create(&ws, Role::Owner, "a", ResourceKind::Blob)
+            .map_err(|e| e.to_string())?;
+        e.storage_create(&ws, Role::Owner, "b", ResourceKind::Blob)
+            .map_err(|e| e.to_string())?;
+        let n = e.storage_list(&ws).map_err(|e| e.to_string())?.len();
+        ok(n == 2, format!("expected 2 resources, got {n}"))
+    });
+
+    r.check("storage/observer_refused_transfer", || {
+        // I6 — extraction is not observation.
+        let mut e = Engine::new(make());
+        let ws = e.create_workspace(cfg()).map_err(|e| e.to_string())?;
+        match e.storage_create(&ws, Role::Observer, "x", ResourceKind::Blob) {
+            Err(WseError::PermissionDenied { .. }) => Ok(()),
+            other => Err(format!("Observer create must be denied, got {other:?}")),
+        }
+    });
+
+    r.check("storage/collaborator_needs_filetransfer_right", || {
+        // I6 — a Collaborator without FileTransfer is refused.
+        let mut e = Engine::new(make());
+        let ws = e
+            .create_workspace(write_only_collaborator())
+            .map_err(|e| e.to_string())?;
+        match e.storage_create(&ws, Role::Collaborator, "x", ResourceKind::Blob) {
+            Err(WseError::PermissionDenied { .. }) => Ok(()),
+            other => Err(format!("Collaborator w/o FileTransfer must be denied, got {other:?}")),
+        }
+    });
+
+    r.check("storage/persists_across_suspend", || {
+        // I5 (partial) — data written while Running survives a stop -> Saved.
+        let mut e = Engine::new(make());
+        let ws = e.create_workspace(cfg()).map_err(|e| e.to_string())?;
+        e.start(&ws).map_err(|e| e.to_string())?;
+        let meta = e
+            .storage_create(&ws, Role::Owner, "keep", ResourceKind::Blob)
+            .map_err(|e| e.to_string())?;
+        e.storage_write(&ws, Role::Owner, &meta.id, b"persist".to_vec())
+            .map_err(|e| e.to_string())?;
+        e.stop(&ws).map_err(|e| e.to_string())?; // -> Saved
+        let got = e
+            .storage_read(&ws, Role::Owner, &meta.id)
+            .map_err(|e| format!("resource must survive suspend: {e}"))?;
+        ok(got == b"persist".to_vec(), "resource bytes must survive suspend")
+    });
+
+    r
+}
+
 /// Run the full conformance suite an adapter is *eligible* for: the mandatory
 /// core, plus one suite per declared capability. An adapter is never tested for
 /// a capability it didn't declare (SPEC §18.2). This is capability negotiation
@@ -375,7 +510,10 @@ where
     if caps.supports(Capability::Clipboard) {
         report.absorb(run_clipboard(&make));
     }
-    // Storage, Devices, Network, Audio, Camera suites slot in here as each
-    // capability's mini-spec is written — never before.
+    if caps.supports(Capability::Storage) {
+        report.absorb(run_storage(&make));
+    }
+    // Devices, Network, Audio, Camera suites slot in here as each capability's
+    // mini-spec is written — never before.
     report
 }

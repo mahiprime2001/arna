@@ -128,7 +128,24 @@ pub enum Event {
         workspace: WorkspaceId,
         by: Role,
     },
+    /// SPEC §17.1 — storage transfers are auditable: who, which operation, which
+    /// resource — never the bytes (storage spec I7).
+    StorageTransfer {
+        workspace: WorkspaceId,
+        by: Role,
+        op: StorageOp,
+        resource: ResourceId,
+    },
     WorkspaceDestroyed(WorkspaceId),
+}
+
+/// The storage operations that cross the boundary and are audited.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StorageOp {
+    Create,
+    Write,
+    Read,
+    Delete,
 }
 
 /// Who is asking — the authorization context. Today just a Role; a MemberId
@@ -476,6 +493,149 @@ impl<A: WorkspaceAdapter> Engine<A> {
             by: role,
         });
         Ok(())
+    }
+
+    // ── Storage capability (SPEC §8) ─────────────────────────────────────────
+    // Persistent workspace-owned resources. A member's create/write/read/delete
+    // crosses the boundary and needs the FileTransfer right; list is host
+    // introspection (§17.2). See contract/capabilities/storage.md.
+
+    /// Gate a boundary storage op: the workspace must provide Storage and the
+    /// role must hold FileTransfer. Returns Ok once both hold.
+    fn gate_storage_transfer(&self, id: &WorkspaceId, role: Role) -> Result<()> {
+        let rec = self
+            .workspaces
+            .get(id)
+            .ok_or_else(|| WseError::NotFound(format!("workspace {id}")))?;
+        if !rec.capabilities.supports(Capability::Storage) {
+            return Err(WseError::CapabilityUnavailable(Capability::Storage));
+        }
+        let allowed = self.authorizer.allows(
+            &AuthContext::role(role),
+            &GrantView {
+                collaborator_rights: &rec.collaborator_rights,
+            },
+            AccessRight::FileTransfer,
+        );
+        if !allowed {
+            return Err(WseError::PermissionDenied {
+                right: AccessRight::FileTransfer,
+                role,
+            });
+        }
+        Ok(())
+    }
+
+    /// A member creates a workspace resource (SPEC §8). Requires FileTransfer.
+    pub fn storage_create(
+        &mut self,
+        id: &WorkspaceId,
+        role: Role,
+        name: impl Into<String>,
+        kind: ResourceKind,
+    ) -> Result<ResourceMetadata> {
+        self.gate_storage_transfer(id, role)?;
+        let store = self
+            .adapter
+            .storage()
+            .ok_or(WseError::CapabilityUnavailable(Capability::Storage))?;
+        let meta = store.resource_create(id, name.into(), kind)?;
+        self.events.push(Event::StorageTransfer {
+            workspace: id.clone(),
+            by: role,
+            op: StorageOp::Create,
+            resource: meta.id.clone(),
+        });
+        Ok(meta)
+    }
+
+    /// A member writes bytes into a resource. Requires FileTransfer.
+    pub fn storage_write(
+        &mut self,
+        id: &WorkspaceId,
+        role: Role,
+        resource: &ResourceId,
+        bytes: Vec<u8>,
+    ) -> Result<()> {
+        self.gate_storage_transfer(id, role)?;
+        let store = self
+            .adapter
+            .storage()
+            .ok_or(WseError::CapabilityUnavailable(Capability::Storage))?;
+        store.resource_write(id, resource, bytes)?;
+        self.events.push(Event::StorageTransfer {
+            workspace: id.clone(),
+            by: role,
+            op: StorageOp::Write,
+            resource: resource.clone(),
+        });
+        Ok(())
+    }
+
+    /// A member reads a resource's bytes out. Requires FileTransfer. `NotFound`
+    /// if the resource is unknown or deleted (deletion is terminal, I3).
+    pub fn storage_read(
+        &mut self,
+        id: &WorkspaceId,
+        role: Role,
+        resource: &ResourceId,
+    ) -> Result<Vec<u8>> {
+        self.gate_storage_transfer(id, role)?;
+        let store = self
+            .adapter
+            .storage()
+            .ok_or(WseError::CapabilityUnavailable(Capability::Storage))?;
+        let bytes = store.resource_read(id, resource)?;
+        self.events.push(Event::StorageTransfer {
+            workspace: id.clone(),
+            by: role,
+            op: StorageOp::Read,
+            resource: resource.clone(),
+        });
+        Ok(bytes)
+    }
+
+    /// A member deletes a resource. Requires FileTransfer. Returns whether it
+    /// existed; deletion is terminal.
+    pub fn storage_delete(
+        &mut self,
+        id: &WorkspaceId,
+        role: Role,
+        resource: &ResourceId,
+    ) -> Result<bool> {
+        self.gate_storage_transfer(id, role)?;
+        let store = self
+            .adapter
+            .storage()
+            .ok_or(WseError::CapabilityUnavailable(Capability::Storage))?;
+        let existed = store.resource_delete(id, resource)?;
+        self.events.push(Event::StorageTransfer {
+            workspace: id.clone(),
+            by: role,
+            op: StorageOp::Delete,
+            resource: resource.clone(),
+        });
+        Ok(existed)
+    }
+
+    /// Host/owner introspection: the resources a workspace holds (§17.2, "what
+    /// can this workspace see?"). Metadata only, no bytes; not a boundary
+    /// transfer, so ungated.
+    pub fn storage_list(&mut self, id: &WorkspaceId) -> Result<Vec<ResourceMetadata>> {
+        {
+            let rec = self
+                .workspaces
+                .get(id)
+                .ok_or_else(|| WseError::NotFound(format!("workspace {id}")))?;
+            if !rec.capabilities.supports(Capability::Storage) {
+                return Err(WseError::CapabilityUnavailable(Capability::Storage));
+            }
+        }
+        let store = self
+            .adapter
+            .storage()
+            .ok_or(WseError::CapabilityUnavailable(Capability::Storage))?;
+        store.resource_list(id)
     }
 
     /// SPEC §5.5 — destroy irrecoverably.
