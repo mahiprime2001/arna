@@ -11,6 +11,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "wse-adapter-windows"
+version = "0.1.0"
+dependencies = [
+ "wse-common",
+ "wse-conformance",
+ "wse-contract",
+]
+
+[[package]]
 name = "wse-common"
 version = "0.1.0"
 

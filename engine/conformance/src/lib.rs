@@ -182,10 +182,12 @@ where
     });
 
     r.check("events/seq_is_monotonic_per_workspace", || {
+        // Core-only operations (no capability): create + start + stop each emit
+        // a lifecycle event, so seq monotonicity is testable on any adapter.
         let mut e = Engine::new(make());
         let ws = e.create_workspace(cfg()).map_err(|e| e.to_string())?;
         e.start(&ws).map_err(|e| e.to_string())?;
-        e.launch(&ws, "browser").map_err(|e| e.to_string())?;
+        e.stop(&ws).map_err(|e| e.to_string())?;
         let evs = e.events_for(&ws);
         let ordered = evs.windows(2).all(|w| w[1].seq > w[0].seq);
         ok(

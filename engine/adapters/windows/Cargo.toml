@@ -1,0 +1,17 @@
+[package]
+name = "wse-adapter-windows"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# The first INDEPENDENT implementation of the contract. Platform code lives ONLY
+# here (adapter Rule 3). It may have dependencies; common/contract/engine must
+# not. This crate shells out to wsl.exe (and curl.exe for the one-time rootfs);
+# no HTTP crate, so it stays lean.
+[dependencies]
+wse-common = { path = "../../common" }
+wse-contract = { path = "../../contract" }
+
+[dev-dependencies]
+# The conformance suite this adapter must satisfy -- identical to the mock's.
+wse-conformance = { path = "../../conformance" }
