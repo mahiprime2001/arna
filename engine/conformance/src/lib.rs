@@ -20,8 +20,47 @@ use wse_common::{
     AccessRight, Actor, AppSpec, Capability, CapabilityState, ClipboardItem, DeviceClass, EventKind,
     EventSource, Persistence, ResourceKind, Role, WorkspaceState, WseError,
 };
+use std::ops::{Deref, DerefMut};
+
 use wse_contract::{WorkspaceAdapter, CONTRACT_VERSION};
 use wse_engine::{Engine, WorkspaceConfig};
+
+/// A test-only Engine that destroys every workspace it created when it drops.
+///
+/// This enforces the repeatability property of the standard test suite: **every
+/// conformance check leaves the system in the same observable state it found it
+/// in.** Against the mock this is free; against a real adapter (WSL2 distros,
+/// files, handles) it is what keeps the suite runnable twice with identical
+/// results. Production `Engine` never auto-destroys workspaces — a Saved
+/// workspace must survive — so this teardown lives only in the harness.
+struct TestEngine<A: WorkspaceAdapter>(Engine<A>);
+
+impl<A: WorkspaceAdapter> TestEngine<A> {
+    fn new(adapter: A) -> Self {
+        Self(Engine::new(adapter))
+    }
+}
+
+impl<A: WorkspaceAdapter> Drop for TestEngine<A> {
+    fn drop(&mut self) {
+        for id in self.0.workspace_ids() {
+            let _ = self.0.destroy(&id); // best-effort teardown
+        }
+    }
+}
+
+impl<A: WorkspaceAdapter> Deref for TestEngine<A> {
+    type Target = Engine<A>;
+    fn deref(&self) -> &Engine<A> {
+        &self.0
+    }
+}
+
+impl<A: WorkspaceAdapter> DerefMut for TestEngine<A> {
+    fn deref_mut(&mut self) -> &mut Engine<A> {
+        &mut self.0
+    }
+}
 
 /// Result of a single named conformance check.
 pub struct CheckResult {
@@ -115,7 +154,7 @@ where
     });
 
     r.check("create_yields_created_state", || {
-        let mut e = Engine::new(make());
+        let mut e = TestEngine::new(make());
         let ws = e.create_workspace(cfg()).map_err(|e| e.to_string())?;
         ok(
             e.state(&ws) == Some(WorkspaceState::Created),
@@ -124,7 +163,7 @@ where
     });
 
     r.check("start_yields_running_state", || {
-        let mut e = Engine::new(make());
+        let mut e = TestEngine::new(make());
         let ws = e.create_workspace(cfg()).map_err(|e| e.to_string())?;
         e.start(&ws).map_err(|e| e.to_string())?;
         ok(
@@ -135,7 +174,7 @@ where
 
     r.check("illegal_transition_is_rejected", || {
         // SPEC §5.2 — Created -> Saved (stop before start) is not permitted.
-        let mut e = Engine::new(make());
+        let mut e = TestEngine::new(make());
         let ws = e.create_workspace(cfg()).map_err(|e| e.to_string())?;
         match e.stop(&ws) {
             Err(WseError::InvalidTransition { .. }) => Ok(()),
@@ -145,7 +184,7 @@ where
 
     r.check("destroy_is_irrecoverable", || {
         // SPEC §5.5 — after destroy the workspace does not exist (not merely unlisted).
-        let mut e = Engine::new(make());
+        let mut e = TestEngine::new(make());
         let ws = e.create_workspace(cfg()).map_err(|e| e.to_string())?;
         e.start(&ws).map_err(|e| e.to_string())?;
         e.destroy(&ws).map_err(|e| e.to_string())?;
@@ -156,7 +195,7 @@ where
     });
 
     r.check("identity_reflects_declared_capabilities", || {
-        let mut e = Engine::new(make());
+        let mut e = TestEngine::new(make());
         let ws = e.create_workspace(cfg()).map_err(|e| e.to_string())?;
         let adapter_caps = make().capabilities();
         let id = e.identity(&ws).ok_or("no identity")?;
@@ -168,7 +207,7 @@ where
 
     // ── events are core: every adapter must exhibit them ─────────────────────
     r.check("events/creation_emits_a_core_event", || {
-        let mut e = Engine::new(make());
+        let mut e = TestEngine::new(make());
         let ws = e.create_workspace(cfg()).map_err(|e| e.to_string())?;
         let evs = e.events_for(&ws);
         let first = evs.first().ok_or("no events after create")?;
@@ -184,7 +223,7 @@ where
     r.check("events/seq_is_monotonic_per_workspace", || {
         // Core-only operations (no capability): create + start + stop each emit
         // a lifecycle event, so seq monotonicity is testable on any adapter.
-        let mut e = Engine::new(make());
+        let mut e = TestEngine::new(make());
         let ws = e.create_workspace(cfg()).map_err(|e| e.to_string())?;
         e.start(&ws).map_err(|e| e.to_string())?;
         e.stop(&ws).map_err(|e| e.to_string())?;
@@ -201,7 +240,7 @@ where
         // guaranteed by the envelope shape (EventKind has no content fields).
         // This check documents the invariant and fails loudly if the shape ever
         // grows a content-bearing field via a compile-time exhaustiveness match.
-        let mut e = Engine::new(make());
+        let mut e = TestEngine::new(make());
         let ws = e.create_workspace(cfg()).map_err(|e| e.to_string())?;
         e.start(&ws).map_err(|e| e.to_string())?;
         for ev in e.events_for(&ws) {
@@ -248,7 +287,7 @@ where
     let mut r = ConformanceReport::default();
 
     r.check("applications/launch_when_running_opens_a_window", || {
-        let mut e = Engine::new(make());
+        let mut e = TestEngine::new(make());
         let ws = e.create_workspace(cfg()).map_err(|e| e.to_string())?;
         e.start(&ws).map_err(|e| e.to_string())?;
         e.launch(&ws, "browser").map_err(|e| e.to_string())?;
@@ -258,7 +297,7 @@ where
 
     r.check("applications/multiple_instances_permitted", || {
         // SPEC §10.3 — launching the same app twice yields two windows.
-        let mut e = Engine::new(make());
+        let mut e = TestEngine::new(make());
         let ws = e.create_workspace(cfg()).map_err(|e| e.to_string())?;
         e.start(&ws).map_err(|e| e.to_string())?;
         e.launch(&ws, "browser").map_err(|e| e.to_string())?;
@@ -268,7 +307,7 @@ where
     });
 
     r.check("applications/cannot_launch_before_running", || {
-        let mut e = Engine::new(make());
+        let mut e = TestEngine::new(make());
         let ws = e.create_workspace(cfg()).map_err(|e| e.to_string())?;
         match e.launch(&ws, "browser") {
             Err(WseError::InvalidState { .. }) => Ok(()),
@@ -278,7 +317,7 @@ where
 
     r.check("applications/ungranted_app_is_not_found_not_denied", || {
         // SPEC §6.5 undetectability — an app not in the catalog is not found.
-        let mut e = Engine::new(make());
+        let mut e = TestEngine::new(make());
         let ws = e.create_workspace(cfg()).map_err(|e| e.to_string())?;
         e.start(&ws).map_err(|e| e.to_string())?;
         match e.launch(&ws, "photoshop") {
@@ -300,7 +339,7 @@ where
     let mut r = ConformanceReport::default();
 
     r.check("windows/at_most_one_focused", || {
-        let mut e = Engine::new(make());
+        let mut e = TestEngine::new(make());
         let ws = e.create_workspace(cfg()).map_err(|e| e.to_string())?;
         e.start(&ws).map_err(|e| e.to_string())?;
         e.launch(&ws, "browser").map_err(|e| e.to_string())?;
@@ -311,7 +350,7 @@ where
     });
 
     r.check("windows/newest_is_focused", || {
-        let mut e = Engine::new(make());
+        let mut e = TestEngine::new(make());
         let ws = e.create_workspace(cfg()).map_err(|e| e.to_string())?;
         e.start(&ws).map_err(|e| e.to_string())?;
         e.launch(&ws, "browser").map_err(|e| e.to_string())?;
@@ -348,7 +387,7 @@ where
 
     r.check("clipboard/isolated_per_workspace", || {
         // I1 — one workspace's clipboard is invisible to another.
-        let mut e = Engine::new(make());
+        let mut e = TestEngine::new(make());
         let a = e.create_workspace(cfg()).map_err(|e| e.to_string())?;
         let b = e.create_workspace(cfg()).map_err(|e| e.to_string())?;
         e.clipboard_write_in(&a, Role::Owner, ClipboardItem::text("secret"))
@@ -361,7 +400,7 @@ where
 
     r.check("clipboard/owner_roundtrips", || {
         // I4 — Owner may write then read the same payload back.
-        let mut e = Engine::new(make());
+        let mut e = TestEngine::new(make());
         let ws = e.create_workspace(cfg()).map_err(|e| e.to_string())?;
         e.clipboard_write_in(&ws, Role::Owner, ClipboardItem::text("hello"))
             .map_err(|e| e.to_string())?;
@@ -376,7 +415,7 @@ where
 
     r.check("clipboard/read_and_write_are_separate_rights", || {
         // I2 — a Collaborator with write-but-not-read may write, is refused read.
-        let mut e = Engine::new(make());
+        let mut e = TestEngine::new(make());
         let ws = e
             .create_workspace(write_only_collaborator())
             .map_err(|e| e.to_string())?;
@@ -390,7 +429,7 @@ where
 
     r.check("clipboard/observer_refused_read_out", || {
         // I3 — observing is not extracting.
-        let mut e = Engine::new(make());
+        let mut e = TestEngine::new(make());
         let ws = e.create_workspace(cfg()).map_err(|e| e.to_string())?;
         match e.clipboard_read_out(&ws, Role::Observer) {
             Err(WseError::PermissionDenied { .. }) => Ok(()),
@@ -399,7 +438,7 @@ where
     });
 
     r.check("clipboard/observer_refused_write_in", || {
-        let mut e = Engine::new(make());
+        let mut e = TestEngine::new(make());
         let ws = e.create_workspace(cfg()).map_err(|e| e.to_string())?;
         match e.clipboard_write_in(&ws, Role::Observer, ClipboardItem::text("x")) {
             Err(WseError::PermissionDenied { .. }) => Ok(()),
@@ -428,7 +467,7 @@ where
     };
 
     r.check("storage/owner_roundtrips", || {
-        let mut e = Engine::new(make());
+        let mut e = TestEngine::new(make());
         let ws = e.create_workspace(cfg()).map_err(|e| e.to_string())?;
         let meta = e
             .storage_create(&ws, Role::Owner, "notes", ResourceKind::Blob)
@@ -442,7 +481,7 @@ where
     });
 
     r.check("storage/resource_id_is_stable", || {
-        let mut e = Engine::new(make());
+        let mut e = TestEngine::new(make());
         let ws = e.create_workspace(cfg()).map_err(|e| e.to_string())?;
         let meta = e
             .storage_create(&ws, Role::Owner, "a", ResourceKind::Blob)
@@ -456,7 +495,7 @@ where
 
     r.check("storage/isolated_per_workspace", || {
         // I2 — a resource in one workspace is not readable from another.
-        let mut e = Engine::new(make());
+        let mut e = TestEngine::new(make());
         let a = e.create_workspace(cfg()).map_err(|e| e.to_string())?;
         let b = e.create_workspace(cfg()).map_err(|e| e.to_string())?;
         let meta = e
@@ -470,7 +509,7 @@ where
 
     r.check("storage/deletion_is_terminal", || {
         // I3 — after delete, the id never resolves again.
-        let mut e = Engine::new(make());
+        let mut e = TestEngine::new(make());
         let ws = e.create_workspace(cfg()).map_err(|e| e.to_string())?;
         let meta = e
             .storage_create(&ws, Role::Owner, "tmp", ResourceKind::Blob)
@@ -492,7 +531,7 @@ where
     });
 
     r.check("storage/list_reflects_resources", || {
-        let mut e = Engine::new(make());
+        let mut e = TestEngine::new(make());
         let ws = e.create_workspace(cfg()).map_err(|e| e.to_string())?;
         e.storage_create(&ws, Role::Owner, "a", ResourceKind::Blob)
             .map_err(|e| e.to_string())?;
@@ -504,7 +543,7 @@ where
 
     r.check("storage/observer_refused_transfer", || {
         // I6 — extraction is not observation.
-        let mut e = Engine::new(make());
+        let mut e = TestEngine::new(make());
         let ws = e.create_workspace(cfg()).map_err(|e| e.to_string())?;
         match e.storage_create(&ws, Role::Observer, "x", ResourceKind::Blob) {
             Err(WseError::PermissionDenied { .. }) => Ok(()),
@@ -514,7 +553,7 @@ where
 
     r.check("storage/collaborator_needs_filetransfer_right", || {
         // I6 — a Collaborator without FileTransfer is refused.
-        let mut e = Engine::new(make());
+        let mut e = TestEngine::new(make());
         let ws = e
             .create_workspace(write_only_collaborator())
             .map_err(|e| e.to_string())?;
@@ -526,7 +565,7 @@ where
 
     r.check("storage/persists_across_suspend", || {
         // I5 (partial) — data written while Running survives a stop -> Saved.
-        let mut e = Engine::new(make());
+        let mut e = TestEngine::new(make());
         let ws = e.create_workspace(cfg()).map_err(|e| e.to_string())?;
         e.start(&ws).map_err(|e| e.to_string())?;
         let meta = e
@@ -563,14 +602,14 @@ where
 
     r.check("devices/none_by_default", || {
         // I1 — a fresh workspace has no devices (§12.1).
-        let mut e = Engine::new(make());
+        let mut e = TestEngine::new(make());
         let ws = e.create_workspace(cfg()).map_err(|e| e.to_string())?;
         let n = e.device_enumerate(&ws).map_err(|e| e.to_string())?.len();
         ok(n == 0, format!("expected no devices by default, got {n}"))
     });
 
     r.check("devices/enumerate_lists_available", || {
-        let mut e = Engine::new(make());
+        let mut e = TestEngine::new(make());
         let ws = e.create_workspace(cfg()).map_err(|e| e.to_string())?;
         let d = e
             .device_attach(&ws, DeviceClass::Printer, "Office Printer")
@@ -585,7 +624,7 @@ where
 
     r.check("devices/non_available_is_not_found", || {
         // I2 — requesting a device that isn't available is NotFound, not denied.
-        let mut e = Engine::new(make());
+        let mut e = TestEngine::new(make());
         let ws = e.create_workspace(cfg()).map_err(|e| e.to_string())?;
         let ghost = wse_common::DeviceId::new();
         match e.device_request(&ws, Role::Owner, &ghost) {
@@ -596,7 +635,7 @@ where
 
     r.check("devices/observer_refused_request", || {
         // I6 — Observer touches nothing.
-        let mut e = Engine::new(make());
+        let mut e = TestEngine::new(make());
         let ws = e.create_workspace(cfg()).map_err(|e| e.to_string())?;
         let d = e
             .device_attach(&ws, DeviceClass::Camera, "Cam")
@@ -608,7 +647,7 @@ where
     });
 
     r.check("devices/collaborator_needs_use_right", || {
-        let mut e = Engine::new(make());
+        let mut e = TestEngine::new(make());
         let ws = e
             .create_workspace(use_device_collaborator())
             .map_err(|e| e.to_string())?;
@@ -623,7 +662,7 @@ where
 
     r.check("devices/request_then_release", || {
         // I4 — Owner request yields a handle; release ends it.
-        let mut e = Engine::new(make());
+        let mut e = TestEngine::new(make());
         let ws = e.create_workspace(cfg()).map_err(|e| e.to_string())?;
         let d = e
             .device_attach(&ws, DeviceClass::Microphone, "Mic")
@@ -642,7 +681,7 @@ where
 
     r.check("devices/isolated_per_workspace", || {
         // I7 — a device in one workspace is invisible in another.
-        let mut e = Engine::new(make());
+        let mut e = TestEngine::new(make());
         let a = e.create_workspace(cfg()).map_err(|e| e.to_string())?;
         let b = e.create_workspace(cfg()).map_err(|e| e.to_string())?;
         e.device_attach(&a, DeviceClass::Usb, "Stick")
@@ -652,7 +691,7 @@ where
     });
 
     r.check("devices/state_reflects_availability", || {
-        let mut e = Engine::new(make());
+        let mut e = TestEngine::new(make());
         let ws = e.create_workspace(cfg()).map_err(|e| e.to_string())?;
         let empty = e
             .capability_state(&ws, Capability::Devices)
@@ -673,7 +712,7 @@ where
 
     r.check("devices/state_change_emits_event", || {
         // I8 — availability flip flows through the CORE event envelope.
-        let mut e = Engine::new(make());
+        let mut e = TestEngine::new(make());
         let ws = e.create_workspace(cfg()).map_err(|e| e.to_string())?;
         e.device_attach(&ws, DeviceClass::Gpu, "GPU")
             .map_err(|e| e.to_string())?;

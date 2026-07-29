@@ -215,6 +215,13 @@ impl<A: WorkspaceAdapter> Engine<A> {
         self.workspaces.get(id).map(|r| r.state)
     }
 
+    /// Every workspace the engine currently tracks. Used for administration and
+    /// for test teardown (the conformance suite destroys these to stay
+    /// repeatable against adapters with real state).
+    pub fn workspace_ids(&self) -> Vec<WorkspaceId> {
+        self.workspaces.keys().cloned().collect()
+    }
+
     /// Create a workspace. It exists (Created) but does not execute yet.
     pub fn create_workspace(&mut self, cfg: WorkspaceConfig) -> Result<WorkspaceId> {
         // The adapter must speak a compatible contract version (SPEC §18.4).

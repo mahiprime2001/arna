@@ -56,6 +56,11 @@ Each is normative in its own file:
   failures into it; they never invent errors.
 - **[core/events.md](core/events.md)** — the observable event envelope. Adapters
   populate it; they never invent events.
+- **[core/conformance.md](core/conformance.md)** — what conforming means, and the
+  repeatability rules the standard test suite itself obeys.
+
+See also: **[../IMPLEMENTATION_GUIDE.md](../IMPLEMENTATION_GUIDE.md)** (how to
+write an adapter) and **[STATUS.md](STATUS.md)** (the conformance matrix).
 
 ## The capabilities
 
