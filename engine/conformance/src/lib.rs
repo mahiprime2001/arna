@@ -851,7 +851,12 @@ where
     A: WorkspaceAdapter,
     F: Fn() -> A,
 {
-    let caps = make().capabilities();
+    // Gate suites on the NEGOTIATED capability set the engine actually uses:
+    // adapter ∩ runtime (contract/core/runtime.md). The same adapter on a runtime
+    // that provides less runs fewer suites — no special cases. This is what makes
+    // runtimes interchangeable.
+    let a = make();
+    let caps = a.capabilities().intersect(&a.runtime().capabilities);
     let mut report = run_core(&make);
     if caps.supports(Capability::Applications) {
         report.absorb(run_applications(&make));

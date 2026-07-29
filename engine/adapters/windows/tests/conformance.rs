@@ -1,19 +1,34 @@
-//! The Windows adapter's conformance test is ONE line — identical to the mock's.
-//! It is `#[ignore]` because it creates and destroys real WSL2 workspaces
-//! (needs Windows + WSL2, is slow, and modifies machine state). Run it
-//! explicitly:
+//! The Windows adapter's conformance tests. Both are `#[ignore]` because they
+//! create and destroy real WSL2 workspaces (need Windows + WSL2, are slow, and
+//! modify machine state). Run them explicitly:
 //!
 //!   cargo test -p wse-adapter-windows -- --ignored --nocapture
 //!
-//! v1 expectation: run_all == run_core (this adapter declares no capabilities),
-//! so it passes lifecycle + isolation and honestly skips every capability suite.
+//! Together they prove the RUNTIME boundary: the *same adapter* satisfies the
+//! contract on two different runtimes, negotiating a different effective
+//! capability set (adapter ∩ runtime) with no code change.
 
-use wse_adapter_windows::WindowsAdapter;
+use wse_adapter_windows::{RuntimeSpec, WindowsAdapter};
 
+/// On wse-linux-x11 v1.0.0 (display stack): Applications + Windows are provided,
+/// so run_all == core + applications + windows.
 #[test]
-#[ignore = "requires Windows + WSL2; creates and destroys real workspaces"]
-fn windows_adapter_is_conformant() {
+#[ignore = "requires Windows + WSL2 + the wse-linux-x11 image"]
+fn windows_adapter_conforms_on_linux_x11_runtime() {
     let report = wse_conformance::run_all(WindowsAdapter::new);
-    println!("{}", report.summary());
+    println!("linux-x11: {}", report.summary());
+    report.assert_ok();
+}
+
+/// On wse-lite v1.0.0 (minimal/headless): NO capabilities are provided, so the
+/// SAME adapter negotiates effective = {} and run_all == core only. Applications
+/// and Windows are naturally unavailable — no special cases. This is the runtime
+/// interchangeability proof.
+#[test]
+#[ignore = "requires Windows + WSL2 + the wse-lite image"]
+fn windows_adapter_conforms_on_lite_runtime() {
+    let make = || WindowsAdapter::with_runtime(RuntimeSpec::lite_v1());
+    let report = wse_conformance::run_all(make);
+    println!("lite: {}", report.summary());
     report.assert_ok();
 }

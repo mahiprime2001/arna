@@ -22,13 +22,69 @@ use wse_contract::{
     WorkspaceAdapter, WorkspaceDef, CONTRACT_VERSION,
 };
 
-/// The immutable runtime image this adapter imports (built by
-/// `runtimes/wse-linux-x11/build.sh`). Pinned by version + digest; a change is a
-/// new version, never an in-place edit (contract/core/runtime.md).
-const RUNTIME_VERSION: RuntimeVersion = RuntimeVersion { major: 1, minor: 0, patch: 0 };
-const RUNTIME_DIGEST: &str =
+// Pinned digests of the shipped runtime images (built by runtimes/*/build.sh).
+// Immutable: a change is a new version, never an in-place edit.
+const X11_DIGEST: &str =
     "sha256:34be3169d4fc23e99be659e2b6224b401a19818b42d61a2053548ef733ee7dc4";
-const RUNTIME_IMAGE_FILE: &str = "wse-linux-x11-v1.0.0.tar";
+const LITE_DIGEST: &str =
+    "sha256:730365b06319ce69416f88f16d313afc78224546c1d5dcd1e99ae7ace9e3bd20";
+
+/// A runtime this adapter can run workspaces on: its contract descriptor plus the
+/// immutable image to import. The adapter is written ONCE and parameterised by
+/// this — the whole point of the runtime boundary. `linux_x11_v1` provides
+/// Applications + Windows; `lite_v1` provides nothing. Same adapter, different
+/// runtime → different effective capabilities, no code change.
+#[derive(Clone)]
+pub struct RuntimeSpec {
+    descriptor: RuntimeDescriptor,
+    image: PathBuf,
+}
+
+fn default_image_dir() -> PathBuf {
+    std::env::temp_dir().join("arna-workspaces")
+}
+
+impl RuntimeSpec {
+    /// wse-linux-x11 v1.0.0 — the display-stack runtime (Applications + Windows).
+    pub fn linux_x11_v1() -> Self {
+        let image = std::env::var("WSE_RUNTIME_IMAGE")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| default_image_dir().join("wse-linux-x11-v1.0.0.tar"));
+        RuntimeSpec {
+            descriptor: RuntimeDescriptor {
+                id: RuntimeId::from_raw("wse-linux-x11"),
+                name: "wse-linux-x11".into(),
+                version: RuntimeVersion::new(1, 0, 0),
+                base: "alpine-3.20".into(),
+                digest: X11_DIGEST.into(),
+                capabilities: CapabilitySet::none()
+                    .with(Capability::Applications)
+                    .with(Capability::Windows),
+                metadata: HashMap::new(),
+            },
+            image,
+        }
+    }
+
+    /// wse-lite v1.0.0 — deliberately minimal/headless; provides NO capabilities.
+    pub fn lite_v1() -> Self {
+        let image = std::env::var("WSE_LITE_IMAGE")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| default_image_dir().join("wse-lite-v1.0.0.tar"));
+        RuntimeSpec {
+            descriptor: RuntimeDescriptor {
+                id: RuntimeId::from_raw("wse-lite"),
+                name: "wse-lite".into(),
+                version: RuntimeVersion::new(1, 0, 0),
+                base: "alpine-3.20".into(),
+                digest: LITE_DIGEST.into(),
+                capabilities: CapabilitySet::none(),
+                metadata: HashMap::new(),
+            },
+            image,
+        }
+    }
+}
 
 /// Every distro this adapter owns is prefixed, so a user's own WSL installs are
 /// never touched.
@@ -60,7 +116,7 @@ const WSL_CONF: &str = "[automount]\nenabled = false\nmountFsTab = false\n\n[int
 
 pub struct WindowsAdapter {
     data_dir: PathBuf,
-    image: PathBuf,
+    runtime: RuntimeSpec,
     state: HashMap<WorkspaceId, WsState>,
 }
 
@@ -71,17 +127,19 @@ impl Default for WindowsAdapter {
 }
 
 impl WindowsAdapter {
+    /// The adapter on its default runtime (wse-linux-x11 v1.0.0).
     pub fn new() -> Self {
+        Self::with_runtime(RuntimeSpec::linux_x11_v1())
+    }
+
+    /// The SAME adapter on a chosen runtime. Nothing about the adapter changes —
+    /// only which runtime it imports and negotiates against.
+    pub fn with_runtime(runtime: RuntimeSpec) -> Self {
         let data_dir = std::env::temp_dir().join("arna-workspaces");
         let _ = std::fs::create_dir_all(&data_dir);
-        // The runtime image: explicit via WSE_RUNTIME_IMAGE, else alongside the
-        // workspace data dir. Resolved here; required at create().
-        let image = std::env::var("WSE_RUNTIME_IMAGE")
-            .map(PathBuf::from)
-            .unwrap_or_else(|_| data_dir.join(RUNTIME_IMAGE_FILE));
         Self {
             data_dir,
-            image,
+            runtime,
             state: HashMap::new(),
         }
     }
@@ -123,13 +181,15 @@ impl WindowsAdapter {
 
     /// The runtime image to import. Required — the runtime *is* the image.
     fn runtime_image(&self) -> Result<&PathBuf> {
-        if self.image.exists() {
-            Ok(&self.image)
+        let image = &self.runtime.image;
+        if image.exists() {
+            Ok(image)
         } else {
             Err(WseError::ResourceUnavailable(format!(
-                "runtime image not found at {} — build it with runtimes/wse-linux-x11/build.sh \
-                 or set WSE_RUNTIME_IMAGE",
-                self.image.display()
+                "runtime image for {} not found at {} — build it with its build.sh \
+                 or set the image env var",
+                self.runtime.descriptor.name,
+                image.display()
             )))
         }
     }
@@ -208,21 +268,9 @@ impl WorkspaceAdapter for WindowsAdapter {
     }
 
     fn runtime(&self) -> RuntimeDescriptor {
-        // wse-linux-x11 v1.0.0: the immutable WSL2 Linux image this adapter
-        // imports — Xvfb + openbox + xterm + xdotool + fonts + a catalog launcher.
-        // It PROVIDES Applications + Windows inside the workspace; the adapter
-        // BRIDGES them. See runtimes/wse-linux-x11/ and contract/core/runtime.md.
-        RuntimeDescriptor {
-            id: RuntimeId::from_raw("wse-linux-x11"),
-            name: "wse-linux-x11".into(),
-            version: RUNTIME_VERSION,
-            base: "alpine-3.20".into(),
-            digest: RUNTIME_DIGEST.into(),
-            capabilities: CapabilitySet::none()
-                .with(Capability::Applications)
-                .with(Capability::Windows),
-            metadata: std::collections::HashMap::new(),
-        }
+        // Whichever runtime this adapter was built with. The engine intersects
+        // this runtime's capabilities with the adapter's bridgeable set above.
+        self.runtime.descriptor.clone()
     }
 
     fn create(&mut self, def: &WorkspaceDef) -> Result<()> {

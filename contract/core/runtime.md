@@ -83,9 +83,29 @@ Runtime is core; every adapter's `run_core` verifies it:
   capability its runtime doesn't offer.
 - `identity_reflects_negotiated_capabilities` — capabilities are adapter ∩ runtime.
 
+## Lifecycle & compatibility
+
+A runtime has a lifecycle analogous to a capability's (the pattern is reused, not
+reinvented) — see the full checklist in [../../runtimes/README.md](../../runtimes/README.md):
+Intent · Identity · Capability declaration · Versioning · Build reproducibility ·
+Attestation · Conformance expectations · Deprecation.
+
+- **Versioning.** `major.minor.patch`. Adding a capability is *at least* a minor
+  bump; removing or changing one is a major bump. Adapters pin the version they
+  ship.
+- **Deprecation is not mutation.** An image is never patched. Retiring a version
+  means removing its artifact, never editing it — so every historical
+  `RuntimeAttestation` (pinned by digest) stays meaningful and reproducible.
+- **Conformance defines "working".** A runtime is only valid once some adapter
+  passes `run_all` on it — `run_core` plus one suite per capability the runtime
+  declares and the adapter bridges. Interchangeability is the test: the *same*
+  adapter on two runtimes runs different suites, with no special cases.
+
 ## Runtimes in the repo
 
 Runtime images are built by reproducible recipes under `runtimes/`, versioned and
 content-addressed. The image artifact itself lives outside git (it is large and
-immutable); the recipe and manifest are tracked. See
-`runtimes/wse-linux-x11/README.md`.
+immutable); the recipe and manifest are tracked. Two exist today —
+[`wse-linux-x11`](../../runtimes/wse-linux-x11/) (Applications + Windows) and
+[`wse-lite`](../../runtimes/wse-lite/) (nothing) — and the Windows adapter,
+unchanged, conforms on both. See [../../runtimes/README.md](../../runtimes/README.md).

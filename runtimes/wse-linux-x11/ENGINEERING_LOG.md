@@ -63,6 +63,16 @@ No contract impact — window discovery is a runtime/adapter mechanic, not contr
 Fix: drop wmctrl from `build.sh`; the readiness probe uses `xdotool
 getdisplaygeometry` instead of `xdpyinfo`, removing that dependency too.
 
+### #3 — `run_all` gated on adapter caps, not adapter ∩ runtime — **conformance-issue**
+Building the second runtime (wse-lite, provides nothing) surfaced that `run_all`
+chose suites from `adapter.capabilities()` alone. The same adapter on wse-lite
+would then try `run_applications` and fail (the engine returns
+`CapabilityUnavailable`, since effective = {}). Fixed `run_all` to gate on the
+negotiated set `adapter.capabilities() ∩ runtime.capabilities` — exactly what the
+engine uses. No contract change; the contract already defines effective =
+adapter ∩ runtime. Result: same adapter, wse-linux-x11 → 21/21, wse-lite → 12/12
+(core only), no special cases. **Runtime interchangeability proven.**
+
 ### #2 — `windows/at_most_one_focused` flaked (0 focused) — **adapter-bug**
 First live `run_all`: **19/21**, zero orphans. Only failure: `at_most_one_focused`
 saw 0 focused while the identically-set-up `newest_is_focused` passed — a race.

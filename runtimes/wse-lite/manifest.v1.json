@@ -1,0 +1,13 @@
+{
+  "id": "wse-lite",
+  "name": "wse-lite",
+  "version": "1.0.0",
+  "base": "alpine-3.20",
+  "digest": "sha256:730365b06319ce69416f88f16d313afc78224546c1d5dcd1e99ae7ace9e3bd20",
+  "capabilities": [],
+  "metadata": {
+    "artifact": "dist/wse-lite-v1.0.0.tar",
+    "purpose": "Minimal/headless runtime that provides NO capabilities inside the workspace. Proves runtime interchangeability: the same adapter negotiates a smaller effective set (adapter ∩ runtime) with no special cases.",
+    "note": "Immutable. A change means a new version + digest, never an in-place edit."
+  }
+}
