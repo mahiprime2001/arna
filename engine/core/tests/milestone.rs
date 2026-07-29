@@ -4,8 +4,8 @@
 //! reference; every real adapter must pass the equivalent.
 
 use wse_adapter_mock::MockAdapter;
-use wse_common::{Persistence, WorkspaceState, WseError, AppSpec};
-use wse_engine::{Engine, Event, WorkspaceConfig};
+use wse_common::{AppSpec, EventKind, Persistence, WorkspaceState, WseError};
+use wse_engine::{Engine, WorkspaceConfig};
 
 fn catalog() -> Vec<AppSpec> {
     vec![
@@ -225,9 +225,14 @@ fn events_are_observable() {
     engine.start(&ws).unwrap();
     engine.launch(&ws, "browser").unwrap();
 
-    let events = engine.events();
-    assert!(matches!(events.first(), Some(Event::WorkspaceCreated(_))));
+    let events = engine.events_for(&ws);
+    // First event is the creation; some later event is the app start.
+    assert!(matches!(events.first().unwrap().kind, EventKind::WorkspaceCreated));
     assert!(events
         .iter()
-        .any(|e| matches!(e, Event::AppLaunched { .. })));
+        .any(|e| matches!(e.kind, EventKind::ApplicationStarted { .. })));
+    // Per-workspace seq is a strictly increasing ordering authority.
+    for pair in events.windows(2) {
+        assert!(pair[1].seq > pair[0].seq);
+    }
 }

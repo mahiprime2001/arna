@@ -104,49 +104,8 @@ pub struct WorkspaceIdentity {
     pub metadata: HashMap<String, String>,
 }
 
-/// Things the outside world can subscribe to. Never used as control flow.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Event {
-    WorkspaceCreated(WorkspaceId),
-    StateChanged {
-        workspace: WorkspaceId,
-        from: WorkspaceState,
-        to: WorkspaceState,
-    },
-    AppLaunched {
-        workspace: WorkspaceId,
-        app: String,
-        window: WindowId,
-    },
-    /// SPEC §17.1 — clipboard transfers are auditable. The event carries who and
-    /// which direction, NEVER the content (I5 in the clipboard spec).
-    ClipboardReadOut {
-        workspace: WorkspaceId,
-        by: Role,
-    },
-    ClipboardWrittenIn {
-        workspace: WorkspaceId,
-        by: Role,
-    },
-    /// SPEC §17.1 — storage transfers are auditable: who, which operation, which
-    /// resource — never the bytes (storage spec I7).
-    StorageTransfer {
-        workspace: WorkspaceId,
-        by: Role,
-        op: StorageOp,
-        resource: ResourceId,
-    },
-    WorkspaceDestroyed(WorkspaceId),
-}
-
-/// The storage operations that cross the boundary and are audited.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum StorageOp {
-    Create,
-    Write,
-    Read,
-    Delete,
-}
+// Events are core vocabulary now (wse_common::Event). The engine constructs the
+// envelope via `emit`; capabilities and adapters populate, never invent.
 
 /// Who is asking — the authorization context. Today just a Role; a MemberId
 /// that *resolves* to a role arrives with collaboration, and capability
@@ -212,6 +171,8 @@ struct Record {
     contract_version: ContractVersion,
     last_attestation: Option<IsolationAttestation>,
     metadata: HashMap<String, String>,
+    /// Per-workspace monotonic event sequence — the ordering authority (§events).
+    next_seq: u64,
 }
 
 pub struct Engine<A: WorkspaceAdapter> {
@@ -296,10 +257,33 @@ impl<A: WorkspaceAdapter> Engine<A> {
                 contract_version: v,
                 last_attestation: None,
                 metadata: cfg.metadata,
+                next_seq: 0,
             },
         );
-        self.events.push(Event::WorkspaceCreated(id.clone()));
+        self.emit(&id, Actor::System, EventSource::Core, EventKind::WorkspaceCreated);
         Ok(id)
+    }
+
+    /// Build the event envelope (fresh id, per-workspace monotonic seq,
+    /// timestamp) and append it. The single place events enter the log —
+    /// append-only, ordered per workspace.
+    fn emit(&mut self, ws: &WorkspaceId, actor: Actor, source: EventSource, kind: EventKind) {
+        let seq = match self.workspaces.get_mut(ws) {
+            Some(rec) => {
+                let s = rec.next_seq;
+                rec.next_seq += 1;
+                s
+            }
+            None => return, // no workspace, no event
+        };
+        self.events.push(Event::new(ws.clone(), seq, actor, source, kind));
+    }
+
+    /// Events for one workspace, in per-workspace order (seq ascending).
+    pub fn events_for(&self, ws: &WorkspaceId) -> Vec<&Event> {
+        let mut v: Vec<&Event> = self.events.iter().filter(|e| &e.workspace == ws).collect();
+        v.sort_by_key(|e| e.seq);
+        v
     }
 
     /// Capability negotiation — the engine asks *what a workspace provides*,
@@ -389,11 +373,15 @@ impl<A: WorkspaceAdapter> Engine<A> {
 
         let window = self.adapter.launch(id, &app)?;
         let wid = window.id.clone();
-        self.events.push(Event::AppLaunched {
-            workspace: id.clone(),
-            app: app.id,
-            window: wid.clone(),
-        });
+        self.emit(
+            id,
+            Actor::System,
+            EventSource::Capability(Capability::Applications),
+            EventKind::ApplicationStarted {
+                app: app.id,
+                window: wid.clone(),
+            },
+        );
         Ok(wid)
     }
 
@@ -446,10 +434,12 @@ impl<A: WorkspaceAdapter> Engine<A> {
             .clipboard()
             .ok_or(WseError::CapabilityUnavailable(Capability::Clipboard))?;
         let data = clip.clipboard_peek(id)?;
-        self.events.push(Event::ClipboardReadOut {
-            workspace: id.clone(),
-            by: role,
-        });
+        self.emit(
+            id,
+            Actor::Member(role),
+            EventSource::Capability(Capability::Clipboard),
+            EventKind::ClipboardRead,
+        );
         Ok(data)
     }
 
@@ -488,10 +478,12 @@ impl<A: WorkspaceAdapter> Engine<A> {
             .clipboard()
             .ok_or(WseError::CapabilityUnavailable(Capability::Clipboard))?;
         clip.clipboard_put(id, data)?;
-        self.events.push(Event::ClipboardWrittenIn {
-            workspace: id.clone(),
-            by: role,
-        });
+        self.emit(
+            id,
+            Actor::Member(role),
+            EventSource::Capability(Capability::Clipboard),
+            EventKind::ClipboardWritten,
+        );
         Ok(())
     }
 
@@ -540,12 +532,14 @@ impl<A: WorkspaceAdapter> Engine<A> {
             .storage()
             .ok_or(WseError::CapabilityUnavailable(Capability::Storage))?;
         let meta = store.resource_create(id, name.into(), kind)?;
-        self.events.push(Event::StorageTransfer {
-            workspace: id.clone(),
-            by: role,
-            op: StorageOp::Create,
-            resource: meta.id.clone(),
-        });
+        self.emit(
+            id,
+            Actor::Member(role),
+            EventSource::Capability(Capability::Storage),
+            EventKind::ResourceCreated {
+                resource: meta.id.clone(),
+            },
+        );
         Ok(meta)
     }
 
@@ -563,12 +557,14 @@ impl<A: WorkspaceAdapter> Engine<A> {
             .storage()
             .ok_or(WseError::CapabilityUnavailable(Capability::Storage))?;
         store.resource_write(id, resource, bytes)?;
-        self.events.push(Event::StorageTransfer {
-            workspace: id.clone(),
-            by: role,
-            op: StorageOp::Write,
-            resource: resource.clone(),
-        });
+        self.emit(
+            id,
+            Actor::Member(role),
+            EventSource::Capability(Capability::Storage),
+            EventKind::ResourceModified {
+                resource: resource.clone(),
+            },
+        );
         Ok(())
     }
 
@@ -586,12 +582,14 @@ impl<A: WorkspaceAdapter> Engine<A> {
             .storage()
             .ok_or(WseError::CapabilityUnavailable(Capability::Storage))?;
         let bytes = store.resource_read(id, resource)?;
-        self.events.push(Event::StorageTransfer {
-            workspace: id.clone(),
-            by: role,
-            op: StorageOp::Read,
-            resource: resource.clone(),
-        });
+        self.emit(
+            id,
+            Actor::Member(role),
+            EventSource::Capability(Capability::Storage),
+            EventKind::ResourceRead {
+                resource: resource.clone(),
+            },
+        );
         Ok(bytes)
     }
 
@@ -609,12 +607,14 @@ impl<A: WorkspaceAdapter> Engine<A> {
             .storage()
             .ok_or(WseError::CapabilityUnavailable(Capability::Storage))?;
         let existed = store.resource_delete(id, resource)?;
-        self.events.push(Event::StorageTransfer {
-            workspace: id.clone(),
-            by: role,
-            op: StorageOp::Delete,
-            resource: resource.clone(),
-        });
+        self.emit(
+            id,
+            Actor::Member(role),
+            EventSource::Capability(Capability::Storage),
+            EventKind::ResourceDeleted {
+                resource: resource.clone(),
+            },
+        );
         Ok(existed)
     }
 
@@ -643,8 +643,10 @@ impl<A: WorkspaceAdapter> Engine<A> {
         let from = self.require_state(id)?;
         self.check_transition(from, WorkspaceState::Deleted)?;
         self.adapter.destroy(id)?;
+        // Emit while the record still exists (emit reads its per-workspace seq),
+        // then remove it.
+        self.emit(id, Actor::System, EventSource::Core, EventKind::WorkspaceDestroyed);
         self.workspaces.remove(id);
-        self.events.push(Event::WorkspaceDestroyed(id.clone()));
         Ok(())
     }
 
@@ -665,15 +667,20 @@ impl<A: WorkspaceAdapter> Engine<A> {
     }
 
     fn set_state(&mut self, id: &WorkspaceId, to: WorkspaceState) {
-        if let Some(rec) = self.workspaces.get_mut(id) {
-            let from = rec.state;
-            rec.state = to;
-            self.events.push(Event::StateChanged {
-                workspace: id.clone(),
-                from,
-                to,
-            });
-        }
+        let from = match self.workspaces.get_mut(id) {
+            Some(rec) => {
+                let f = rec.state;
+                rec.state = to;
+                f
+            }
+            None => return,
+        };
+        self.emit(
+            id,
+            Actor::System,
+            EventSource::Core,
+            EventKind::StateChanged { from, to },
+        );
     }
 
     /// Read-only peek at a workspace's name + persistence (for a manager/UI).

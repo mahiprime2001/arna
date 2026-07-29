@@ -61,6 +61,14 @@ id_type!(WorkspaceId);
 id_type!(WindowId);
 id_type!(MemberId);
 id_type!(ResourceId);
+id_type!(EventId);
+
+fn now_nanos() -> u128 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0)
+}
 
 // ── lifecycle (SPEC §5) ─────────────────────────────────────────────────────
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -360,6 +368,117 @@ pub struct ResourceLimits {
     pub cpu_cores: Option<u32>,
     pub memory_gb: Option<u32>,
     pub storage_gb: Option<u32>,
+}
+
+// ── events (core, not a capability) ─────────────────────────────────────────
+// Events are the language the whole engine speaks: every capability emits them,
+// every adapter forwards them, every SDK subscribes, every audit log records
+// them. The ENVELOPE is defined by the core contract; the KIND is capability-
+// defined but drawn from this closed set — so, exactly like errors, an adapter
+// can never *invent* an event, only populate one. See contract/core/events.md.
+
+/// Who caused an event.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Actor {
+    /// The engine/host itself (lifecycle, policy).
+    System,
+    /// A member acting in a role. A MemberId that resolves to a role arrives
+    /// with collaboration; the envelope is ready for it.
+    Member(Role),
+}
+
+/// Which part of the contract an event came from.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum EventSource {
+    /// Core lifecycle (workspace create/state/destroy).
+    Core,
+    /// A specific capability.
+    Capability(Capability),
+}
+
+/// The type of an event. Grouped by source; each capability owns its variants,
+/// but the set is closed so nothing can be invented outside the contract.
+/// Payloads carry identity/metadata only — never content or bytes (audit vs.
+/// privacy, SPEC §17.1).
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub enum EventKind {
+    // Core lifecycle
+    WorkspaceCreated,
+    StateChanged {
+        from: WorkspaceState,
+        to: WorkspaceState,
+    },
+    WorkspaceDestroyed,
+    // Applications (§10)
+    ApplicationStarted {
+        app: String,
+        window: WindowId,
+    },
+    // Windows (§14)
+    WindowOpened {
+        window: WindowId,
+    },
+    WindowFocused {
+        window: WindowId,
+    },
+    WindowClosed {
+        window: WindowId,
+    },
+    // Clipboard (§9) — who + direction, never content
+    ClipboardRead,
+    ClipboardWritten,
+    // Storage (§8) — who + which resource, never bytes
+    ResourceCreated {
+        resource: ResourceId,
+    },
+    ResourceModified {
+        resource: ResourceId,
+    },
+    ResourceRead {
+        resource: ResourceId,
+    },
+    ResourceDeleted {
+        resource: ResourceId,
+    },
+}
+
+/// A workspace event. The envelope is fixed by the core contract; adapters and
+/// capabilities populate it, never redefine it.
+///
+/// Invariants (see contract/core/events.md): events are immutable and
+/// append-only; `seq` is a per-workspace monotonically increasing ordering
+/// authority; payloads never expose data the contract forbids.
+#[derive(Clone, Debug)]
+pub struct Event {
+    pub id: EventId,
+    pub workspace: WorkspaceId,
+    /// Per-workspace monotonic sequence — the ordering authority.
+    pub seq: u64,
+    /// Wall-clock nanoseconds, best-effort/informational (ordering uses `seq`).
+    pub at: u128,
+    pub actor: Actor,
+    pub source: EventSource,
+    pub kind: EventKind,
+}
+
+impl Event {
+    pub fn new(
+        workspace: WorkspaceId,
+        seq: u64,
+        actor: Actor,
+        source: EventSource,
+        kind: EventKind,
+    ) -> Self {
+        Self {
+            id: EventId::new(),
+            workspace,
+            seq,
+            at: now_nanos(),
+            actor,
+            source,
+            kind,
+        }
+    }
 }
 
 // ── the error contract ──────────────────────────────────────────────────────

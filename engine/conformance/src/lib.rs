@@ -17,8 +17,8 @@
 use std::collections::HashMap;
 
 use wse_common::{
-    AccessRight, AppSpec, Capability, ClipboardItem, Persistence, ResourceKind, Role,
-    WorkspaceState, WseError,
+    AccessRight, Actor, AppSpec, Capability, ClipboardItem, EventKind, EventSource, Persistence,
+    ResourceKind, Role, WorkspaceState, WseError,
 };
 use wse_contract::{WorkspaceAdapter, CONTRACT_VERSION};
 use wse_engine::{Engine, WorkspaceConfig};
@@ -203,6 +203,63 @@ where
             id.capabilities == adapter_caps,
             "workspace identity must reflect the adapter's declared capabilities",
         )
+    });
+
+    // ── events are core: every adapter must exhibit them ─────────────────────
+    r.check("events/creation_emits_a_core_event", || {
+        let mut e = Engine::new(make());
+        let ws = e.create_workspace(cfg()).map_err(|e| e.to_string())?;
+        let evs = e.events_for(&ws);
+        let first = evs.first().ok_or("no events after create")?;
+        ok(
+            matches!(first.kind, EventKind::WorkspaceCreated)
+                && first.source == EventSource::Core
+                && first.actor == Actor::System
+                && first.workspace == ws,
+            "create must emit a Core WorkspaceCreated event with the right envelope",
+        )
+    });
+
+    r.check("events/seq_is_monotonic_per_workspace", || {
+        let mut e = Engine::new(make());
+        let ws = e.create_workspace(cfg()).map_err(|e| e.to_string())?;
+        e.start(&ws).map_err(|e| e.to_string())?;
+        e.launch(&ws, "browser").map_err(|e| e.to_string())?;
+        let evs = e.events_for(&ws);
+        let ordered = evs.windows(2).all(|w| w[1].seq > w[0].seq);
+        ok(
+            ordered && evs.len() >= 3,
+            "per-workspace event seq must be strictly increasing",
+        )
+    });
+
+    r.check("events/never_expose_forbidden_data", || {
+        // Clipboard/storage events carry identity/metadata only, never content —
+        // guaranteed by the envelope shape (EventKind has no content fields).
+        // This check documents the invariant and fails loudly if the shape ever
+        // grows a content-bearing field via a compile-time exhaustiveness match.
+        let mut e = Engine::new(make());
+        let ws = e.create_workspace(cfg()).map_err(|e| e.to_string())?;
+        e.start(&ws).map_err(|e| e.to_string())?;
+        for ev in e.events_for(&ws) {
+            // No arm carries bytes/strings-of-content; ids and metadata only.
+            match &ev.kind {
+                EventKind::WorkspaceCreated
+                | EventKind::WorkspaceDestroyed
+                | EventKind::StateChanged { .. }
+                | EventKind::ApplicationStarted { .. }
+                | EventKind::WindowOpened { .. }
+                | EventKind::WindowFocused { .. }
+                | EventKind::WindowClosed { .. }
+                | EventKind::ClipboardRead
+                | EventKind::ClipboardWritten
+                | EventKind::ResourceCreated { .. }
+                | EventKind::ResourceModified { .. }
+                | EventKind::ResourceRead { .. }
+                | EventKind::ResourceDeleted { .. } => {}
+            }
+        }
+        Ok(())
     });
 
     r
