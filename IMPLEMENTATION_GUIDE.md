@@ -62,6 +62,19 @@ whether to run. If you can't prove the seal, return `sealed: false`; the engine
 will refuse and the workspace never appears running. There is no
 partial-isolation tier.
 
+## 4b. Declare your runtime
+
+Override `runtime()` to return the immutable, versioned environment your workspaces
+run *inside* (`RuntimeDescriptor`: id, name, version, base, digest, capabilities).
+The default is an unspecified host runtime that provides nothing — fine for a
+lifecycle-only adapter, but a real adapter names its image. Key rule: the
+workspace's effective capabilities are **`adapter.capabilities() ∩
+runtime.capabilities`**. So a capability turns on only when *both* your adapter
+bridges it and your runtime provides it — build the runtime image, bump its
+version + digest, declare the capability in both places. Never mutate a built
+image; a change is a new version. See [contract/core/runtime.md](contract/core/runtime.md)
+and `runtimes/` for a recipe.
+
 ## 5. Map failures; never invent
 
 - **Errors:** return only `WseError` variants. Map a native failure with no

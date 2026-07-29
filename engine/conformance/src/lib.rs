@@ -195,14 +195,58 @@ where
         )
     });
 
-    r.check("identity_reflects_declared_capabilities", || {
+    r.check("identity_reflects_negotiated_capabilities", || {
+        // A workspace provides what the adapter bridges ∩ what the runtime offers.
         let mut e = TestEngine::new(make());
         let ws = e.create_workspace(cfg()).map_err(|e| e.to_string())?;
-        let adapter_caps = make().capabilities();
+        let a = make();
+        let expected = a.capabilities().intersect(&a.runtime().capabilities);
         let id = e.identity(&ws).ok_or("no identity")?;
         ok(
-            id.capabilities == adapter_caps,
-            "workspace identity must reflect the adapter's declared capabilities",
+            id.capabilities == expected,
+            "workspace capabilities must be adapter ∩ runtime",
+        )
+    });
+
+    // ── runtime is core: every workspace runs on exactly one runtime ─────────
+    r.check("runtime/adapter_declares_a_runtime", || {
+        let rt = make().runtime();
+        ok(
+            !rt.name.is_empty() && !rt.digest.is_empty(),
+            "a runtime must have a name and an immutable digest",
+        )
+    });
+
+    r.check("runtime/start_records_a_reproducible_attestation", || {
+        // Starting pins the exact environment: id, version, digest — so any run
+        // or bug report names precisely what executed.
+        let mut e = TestEngine::new(make());
+        let ws = e.create_workspace(cfg()).map_err(|e| e.to_string())?;
+        if e.runtime_attestation(&ws).is_some() {
+            return Err("runtime attestation must not exist before start".into());
+        }
+        e.start(&ws).map_err(|e| e.to_string())?;
+        let att = e
+            .runtime_attestation(&ws)
+            .ok_or("no runtime attestation after start")?;
+        let declared = make().runtime();
+        ok(
+            att.runtime == declared.id
+                && att.version == declared.version
+                && att.digest == declared.digest,
+            "the attestation must pin the declared runtime's id, version, and digest",
+        )
+    });
+
+    r.check("runtime/capabilities_bound_the_workspace", || {
+        // The workspace cannot provide a capability its runtime doesn't offer.
+        let mut e = TestEngine::new(make());
+        let ws = e.create_workspace(cfg()).map_err(|e| e.to_string())?;
+        let rt_caps = make().runtime().capabilities;
+        let ws_caps = e.capabilities(&ws).ok_or("no capabilities")?;
+        ok(
+            ws_caps.declared().iter().all(|c| rt_caps.supports(*c)),
+            "every capability a workspace provides must be provided by its runtime",
         )
     });
 

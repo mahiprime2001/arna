@@ -72,9 +72,19 @@ pub trait WorkspaceAdapter {
         CONTRACT_VERSION
     }
 
-    /// SPEC §18.2 — declare the workspace capabilities this adapter provides,
+    /// SPEC §18.2 — declare the workspace capabilities this adapter can *bridge*,
     /// honestly. Undeclared means absent. `CapabilitySet` lives in wse-common.
+    /// The workspace's effective capabilities are these intersected with the
+    /// runtime's (see `runtime`) — the adapter orchestrates, the runtime executes.
     fn capabilities(&self) -> CapabilitySet;
+
+    /// The runtime this adapter runs workspaces on — the immutable, versioned
+    /// execution environment *inside* the workspace. Defaults to an unspecified
+    /// host runtime that provides nothing; real adapters override it with a
+    /// named, versioned image. See contract/core/runtime.md.
+    fn runtime(&self) -> RuntimeDescriptor {
+        RuntimeDescriptor::host()
+    }
 
     /// SPEC §5.1 / §3 — define a workspace; not yet executing.
     fn create(&mut self, def: &WorkspaceDef) -> Result<()>;

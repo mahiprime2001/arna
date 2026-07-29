@@ -1,0 +1,3 @@
+# Built runtime images are large, immutable, content-addressed artifacts.
+# They live outside git; only the recipe + manifest are tracked.
+dist/

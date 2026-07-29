@@ -172,9 +172,27 @@ impl WorkspaceAdapter for WindowsAdapter {
     }
 
     fn capabilities(&self) -> CapabilitySet {
-        // v1: minimal and truthful — lifecycle + isolation only. Applications,
-        // Windows, Clipboard, Storage, Devices are added incrementally.
+        // What this adapter can *bridge*. v1: lifecycle + isolation only. As the
+        // runtime gains a display stack we declare Applications/Windows here and
+        // the workspace's effective set is this ∩ runtime.capabilities.
         CapabilitySet::none()
+    }
+
+    fn runtime(&self) -> RuntimeDescriptor {
+        // wse-linux-x11: the WSL2 Linux runtime this adapter imports. v0.1.0 is
+        // the bare rootfs — no display stack yet, so it provides nothing inside
+        // the workspace. Building the immutable Runtime v1 image (Xvfb + WM +
+        // wmctrl + catalog apps) bumps this to v1.0.0 and declares Applications.
+        // See runtimes/wse-linux-x11/ and contract/core/runtime.md.
+        RuntimeDescriptor {
+            id: RuntimeId::from_raw("wse-linux-x11"),
+            name: "wse-linux-x11".into(),
+            version: RuntimeVersion::new(0, 1, 0),
+            base: "alpine-3.20".into(),
+            digest: "alpine-minirootfs-3.20.3-x86_64".into(),
+            capabilities: CapabilitySet::none(),
+            metadata: std::collections::HashMap::new(),
+        }
     }
 
     fn create(&mut self, def: &WorkspaceDef) -> Result<()> {

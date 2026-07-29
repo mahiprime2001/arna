@@ -21,7 +21,8 @@ Version: **v0.1** (`CONTRACT_VERSION`). See [core/capabilities.md](core/capabili
 | **Capability** | Something a workspace *provides* (Applications, Clipboard, Storage, …). |
 | **Access right** | Something a *member* may do (view, keyboard, clipboard-read, …). |
 | **Adapter** | A platform's implementation of the contract. A consumer, never an author. |
-| **Attestation** | An adapter's *evidence* of isolation; the engine evaluates it against policy. |
+| **Runtime** | The immutable, versioned execution environment *inside* a workspace. The adapter orchestrates it; it provides the capabilities. |
+| **Attestation** | An adapter's *evidence* of isolation, and the record of *which runtime ran*; the engine evaluates isolation against policy and pins the runtime. |
 | **Conformance** | The pass/fail suite an adapter must satisfy to be a workspace at all. |
 
 The frozen constitution is [SPEC.md](SPEC.md) (116 MUSTs). This contract is its
@@ -30,15 +31,19 @@ machine-checkable form; the Rust expression is the `engine/` crates.
 ## Architecture
 
 ```
-Engine (orchestrator)  →  Capability interfaces  →  Adapter (per platform)  →  OS
-        │                        │                         │
-   owns POLICY            mechanical only            declares capabilities,
-   (auth, isolation,      (no policy)                attests isolation,
-   lifecycle, events)                                maps failures into the contract
+Engine (orchestrator) → Capability interfaces → Adapter (per platform) → Runtime → OS
+        │                        │                    │                    │
+   owns POLICY            mechanical only        orchestrates:        executes:
+   (auth, isolation,      (no policy)            import, launch,      immutable,
+   lifecycle, events)                            attest isolation     versioned env
+                                                                      inside the ws
 ```
 
 The engine knows the contract; it never knows an OS. Everything platform-specific
-lives below the adapter boundary.
+lives below the adapter boundary. The **adapter** orchestrates the platform; the
+**runtime** ([core/runtime.md](core/runtime.md)) is the immutable environment
+inside the workspace. A workspace usably provides a capability only when the
+adapter can bridge it **and** the runtime provides it (adapter ∩ runtime).
 
 ## The core concepts
 
@@ -56,6 +61,8 @@ Each is normative in its own file:
   failures into it; they never invent errors.
 - **[core/events.md](core/events.md)** — the observable event envelope. Adapters
   populate it; they never invent events.
+- **[core/runtime.md](core/runtime.md)** — the immutable, versioned execution
+  environment *inside* a workspace. The adapter orchestrates; the runtime executes.
 - **[core/conformance.md](core/conformance.md)** — what conforming means, and the
   repeatability rules the standard test suite itself obeys.
 

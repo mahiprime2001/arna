@@ -77,6 +77,20 @@ impl WorkspaceAdapter for MockAdapter {
             .with(Capability::Devices)
     }
 
+    fn runtime(&self) -> RuntimeDescriptor {
+        // The reference runtime: an in-memory environment that provides exactly
+        // what the mock adapter bridges. Immutable and versioned like any runtime.
+        RuntimeDescriptor {
+            id: RuntimeId::from_raw("mock"),
+            name: "mock".into(),
+            version: RuntimeVersion::new(1, 0, 0),
+            base: "in-memory".into(),
+            digest: "mock:1.0.0".into(),
+            capabilities: self.capabilities(),
+            metadata: std::collections::HashMap::new(),
+        }
+    }
+
     fn create(&mut self, def: &WorkspaceDef) -> Result<()> {
         self.workspaces.insert(
             def.id.clone(),

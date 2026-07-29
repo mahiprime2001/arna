@@ -1,0 +1,22 @@
+{
+  "id": "wse-linux-x11",
+  "name": "wse-linux-x11",
+  "version": "1.0.0",
+  "base": "alpine-3.20",
+  "digest": "sha256:PENDING-run-build.sh-to-fill",
+  "capabilities": ["Applications", "Windows"],
+  "display": {
+    "server": "Xvfb",
+    "screen": ":0",
+    "wm": "openbox"
+  },
+  "apps": {
+    "browser": { "name": "Browser", "command": "netsurf-gtk" },
+    "editor":  { "name": "Editor",  "command": "xterm -T Editor -e vi" },
+    "terminal":{ "name": "Terminal","command": "xterm -T Terminal" }
+  },
+  "metadata": {
+    "artifact": "dist/wse-linux-x11-v1.0.0.tar",
+    "note": "Immutable. A change means a new version + digest, never an in-place edit."
+  }
+}

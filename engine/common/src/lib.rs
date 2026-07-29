@@ -36,6 +36,13 @@ macro_rules! id_type {
             pub fn new() -> Self {
                 Self(format!("{:032x}", scrambled_128()))
             }
+            /// Construct from a stable, meaningful string. For runtime *definitions*
+            /// (public, non-secret environment identifiers) this gives a stable id
+            /// across process runs — unlike `new()`, which is for unguessable
+            /// runtime *instances* (workspaces, resources).
+            pub fn from_raw(s: impl Into<String>) -> Self {
+                Self(s.into())
+            }
             pub fn as_str(&self) -> &str {
                 &self.0
             }
@@ -66,8 +73,11 @@ id_type!(EventId);
 id_type!(DeviceId);
 id_type!(ApplicationId); // identity of a catalog *definition*
 id_type!(ApplicationInstanceId); // identity of a *running instance* — never a PID
+id_type!(RuntimeId); // identity of a runtime *definition* (e.g. "wse-linux-x11")
 
-fn now_nanos() -> u128 {
+/// Wall-clock nanoseconds since the Unix epoch. Used to stamp events and runtime
+/// attestations.
+pub fn now_nanos() -> u128 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_nanos())
@@ -280,6 +290,113 @@ impl CapabilitySet {
             .filter(|c| self.supports(*c))
             .collect()
     }
+
+    /// The capabilities present in BOTH sets. A workspace usably provides a
+    /// capability only when the adapter can bridge it *and* the runtime provides
+    /// it — two different concerns (platform orchestration vs. workspace
+    /// execution), both required. See contract/core/runtime.md.
+    pub fn intersect(&self, other: &CapabilitySet) -> CapabilitySet {
+        let mut out = CapabilitySet::none();
+        for c in Capability::ALL {
+            out.set(c, self.supports(c) && other.supports(c));
+        }
+        out
+    }
+}
+
+// ── runtime (contract/core/runtime.md) ──────────────────────────────────────
+// A workspace runs on exactly one Runtime: the versioned, immutable execution
+// environment *inside* the workspace (Linux userspace, X server, window manager,
+// catalog apps, …). The adapter orchestrates the platform; the runtime provides
+// the execution. They are separate contract boundaries — the Applications
+// capability never learns whether the runtime is a WSL2 image, an OCI container,
+// or a remote host.
+
+/// A runtime's version. `patch` = same behaviour, `minor` = additive, `major` =
+/// breaking. A runtime image is immutable: a change means a NEW version, never a
+/// mutation of the existing one (that is what keeps conformance repeatable).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct RuntimeVersion {
+    pub major: u16,
+    pub minor: u16,
+    pub patch: u16,
+}
+
+impl RuntimeVersion {
+    pub const fn new(major: u16, minor: u16, patch: u16) -> Self {
+        Self { major, minor, patch }
+    }
+}
+
+impl fmt::Display for RuntimeVersion {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "v{}.{}.{}", self.major, self.minor, self.patch)
+    }
+}
+
+/// An immutable, versioned execution environment a workspace runs on. Mirrors the
+/// capability model deliberately: it, too, is a contract boundary that declares
+/// what it supports. `capabilities` are what the *runtime* provides inside the
+/// workspace — negotiated separately from what the adapter can bridge.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct RuntimeDescriptor {
+    pub id: RuntimeId,
+    pub name: String,
+    pub version: RuntimeVersion,
+    /// The immutable base the image is built from (e.g. "alpine-3.19"); part of
+    /// the identity of *what* is executing.
+    pub base: String,
+    /// The immutable identifier of the exact image (a content digest, or any
+    /// stable equivalent). Changing the image content changes this.
+    pub digest: String,
+    pub capabilities: CapabilitySet,
+    pub metadata: HashMap<String, String>,
+}
+
+impl RuntimeDescriptor {
+    /// The default when an adapter declares no runtime of its own: an
+    /// unspecified host environment that provides nothing inside the workspace.
+    /// Real adapters override `runtime()` with a named, versioned image.
+    pub fn host() -> Self {
+        Self {
+            id: RuntimeId::new(),
+            name: "host".into(),
+            version: RuntimeVersion::new(0, 0, 0),
+            base: "host".into(),
+            digest: "none".into(),
+            capabilities: CapabilitySet::none(),
+            metadata: HashMap::new(),
+        }
+    }
+
+    /// The attestation for this runtime, stamped with a start time. The engine
+    /// records this when the workspace starts.
+    pub fn attest(&self, at: u128) -> RuntimeAttestation {
+        RuntimeAttestation {
+            runtime: self.id.clone(),
+            name: self.name.clone(),
+            version: self.version,
+            digest: self.digest.clone(),
+            capabilities: self.capabilities.clone(),
+            at,
+        }
+    }
+}
+
+/// Recorded when a workspace starts: exactly which runtime executed it, pinned to
+/// an immutable `digest`. This is what makes every run and every bug report
+/// reproducible — "Applications fail on wse-linux-x11 v1.3.2 (sha256:…)" names the
+/// precise environment. The engine stamps `at`; the adapter supplies the rest.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct RuntimeAttestation {
+    pub runtime: RuntimeId,
+    pub name: String,
+    pub version: RuntimeVersion,
+    /// The immutable identifier of the exact image that ran (a content digest, or
+    /// any stable equivalent the platform can produce).
+    pub digest: String,
+    pub capabilities: CapabilitySet,
+    pub at: u128,
 }
 
 // ── members (SPEC §4, §15) ──────────────────────────────────────────────────

@@ -102,6 +102,10 @@ pub struct WorkspaceIdentity {
     pub contract_version: ContractVersion,
     /// The most recent isolation attestation the engine evaluated (§18.3).
     pub last_attestation: Option<IsolationAttestation>,
+    /// The immutable execution environment this workspace runs on.
+    pub runtime: RuntimeDescriptor,
+    /// The runtime that actually ran, recorded at start (§runtime attestation).
+    pub runtime_attestation: Option<RuntimeAttestation>,
     pub metadata: HashMap<String, String>,
 }
 
@@ -171,6 +175,10 @@ struct Record {
     capabilities: CapabilitySet,
     contract_version: ContractVersion,
     last_attestation: Option<IsolationAttestation>,
+    /// The runtime this workspace runs on (immutable execution environment).
+    runtime: RuntimeDescriptor,
+    /// Recorded when the workspace starts: exactly which runtime image ran.
+    runtime_attestation: Option<RuntimeAttestation>,
     metadata: HashMap<String, String>,
     /// Per-workspace monotonic event sequence — the ordering authority (§events).
     next_seq: u64,
@@ -241,10 +249,12 @@ impl<A: WorkspaceAdapter> Engine<A> {
         };
         self.adapter.create(&def)?;
 
-        // Capability negotiation: the workspace provides what the adapter
-        // declares (SPEC §18.2). The engine will decide on capabilities, never
-        // on platform names.
-        let capabilities = self.adapter.capabilities();
+        // Capability negotiation, two concerns: the adapter declares what it can
+        // *bridge* (SPEC §18.2); the runtime declares what it *provides* inside
+        // the workspace. The workspace usably provides the intersection — both
+        // must agree. See contract/core/runtime.md.
+        let runtime = self.adapter.runtime();
+        let capabilities = self.adapter.capabilities().intersect(&runtime.capabilities);
         let owner = cfg.owner.unwrap_or_default();
         let members = vec![Member {
             id: owner.clone(),
@@ -264,6 +274,8 @@ impl<A: WorkspaceAdapter> Engine<A> {
                 capabilities,
                 contract_version: v,
                 last_attestation: None,
+                runtime,
+                runtime_attestation: None,
                 metadata: cfg.metadata,
                 next_seq: 0,
             },
@@ -320,6 +332,8 @@ impl<A: WorkspaceAdapter> Engine<A> {
             capabilities: r.capabilities,
             contract_version: r.contract_version,
             last_attestation: r.last_attestation.clone(),
+            runtime: r.runtime.clone(),
+            runtime_attestation: r.runtime_attestation.clone(),
             metadata: r.metadata.clone(),
         })
     }
@@ -346,8 +360,26 @@ impl<A: WorkspaceAdapter> Engine<A> {
                 details,
             });
         }
+        // Isolation accepted → record which runtime actually ran. This is what
+        // makes a run reproducible: the exact image digest + version + time.
+        if let Some(rec) = self.workspaces.get_mut(id) {
+            rec.runtime_attestation = Some(rec.runtime.attest(now_nanos()));
+        }
         self.set_state(id, WorkspaceState::Running);
         Ok(())
+    }
+
+    /// The runtime this workspace runs on (its immutable execution environment).
+    pub fn runtime(&self, id: &WorkspaceId) -> Option<RuntimeDescriptor> {
+        self.workspaces.get(id).map(|r| r.runtime.clone())
+    }
+
+    /// The runtime attestation recorded when this workspace started — the exact
+    /// image (digest, version) that ran, and when. `None` until first started.
+    pub fn runtime_attestation(&self, id: &WorkspaceId) -> Option<RuntimeAttestation> {
+        self.workspaces
+            .get(id)
+            .and_then(|r| r.runtime_attestation.clone())
     }
 
     /// Suspend execution. The workspace record survives (SPEC §3.2).
