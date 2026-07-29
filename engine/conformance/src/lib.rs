@@ -17,8 +17,8 @@
 use std::collections::HashMap;
 
 use wse_common::{
-    AccessRight, Actor, AppSpec, Capability, ClipboardItem, EventKind, EventSource, Persistence,
-    ResourceKind, Role, WorkspaceState, WseError,
+    AccessRight, Actor, AppSpec, Capability, CapabilityState, ClipboardItem, DeviceClass, EventKind,
+    EventSource, Persistence, ResourceKind, Role, WorkspaceState, WseError,
 };
 use wse_contract::{WorkspaceAdapter, CONTRACT_VERSION};
 use wse_engine::{Engine, WorkspaceConfig};
@@ -256,7 +256,12 @@ where
                 | EventKind::ResourceCreated { .. }
                 | EventKind::ResourceModified { .. }
                 | EventKind::ResourceRead { .. }
-                | EventKind::ResourceDeleted { .. } => {}
+                | EventKind::ResourceDeleted { .. }
+                | EventKind::DeviceAttached { .. }
+                | EventKind::DeviceDetached { .. }
+                | EventKind::DeviceRequested { .. }
+                | EventKind::DeviceReleased { .. }
+                | EventKind::CapabilityStateChanged { .. } => {}
             }
         }
         Ok(())
@@ -547,6 +552,154 @@ where
     r
 }
 
+/// SPEC §12 — the Devices capability (external resources). See
+/// contract/capabilities/devices.md. Runs only for adapters declaring Devices.
+pub fn run_devices<A, F>(make: F) -> ConformanceReport
+where
+    A: WorkspaceAdapter,
+    F: Fn() -> A,
+{
+    let mut r = ConformanceReport::default();
+
+    let use_device_collaborator = || {
+        let mut c = cfg();
+        let mut rights = HashMap::new();
+        rights.insert(AccessRight::UseDevice, false);
+        c.collaborator_rights = rights;
+        c
+    };
+
+    r.check("devices/none_by_default", || {
+        // I1 — a fresh workspace has no devices (§12.1).
+        let mut e = Engine::new(make());
+        let ws = e.create_workspace(cfg()).map_err(|e| e.to_string())?;
+        let n = e.device_enumerate(&ws).map_err(|e| e.to_string())?.len();
+        ok(n == 0, format!("expected no devices by default, got {n}"))
+    });
+
+    r.check("devices/enumerate_lists_available", || {
+        let mut e = Engine::new(make());
+        let ws = e.create_workspace(cfg()).map_err(|e| e.to_string())?;
+        let d = e
+            .device_attach(&ws, DeviceClass::Printer, "Office Printer")
+            .map_err(|e| e.to_string())?;
+        let found = e
+            .device_enumerate(&ws)
+            .map_err(|e| e.to_string())?
+            .iter()
+            .any(|x| x.id == d.id);
+        ok(found, "an attached device must appear in enumerate")
+    });
+
+    r.check("devices/non_available_is_not_found", || {
+        // I2 — requesting a device that isn't available is NotFound, not denied.
+        let mut e = Engine::new(make());
+        let ws = e.create_workspace(cfg()).map_err(|e| e.to_string())?;
+        let ghost = wse_common::DeviceId::new();
+        match e.device_request(&ws, Role::Owner, &ghost) {
+            Err(WseError::NotFound(_)) => Ok(()),
+            other => Err(format!("expected NotFound, got {other:?}")),
+        }
+    });
+
+    r.check("devices/observer_refused_request", || {
+        // I6 — Observer touches nothing.
+        let mut e = Engine::new(make());
+        let ws = e.create_workspace(cfg()).map_err(|e| e.to_string())?;
+        let d = e
+            .device_attach(&ws, DeviceClass::Camera, "Cam")
+            .map_err(|e| e.to_string())?;
+        match e.device_request(&ws, Role::Observer, &d.id) {
+            Err(WseError::PermissionDenied { .. }) => Ok(()),
+            other => Err(format!("Observer request must be denied, got {other:?}")),
+        }
+    });
+
+    r.check("devices/collaborator_needs_use_right", || {
+        let mut e = Engine::new(make());
+        let ws = e
+            .create_workspace(use_device_collaborator())
+            .map_err(|e| e.to_string())?;
+        let d = e
+            .device_attach(&ws, DeviceClass::Camera, "Cam")
+            .map_err(|e| e.to_string())?;
+        match e.device_request(&ws, Role::Collaborator, &d.id) {
+            Err(WseError::PermissionDenied { .. }) => Ok(()),
+            other => Err(format!("Collaborator w/o UseDevice must be denied, got {other:?}")),
+        }
+    });
+
+    r.check("devices/request_then_release", || {
+        // I4 — Owner request yields a handle; release ends it.
+        let mut e = Engine::new(make());
+        let ws = e.create_workspace(cfg()).map_err(|e| e.to_string())?;
+        let d = e
+            .device_attach(&ws, DeviceClass::Microphone, "Mic")
+            .map_err(|e| e.to_string())?;
+        let handle = e
+            .device_request(&ws, Role::Owner, &d.id)
+            .map_err(|e| e.to_string())?;
+        if handle.device != d.id {
+            return Err("handle must reference the requested device".into());
+        }
+        let released = e
+            .device_release(&ws, Role::Owner, &d.id)
+            .map_err(|e| e.to_string())?;
+        ok(released, "release must report a handle was held")
+    });
+
+    r.check("devices/isolated_per_workspace", || {
+        // I7 — a device in one workspace is invisible in another.
+        let mut e = Engine::new(make());
+        let a = e.create_workspace(cfg()).map_err(|e| e.to_string())?;
+        let b = e.create_workspace(cfg()).map_err(|e| e.to_string())?;
+        e.device_attach(&a, DeviceClass::Usb, "Stick")
+            .map_err(|e| e.to_string())?;
+        let n = e.device_enumerate(&b).map_err(|e| e.to_string())?.len();
+        ok(n == 0, "workspace B must not see workspace A's devices")
+    });
+
+    r.check("devices/state_reflects_availability", || {
+        let mut e = Engine::new(make());
+        let ws = e.create_workspace(cfg()).map_err(|e| e.to_string())?;
+        let empty = e
+            .capability_state(&ws, Capability::Devices)
+            .map_err(|e| e.to_string())?;
+        if empty != CapabilityState::Unavailable {
+            return Err(format!("no devices should be Unavailable, got {empty:?}"));
+        }
+        e.device_attach(&ws, DeviceClass::Speaker, "Spk")
+            .map_err(|e| e.to_string())?;
+        let now = e
+            .capability_state(&ws, Capability::Devices)
+            .map_err(|e| e.to_string())?;
+        ok(
+            now == CapabilityState::Available,
+            format!("with a device should be Available, got {now:?}"),
+        )
+    });
+
+    r.check("devices/state_change_emits_event", || {
+        // I8 — availability flip flows through the CORE event envelope.
+        let mut e = Engine::new(make());
+        let ws = e.create_workspace(cfg()).map_err(|e| e.to_string())?;
+        e.device_attach(&ws, DeviceClass::Gpu, "GPU")
+            .map_err(|e| e.to_string())?;
+        let emitted = e.events_for(&ws).iter().any(|ev| {
+            matches!(
+                ev.kind,
+                EventKind::CapabilityStateChanged {
+                    capability: Capability::Devices,
+                    ..
+                }
+            )
+        });
+        ok(emitted, "attaching the first device must emit CapabilityStateChanged")
+    });
+
+    r
+}
+
 /// Run the full conformance suite an adapter is *eligible* for: the mandatory
 /// core, plus one suite per declared capability. An adapter is never tested for
 /// a capability it didn't declare (SPEC §18.2). This is capability negotiation
@@ -570,7 +723,10 @@ where
     if caps.supports(Capability::Storage) {
         report.absorb(run_storage(&make));
     }
-    // Devices, Network, Audio, Camera suites slot in here as each capability's
-    // mini-spec is written — never before.
+    if caps.supports(Capability::Devices) {
+        report.absorb(run_devices(&make));
+    }
+    // Network, Audio, Camera suites slot in here as each capability's mini-spec
+    // is written — never before.
     report
 }

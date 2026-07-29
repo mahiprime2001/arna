@@ -111,6 +111,11 @@ pub trait WorkspaceAdapter {
     fn storage(&mut self) -> Option<&mut dyn StorageCapability> {
         None
     }
+
+    /// SPEC §12 — the Devices capability (external resources), if provided.
+    fn devices(&mut self) -> Option<&mut dyn DevicesCapability> {
+        None
+    }
 }
 
 /// SPEC §9 — the mechanical Clipboard interface. The adapter reads/writes the
@@ -144,4 +149,30 @@ pub trait StorageCapability {
     fn resource_delete(&mut self, id: &WorkspaceId, resource: &ResourceId) -> Result<bool>;
     /// Metadata for every resource in the workspace (no bytes).
     fn resource_list(&self, id: &WorkspaceId) -> Result<Vec<ResourceMetadata>>;
+}
+
+/// SPEC §12 — the mechanical Devices interface: external host resources made
+/// available to a workspace. Discovery, authorization, and usage are separate.
+/// The adapter never surfaces host-machine camera/mic (§7.3). Policy (UseDevice
+/// right) lives in the engine. See contract/capabilities/devices.md.
+pub trait DevicesCapability {
+    /// Host makes a device available to the workspace (§12.1/§12.4).
+    fn device_attach(
+        &mut self,
+        id: &WorkspaceId,
+        class: DeviceClass,
+        name: String,
+    ) -> Result<DeviceDescriptor>;
+    /// Host withdraws a device. Returns whether it was available.
+    fn device_detach(&mut self, id: &WorkspaceId, device: &DeviceId) -> Result<bool>;
+    /// Discovery: the devices currently available to the workspace. Non-available
+    /// devices never appear (§12.1, §6.5).
+    fn device_enumerate(&self, id: &WorkspaceId) -> Result<Vec<DeviceDescriptor>>;
+    /// Authorization mechanics: yield a handle for an available device.
+    /// `NotFound` if the device is not available.
+    fn device_request(&mut self, id: &WorkspaceId, device: &DeviceId) -> Result<DeviceHandle>;
+    /// End a granted use. Returns whether a handle was held.
+    fn device_release(&mut self, id: &WorkspaceId, device: &DeviceId) -> Result<bool>;
+    /// The capability's current contract state for this workspace.
+    fn device_state(&self, id: &WorkspaceId) -> Result<CapabilityState>;
 }

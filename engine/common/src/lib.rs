@@ -2,6 +2,7 @@
 //! deps. Everything above the adapter boundary speaks in these types.
 
 use std::collections::hash_map::DefaultHasher;
+use std::collections::HashMap;
 use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -62,6 +63,7 @@ id_type!(WindowId);
 id_type!(MemberId);
 id_type!(ResourceId);
 id_type!(EventId);
+id_type!(DeviceId);
 
 fn now_nanos() -> u128 {
     SystemTime::now()
@@ -138,6 +140,8 @@ pub enum AccessRight {
     ClipboardRead,
     ClipboardWrite,
     FileTransfer,
+    /// Use an external device made available to the workspace (§12.4 consent).
+    UseDevice,
 }
 
 /// SPEC §4.6. Where unspecified, the answer is no (§6.1).
@@ -183,8 +187,8 @@ impl Capability {
         use CapabilityStatus::*;
         match self {
             Applications | Windows => Stable,
-            Clipboard | Storage => Draft,
-            Devices | Network | Audio | Camera => Planned,
+            Clipboard | Storage | Devices => Draft,
+            Network | Audio | Camera => Planned,
         }
     }
 }
@@ -198,6 +202,19 @@ pub enum CapabilityStatus {
     Draft,
     /// Named in the model; not yet specified.
     Planned,
+}
+
+/// The runtime state of a capability in a workspace — a **contract** state, not
+/// a platform state. Adapters translate platform reality into these (a crashed
+/// driver -> Degraded, an unplugged device -> Unavailable) and never leak
+/// platform terminology. See contract/capabilities/README.md.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum CapabilityState {
+    Unavailable,
+    Available,
+    ReadOnly,
+    Degraded,
+    Offline,
 }
 
 /// The set of capabilities an adapter/workspace declares (SPEC §18.2). Declared
@@ -362,6 +379,44 @@ pub struct ResourceMetadata {
     pub size: u64,
 }
 
+// ── devices / external resources (SPEC §7.2/§7.3, §12) ──────────────────────
+// The Devices capability represents host-provided resources external to the
+// workspace. Device classes are DATA, not capabilities. Discovery (descriptor),
+// authorization (handle), and usage are separate. See
+// contract/capabilities/devices.md.
+
+/// A class of external device. Data, not a capability — a new class never grows
+/// the contract.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum DeviceClass {
+    Camera,
+    Microphone,
+    Speaker,
+    Display,
+    Printer,
+    Usb,
+    Gpu,
+    Bluetooth,
+    Nfc,
+}
+
+/// An immutable description of a device. NOT a permission, NOT a session, NOT a
+/// handle — those are separate concepts.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct DeviceDescriptor {
+    pub id: DeviceId,
+    pub class: DeviceClass,
+    pub name: String,
+    pub metadata: HashMap<String, String>,
+}
+
+/// The result of an authorized `request` — the right to use a device. Separate
+/// from the descriptor (which merely describes) and from any session.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct DeviceHandle {
+    pub device: DeviceId,
+}
+
 // ── resource limits (SPEC §7) ───────────────────────────────────────────────
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub struct ResourceLimits {
@@ -439,6 +494,25 @@ pub enum EventKind {
     },
     ResourceDeleted {
         resource: ResourceId,
+    },
+    // Devices (§12) — attach/detach/request/release, all metadata only
+    DeviceAttached {
+        device: DeviceId,
+    },
+    DeviceDetached {
+        device: DeviceId,
+    },
+    DeviceRequested {
+        device: DeviceId,
+    },
+    DeviceReleased {
+        device: DeviceId,
+    },
+    /// A capability's contract state changed (e.g. Devices Available -> Degraded).
+    CapabilityStateChanged {
+        capability: Capability,
+        from: CapabilityState,
+        to: CapabilityState,
     },
 }
 

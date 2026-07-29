@@ -6,12 +6,12 @@
 //! A mock is *trivially* sealed — there is no host for it to leak to — so it
 //! reports `sealed: true`. Real adapters must actively prove their seal.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use wse_common::*;
 use wse_contract::{
-    ClipboardCapability, ContractVersion, IsolationAttestation, StorageCapability, WorkspaceAdapter,
-    WorkspaceDef, CONTRACT_VERSION,
+    ClipboardCapability, ContractVersion, DevicesCapability, IsolationAttestation,
+    StorageCapability, WorkspaceAdapter, WorkspaceDef, CONTRACT_VERSION,
 };
 
 #[derive(Default)]
@@ -25,6 +25,10 @@ struct MockWorkspace {
     /// SPEC §8 — the workspace's own persistent resources, isolated per
     /// workspace. A deleted ResourceId is removed and never reused.
     resources: HashMap<ResourceId, (ResourceMetadata, Vec<u8>)>,
+    /// SPEC §12 — devices made available to this workspace, and the handles
+    /// currently held. Host machine camera/mic are never surfaced here (§7.3).
+    devices: HashMap<DeviceId, DeviceDescriptor>,
+    device_handles: HashSet<DeviceId>,
 }
 
 #[derive(Default)]
@@ -66,6 +70,7 @@ impl WorkspaceAdapter for MockAdapter {
             .with(Capability::Windows)
             .with(Capability::Clipboard)
             .with(Capability::Storage)
+            .with(Capability::Devices)
     }
 
     fn create(&mut self, def: &WorkspaceDef) -> Result<()> {
@@ -141,6 +146,65 @@ impl WorkspaceAdapter for MockAdapter {
 
     fn storage(&mut self) -> Option<&mut dyn StorageCapability> {
         Some(self)
+    }
+
+    fn devices(&mut self) -> Option<&mut dyn DevicesCapability> {
+        Some(self)
+    }
+}
+
+impl DevicesCapability for MockAdapter {
+    fn device_attach(
+        &mut self,
+        id: &WorkspaceId,
+        class: DeviceClass,
+        name: String,
+    ) -> Result<DeviceDescriptor> {
+        let ws = self.ws_mut(id)?;
+        let desc = DeviceDescriptor {
+            id: DeviceId::new(),
+            class,
+            name,
+            metadata: HashMap::new(),
+        };
+        ws.devices.insert(desc.id.clone(), desc.clone());
+        Ok(desc)
+    }
+
+    fn device_detach(&mut self, id: &WorkspaceId, device: &DeviceId) -> Result<bool> {
+        let ws = self.ws_mut(id)?;
+        ws.device_handles.remove(device);
+        Ok(ws.devices.remove(device).is_some())
+    }
+
+    fn device_enumerate(&self, id: &WorkspaceId) -> Result<Vec<DeviceDescriptor>> {
+        Ok(self.ws(id)?.devices.values().cloned().collect())
+    }
+
+    fn device_request(&mut self, id: &WorkspaceId, device: &DeviceId) -> Result<DeviceHandle> {
+        let ws = self.ws_mut(id)?;
+        if !ws.devices.contains_key(device) {
+            // Non-available -> NotFound (undetectable, §12.1/§6.5).
+            return Err(WseError::NotFound(format!("device {device}")));
+        }
+        ws.device_handles.insert(device.clone());
+        Ok(DeviceHandle {
+            device: device.clone(),
+        })
+    }
+
+    fn device_release(&mut self, id: &WorkspaceId, device: &DeviceId) -> Result<bool> {
+        Ok(self.ws_mut(id)?.device_handles.remove(device))
+    }
+
+    fn device_state(&self, id: &WorkspaceId) -> Result<CapabilityState> {
+        // Availability-derived: no devices -> Unavailable, else Available.
+        let ws = self.ws(id)?;
+        Ok(if ws.devices.is_empty() {
+            CapabilityState::Unavailable
+        } else {
+            CapabilityState::Available
+        })
     }
 }
 

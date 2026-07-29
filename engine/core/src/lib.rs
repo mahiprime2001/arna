@@ -74,6 +74,7 @@ impl WorkspaceConfig {
         rights.insert(AccessRight::ClipboardRead, false);
         rights.insert(AccessRight::ClipboardWrite, false);
         rights.insert(AccessRight::FileTransfer, false);
+        rights.insert(AccessRight::UseDevice, false);
         Self {
             name: name.into(),
             persistence,
@@ -636,6 +637,200 @@ impl<A: WorkspaceAdapter> Engine<A> {
             .storage()
             .ok_or(WseError::CapabilityUnavailable(Capability::Storage))?;
         store.resource_list(id)
+    }
+
+    // ── Devices capability (SPEC §12) ────────────────────────────────────────
+    // External host resources. Discovery (enumerate) is an ungated read of what
+    // is already available; authorization (request/release) is gated on the
+    // UseDevice right; attach/detach are host actions. Capability STATE changes
+    // flow through the core event envelope. See contract/capabilities/devices.md.
+
+    fn require_capability(&self, id: &WorkspaceId, cap: Capability) -> Result<()> {
+        let rec = self
+            .workspaces
+            .get(id)
+            .ok_or_else(|| WseError::NotFound(format!("workspace {id}")))?;
+        if !rec.capabilities.supports(cap) {
+            return Err(WseError::CapabilityUnavailable(cap));
+        }
+        Ok(())
+    }
+
+    fn devices_state(&mut self, id: &WorkspaceId) -> Result<CapabilityState> {
+        let dev = self
+            .adapter
+            .devices()
+            .ok_or(WseError::CapabilityUnavailable(Capability::Devices))?;
+        dev.device_state(id)
+    }
+
+    /// The current contract state of a capability in a workspace (§capabilities).
+    pub fn capability_state(&mut self, id: &WorkspaceId, cap: Capability) -> Result<CapabilityState> {
+        self.require_capability(id, cap)?;
+        match cap {
+            Capability::Devices => self.devices_state(id),
+            // Other capabilities are Available when declared until they model
+            // richer states of their own.
+            _ => Ok(CapabilityState::Available),
+        }
+    }
+
+    /// Host makes a device available to the workspace (§12.1/§12.4). Emits
+    /// DeviceAttached, and CapabilityStateChanged if availability flipped.
+    pub fn device_attach(
+        &mut self,
+        id: &WorkspaceId,
+        class: DeviceClass,
+        name: impl Into<String>,
+    ) -> Result<DeviceDescriptor> {
+        self.require_capability(id, Capability::Devices)?;
+        let before = self.devices_state(id)?;
+        let desc = {
+            let dev = self
+                .adapter
+                .devices()
+                .ok_or(WseError::CapabilityUnavailable(Capability::Devices))?;
+            dev.device_attach(id, class, name.into())?
+        };
+        let after = self.devices_state(id)?;
+        self.emit(
+            id,
+            Actor::System,
+            EventSource::Capability(Capability::Devices),
+            EventKind::DeviceAttached {
+                device: desc.id.clone(),
+            },
+        );
+        self.emit_state_change(id, Capability::Devices, before, after);
+        Ok(desc)
+    }
+
+    /// Host withdraws a device. Emits DeviceDetached (+ state change if flipped).
+    pub fn device_detach(&mut self, id: &WorkspaceId, device: &DeviceId) -> Result<bool> {
+        self.require_capability(id, Capability::Devices)?;
+        let before = self.devices_state(id)?;
+        let existed = {
+            let dev = self
+                .adapter
+                .devices()
+                .ok_or(WseError::CapabilityUnavailable(Capability::Devices))?;
+            dev.device_detach(id, device)?
+        };
+        let after = self.devices_state(id)?;
+        self.emit(
+            id,
+            Actor::System,
+            EventSource::Capability(Capability::Devices),
+            EventKind::DeviceDetached {
+                device: device.clone(),
+            },
+        );
+        self.emit_state_change(id, Capability::Devices, before, after);
+        Ok(existed)
+    }
+
+    /// Discovery: the devices available to the workspace. Ungated read; a
+    /// non-available device never appears (§12.1, §6.5).
+    pub fn device_enumerate(&mut self, id: &WorkspaceId) -> Result<Vec<DeviceDescriptor>> {
+        self.require_capability(id, Capability::Devices)?;
+        let dev = self
+            .adapter
+            .devices()
+            .ok_or(WseError::CapabilityUnavailable(Capability::Devices))?;
+        dev.device_enumerate(id)
+    }
+
+    /// Authorization + usage: a member requests to use a device. Gated on the
+    /// UseDevice right (Observer never, §4.6.1). `NotFound` if not available.
+    pub fn device_request(
+        &mut self,
+        id: &WorkspaceId,
+        role: Role,
+        device: &DeviceId,
+    ) -> Result<DeviceHandle> {
+        self.gate_device_use(id, role)?;
+        let handle = {
+            let dev = self
+                .adapter
+                .devices()
+                .ok_or(WseError::CapabilityUnavailable(Capability::Devices))?;
+            dev.device_request(id, device)?
+        };
+        self.emit(
+            id,
+            Actor::Member(role),
+            EventSource::Capability(Capability::Devices),
+            EventKind::DeviceRequested {
+                device: device.clone(),
+            },
+        );
+        Ok(handle)
+    }
+
+    /// End a granted use. Gated on the UseDevice right.
+    pub fn device_release(&mut self, id: &WorkspaceId, role: Role, device: &DeviceId) -> Result<bool> {
+        self.gate_device_use(id, role)?;
+        let released = {
+            let dev = self
+                .adapter
+                .devices()
+                .ok_or(WseError::CapabilityUnavailable(Capability::Devices))?;
+            dev.device_release(id, device)?
+        };
+        self.emit(
+            id,
+            Actor::Member(role),
+            EventSource::Capability(Capability::Devices),
+            EventKind::DeviceReleased {
+                device: device.clone(),
+            },
+        );
+        Ok(released)
+    }
+
+    fn gate_device_use(&self, id: &WorkspaceId, role: Role) -> Result<()> {
+        let rec = self
+            .workspaces
+            .get(id)
+            .ok_or_else(|| WseError::NotFound(format!("workspace {id}")))?;
+        if !rec.capabilities.supports(Capability::Devices) {
+            return Err(WseError::CapabilityUnavailable(Capability::Devices));
+        }
+        let allowed = self.authorizer.allows(
+            &AuthContext::role(role),
+            &GrantView {
+                collaborator_rights: &rec.collaborator_rights,
+            },
+            AccessRight::UseDevice,
+        );
+        if !allowed {
+            return Err(WseError::PermissionDenied {
+                right: AccessRight::UseDevice,
+                role,
+            });
+        }
+        Ok(())
+    }
+
+    fn emit_state_change(
+        &mut self,
+        id: &WorkspaceId,
+        cap: Capability,
+        from: CapabilityState,
+        to: CapabilityState,
+    ) {
+        if from != to {
+            self.emit(
+                id,
+                Actor::System,
+                EventSource::Capability(cap),
+                EventKind::CapabilityStateChanged {
+                    capability: cap,
+                    from,
+                    to,
+                },
+            );
+        }
     }
 
     /// SPEC §5.5 — destroy irrecoverably.

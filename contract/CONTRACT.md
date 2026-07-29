@@ -65,6 +65,7 @@ the maturity table.
 
 - [capabilities/clipboard.md](capabilities/clipboard.md) — Draft (§9)
 - [capabilities/storage.md](capabilities/storage.md) — Draft (§8)
+- [capabilities/devices.md](capabilities/devices.md) — Draft (§12)
 - Applications, Windows — Stable (specified in-engine + core conformance)
 
 ## The rules that bind it together

@@ -17,7 +17,7 @@ contributors later — of which parts of the contract are expected to still move
 | Windows      | Stable  | (in engine + core conformance) |
 | **Clipboard**| **Draft** | [clipboard.md](clipboard.md) |
 | **Storage**  | **Draft** | [storage.md](storage.md) |
-| Devices      | Planned | — |
+| **Devices**  | **Draft** | [devices.md](devices.md) |
 | Network      | Planned | — |
 | Audio        | Planned | — |
 | Camera       | Planned | — |
@@ -48,14 +48,13 @@ passed its suite and the shape has held.
 
 Two ideas to introduce when they earn their place — deliberately *not* built yet:
 
-- **Capability states, at the contract level.** A capability is richer than
-  supported/absent. A workspace's Clipboard might be `Available`, `ReadOnly`,
-  `TemporarilyUnavailable`, or `Degraded`; a future Storage might be `Mounted`,
-  `ReadOnly`, `QuotaExceeded`, or `Offline`. These are **contract** states,
-  never platform states — the adapter maps its reality into the contract's
-  vocabulary, same as it maps errors. Today capabilities are binary
-  (`CapabilitySet::supports`); the richer state model lands per-capability when a
-  capability actually needs it.
+- **Capability states, at the contract level.** *(Now real, introduced with
+  Devices.)* `CapabilityState` (`Unavailable`/`Available`/`ReadOnly`/`Degraded`/
+  `Offline`) is a **contract** state, never a platform state — the adapter maps
+  its reality into it (a crashed driver → Degraded), same as it maps errors.
+  `engine.capability_state(ws, cap)` reports it, and a change emits
+  `CapabilityStateChanged` through the core event envelope. Devices uses it
+  today; other capabilities adopt it when they need richer states.
 
 - **Independent capability versioning.** A capability may carry its own
   `CapabilityId` + version + maturity, independent of the Workspace Contract

@@ -210,6 +210,10 @@ fn clipboard_op_on_non_declaring_adapter_is_unavailable() {
         engine.storage_create(&ws, Role::Owner, "x", wse_common::ResourceKind::Blob),
         Err(WseError::CapabilityUnavailable(Capability::Storage))
     ));
+    assert!(matches!(
+        engine.device_enumerate(&ws),
+        Err(WseError::CapabilityUnavailable(Capability::Devices))
+    ));
 }
 
 #[test]
