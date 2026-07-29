@@ -1,0 +1,6 @@
+# These are baked into a Linux image and run by /bin/sh — they MUST stay LF, or a
+# rebuild on a CRLF checkout would produce a broken (CRLF) launcher. Protects
+# runtime reproducibility (acceptance criterion #1).
+*.sh text eol=lf
+apps.conf text eol=lf
+build.sh text eol=lf
