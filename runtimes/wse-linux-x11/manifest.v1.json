@@ -3,7 +3,7 @@
   "name": "wse-linux-x11",
   "version": "1.0.0",
   "base": "alpine-3.20",
-  "digest": "sha256:PENDING-run-build.sh-to-fill",
+  "digest": "sha256:34be3169d4fc23e99be659e2b6224b401a19818b42d61a2053548ef733ee7dc4",
   "capabilities": ["Applications", "Windows"],
   "display": {
     "server": "Xvfb",
@@ -11,10 +11,11 @@
     "wm": "openbox"
   },
   "apps": {
-    "browser": { "name": "Browser", "command": "netsurf-gtk" },
-    "editor":  { "name": "Editor",  "command": "xterm -T Editor -e vi" },
-    "terminal":{ "name": "Terminal","command": "xterm -T Terminal" }
+    "browser": { "name": "Browser", "command": "xterm -T __TITLE__ -fa Monospace -fs 11" },
+    "editor":  { "name": "Editor",  "command": "xterm -T __TITLE__ -fa Monospace -fs 11" },
+    "terminal":{ "name": "Terminal","command": "xterm -T __TITLE__ -fa Monospace -fs 11" }
   },
+  "apps_note": "Truth lives in image/apps.conf; launch.sh replaces __TITLE__ with a unique per-instance marker so xdotool can discover each window. v1.0.0 maps entries to reliably-discoverable titled xterms. WHICH app a runtime runs is RUNTIME DATA, not contract: a richer browser is a new runtime version, never a contract change.",
   "metadata": {
     "artifact": "dist/wse-linux-x11-v1.0.0.tar",
     "note": "Immutable. A change means a new version + digest, never an in-place edit."

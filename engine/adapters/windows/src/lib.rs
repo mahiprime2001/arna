@@ -12,18 +12,23 @@
 //! The mechanics (create/harden/verify/destroy via WSL2) are the proven approach
 //! from the Go reference in `services/wsl`, ported as a consumer of the contract.
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::Command;
 
 use wse_common::*;
 use wse_contract::{
-    ContractVersion, IsolationAttestation, WorkspaceAdapter, WorkspaceDef, CONTRACT_VERSION,
+    ApplicationsCapability, ContractVersion, IsolationAttestation, WindowsCapability,
+    WorkspaceAdapter, WorkspaceDef, CONTRACT_VERSION,
 };
 
-/// A tiny Alpine rootfs, fetched once. This is a v1 stand-in to make the pipeline
-/// real; a purpose-built image is a later refinement behind this same adapter.
-const ALPINE_URL: &str =
-    "https://dl-cdn.alpinelinux.org/alpine/v3.20/releases/x86_64/alpine-minirootfs-3.20.3-x86_64.tar.gz";
+/// The immutable runtime image this adapter imports (built by
+/// `runtimes/wse-linux-x11/build.sh`). Pinned by version + digest; a change is a
+/// new version, never an in-place edit (contract/core/runtime.md).
+const RUNTIME_VERSION: RuntimeVersion = RuntimeVersion { major: 1, minor: 0, patch: 0 };
+const RUNTIME_DIGEST: &str =
+    "sha256:34be3169d4fc23e99be659e2b6224b401a19818b42d61a2053548ef733ee7dc4";
+const RUNTIME_IMAGE_FILE: &str = "wse-linux-x11-v1.0.0.tar";
 
 /// Every distro this adapter owns is prefixed, so a user's own WSL installs are
 /// never touched.
@@ -33,12 +38,30 @@ fn distro_name(id: &WorkspaceId) -> String {
     format!("{PREFIX}{id}")
 }
 
+/// Per-workspace runtime state the adapter tracks. Platform ids (X window ids)
+/// live here and never escape: the engine sees only contract ids.
+#[derive(Default)]
+struct WsState {
+    instances: Vec<ApplicationInstance>,
+    windows: Vec<XWindow>,
+}
+
+/// A window the adapter opened: its contract `id` mapped to the private X id.
+struct XWindow {
+    id: WindowId,
+    xid: String,
+    app: String,   // the catalog entry it came from
+    title: String, // the contract title (the descriptor's name)
+}
+
 /// The isolation config written into every workspace: automount off (no host
 /// filesystem) and interop off (cannot launch host .exe). See ADR-006.
 const WSL_CONF: &str = "[automount]\nenabled = false\nmountFsTab = false\n\n[interop]\nenabled = false\nappendWindowsPath = false\n\n[network]\ngenerateResolvConf = true\n";
 
 pub struct WindowsAdapter {
     data_dir: PathBuf,
+    image: PathBuf,
+    state: HashMap<WorkspaceId, WsState>,
 }
 
 impl Default for WindowsAdapter {
@@ -51,7 +74,16 @@ impl WindowsAdapter {
     pub fn new() -> Self {
         let data_dir = std::env::temp_dir().join("arna-workspaces");
         let _ = std::fs::create_dir_all(&data_dir);
-        Self { data_dir }
+        // The runtime image: explicit via WSE_RUNTIME_IMAGE, else alongside the
+        // workspace data dir. Resolved here; required at create().
+        let image = std::env::var("WSE_RUNTIME_IMAGE")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| data_dir.join(RUNTIME_IMAGE_FILE));
+        Self {
+            data_dir,
+            image,
+            state: HashMap::new(),
+        }
     }
 
     // ── wsl.exe plumbing ─────────────────────────────────────────────────────
@@ -89,22 +121,17 @@ impl WindowsAdapter {
         ])
     }
 
-    /// The cached rootfs path, fetched once via curl.exe (bundled on Windows).
-    fn rootfs(&self) -> Result<PathBuf> {
-        let dst = self.data_dir.join("rootfs-alpine.tar.gz");
-        if dst.metadata().map(|m| m.len() > 0).unwrap_or(false) {
-            return Ok(dst);
+    /// The runtime image to import. Required — the runtime *is* the image.
+    fn runtime_image(&self) -> Result<&PathBuf> {
+        if self.image.exists() {
+            Ok(&self.image)
+        } else {
+            Err(WseError::ResourceUnavailable(format!(
+                "runtime image not found at {} — build it with runtimes/wse-linux-x11/build.sh \
+                 or set WSE_RUNTIME_IMAGE",
+                self.image.display()
+            )))
         }
-        let status = Command::new("curl.exe")
-            .args(["-sL", "--max-time", "180", "-o"])
-            .arg(&dst)
-            .arg(ALPINE_URL)
-            .status()
-            .map_err(|e| WseError::Internal(format!("curl.exe not runnable: {e}")))?;
-        if !status.success() {
-            return Err(WseError::ResourceUnavailable("could not fetch rootfs".into()));
-        }
-        Ok(dst)
     }
 
     /// Write the isolation config and terminate so it takes effect on next start.
@@ -172,32 +199,35 @@ impl WorkspaceAdapter for WindowsAdapter {
     }
 
     fn capabilities(&self) -> CapabilitySet {
-        // What this adapter can *bridge*. v1: lifecycle + isolation only. As the
-        // runtime gains a display stack we declare Applications/Windows here and
-        // the workspace's effective set is this ∩ runtime.capabilities.
+        // What this adapter can *bridge*. The effective set a workspace provides
+        // is this ∩ runtime.capabilities — both the adapter and the runtime must
+        // agree (contract/core/runtime.md).
         CapabilitySet::none()
+            .with(Capability::Applications)
+            .with(Capability::Windows)
     }
 
     fn runtime(&self) -> RuntimeDescriptor {
-        // wse-linux-x11: the WSL2 Linux runtime this adapter imports. v0.1.0 is
-        // the bare rootfs — no display stack yet, so it provides nothing inside
-        // the workspace. Building the immutable Runtime v1 image (Xvfb + WM +
-        // wmctrl + catalog apps) bumps this to v1.0.0 and declares Applications.
-        // See runtimes/wse-linux-x11/ and contract/core/runtime.md.
+        // wse-linux-x11 v1.0.0: the immutable WSL2 Linux image this adapter
+        // imports — Xvfb + openbox + xterm + xdotool + fonts + a catalog launcher.
+        // It PROVIDES Applications + Windows inside the workspace; the adapter
+        // BRIDGES them. See runtimes/wse-linux-x11/ and contract/core/runtime.md.
         RuntimeDescriptor {
             id: RuntimeId::from_raw("wse-linux-x11"),
             name: "wse-linux-x11".into(),
-            version: RuntimeVersion::new(0, 1, 0),
+            version: RUNTIME_VERSION,
             base: "alpine-3.20".into(),
-            digest: "alpine-minirootfs-3.20.3-x86_64".into(),
-            capabilities: CapabilitySet::none(),
+            digest: RUNTIME_DIGEST.into(),
+            capabilities: CapabilitySet::none()
+                .with(Capability::Applications)
+                .with(Capability::Windows),
             metadata: std::collections::HashMap::new(),
         }
     }
 
     fn create(&mut self, def: &WorkspaceDef) -> Result<()> {
         let name = distro_name(&def.id);
-        let root = self.rootfs()?;
+        let image = self.runtime_image()?.clone();
         let inst = self.data_dir.join(&name);
         std::fs::create_dir_all(&inst)
             .map_err(|e| WseError::Internal(format!("mkdir: {e}")))?;
@@ -205,7 +235,7 @@ impl WorkspaceAdapter for WindowsAdapter {
             "--import",
             &name,
             inst.to_string_lossy().as_ref(),
-            root.to_string_lossy().as_ref(),
+            image.to_string_lossy().as_ref(),
             "--version",
             "2",
         ])?;
@@ -228,10 +258,130 @@ impl WorkspaceAdapter for WindowsAdapter {
         let _ = self.wsl(&["--terminate", &name]);
         self.wsl(&["--unregister", &name])?;
         let _ = std::fs::remove_dir_all(self.data_dir.join(&name));
+        // All in-workspace processes (Xvfb, openbox, apps) die with the distro;
+        // drop the tracked state too — no orphans (criterion #6).
+        self.state.remove(id);
         Ok(())
     }
 
-    // No capability hooks -> every capability is unavailable, truthfully.
+    fn applications(&mut self) -> Option<&mut dyn ApplicationsCapability> {
+        Some(self)
+    }
+
+    fn windows(&mut self) -> Option<&mut dyn WindowsCapability> {
+        Some(self)
+    }
+}
+
+// ── Applications capability: map a catalog entry onto the runtime's launcher ──
+// The adapter carries NO app knowledge — the runtime's /opt/wse/launch.sh maps
+// entry -> command. The adapter mints the contract ids, tracks instances/windows,
+// and translates the runtime's X window ids into contract WindowIds (which never
+// leak upward). Lifecycle *events* are the engine's; the adapter only does the
+// mechanics — so a real app produces the same contract events as the mock.
+impl ApplicationsCapability for WindowsAdapter {
+    fn app_launch(
+        &mut self,
+        id: &WorkspaceId,
+        app: &ApplicationDescriptor,
+    ) -> Result<ApplicationInstance> {
+        // The runtime provides the display; the adapter only asks it to come up.
+        self.inside(id, "/opt/wse/start-display.sh")?;
+
+        let iid = ApplicationInstanceId::new();
+        let marker = format!("wse-{iid}");
+        // The runtime launches the app and returns its X window id. Deterministic
+        // focus (newest) is the launcher's job.
+        let out = self.inside(
+            id,
+            &format!("/opt/wse/launch.sh {} {}", app.entry, marker),
+        )?;
+        let xid = out.split_whitespace().last().unwrap_or("").to_string();
+        if xid.is_empty() || !xid.chars().all(|c| c.is_ascii_digit()) {
+            return Err(WseError::Internal(format!(
+                "runtime launcher returned no window id (out: {out:?})"
+            )));
+        }
+
+        let wid = WindowId::new();
+        let st = self.state.entry(id.clone()).or_default();
+        st.windows.push(XWindow {
+            id: wid.clone(),
+            xid,
+            app: app.entry.clone(),
+            title: app.name.clone(),
+        });
+        let instance = ApplicationInstance {
+            id: iid,
+            application: app.id.clone(),
+            state: ApplicationState::Running,
+            windows: vec![wid],
+        };
+        st.instances.push(instance.clone());
+        Ok(instance)
+    }
+
+    fn app_stop(&mut self, id: &WorkspaceId, instance: &ApplicationInstanceId) -> Result<()> {
+        let st = self
+            .state
+            .get_mut(id)
+            .ok_or_else(|| WseError::NotFound(format!("workspace {id}")))?;
+        let pos = st
+            .instances
+            .iter()
+            .position(|i| &i.id == instance)
+            .ok_or_else(|| WseError::NotFound(format!("instance {instance}")))?;
+        let inst = st.instances.remove(pos);
+        // The instance's windows close with it.
+        let mut xids = Vec::new();
+        st.windows.retain(|w| {
+            if inst.windows.contains(&w.id) {
+                xids.push(w.xid.clone());
+                false
+            } else {
+                true
+            }
+        });
+        for xid in xids {
+            let _ = self.inside(id, &format!("DISPLAY=:0 xdotool windowkill {xid}"));
+        }
+        Ok(())
+    }
+
+    fn app_instances(&self, id: &WorkspaceId) -> Result<Vec<ApplicationInstance>> {
+        Ok(self
+            .state
+            .get(id)
+            .map(|s| s.instances.clone())
+            .unwrap_or_default())
+    }
+}
+
+// ── Windows capability: list the workspace's windows (metadata only) ─────────
+impl WindowsCapability for WindowsAdapter {
+    fn list_windows(&self, id: &WorkspaceId) -> Result<Vec<Window>> {
+        // Focus is a contract concept the adapter maintains, exactly as the
+        // reference does: the most recently launched window is focused, at most
+        // one. The runtime already makes this physically true (the launcher does
+        // `windowactivate --sync` on the newest), so the model matches reality
+        // without a racy live `getactivewindow` query.
+        let windows = match self.state.get(id) {
+            Some(st) => &st.windows,
+            None => return Ok(Vec::new()),
+        };
+        let last = windows.len().saturating_sub(1);
+        Ok(windows
+            .iter()
+            .enumerate()
+            .map(|(i, w)| Window {
+                id: w.id.clone(),
+                app: w.app.clone(),
+                title: w.title.clone(),
+                bounds: Bounds::default(),
+                focused: i == last,
+            })
+            .collect())
+    }
 }
 
 // ── helpers (platform-facing; never leak above the boundary) ─────────────────

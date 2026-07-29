@@ -11,7 +11,9 @@ NAME="wse-linux-x11"
 BUILDER="wse-rt-builder-$$"                       # throwaway builder distro
 HERE="$(cd "$(dirname "$0")" && pwd)"
 DIST="$HERE/dist"; mkdir -p "$DIST"
-ROOTFS_URL="https://dl-cdn.alpinelinux.org/alpine/v3.20/releases/x86_64/alpine-minirootfs-3.20.3-x86_64.tar.gz"
+IMG="$HERE/image"                                 # tracked in-workspace scripts
+ALPINE="v3.20"
+ROOTFS_URL="https://dl-cdn.alpinelinux.org/alpine/$ALPINE/releases/x86_64/alpine-minirootfs-3.20.3-x86_64.tar.gz"
 ROOTFS="$DIST/alpine-minirootfs.tar.gz"
 OUT="$DIST/$NAME-v$VER.tar"
 
@@ -24,38 +26,33 @@ trap cleanup EXIT
 BROOT="$DIST/$BUILDER"; mkdir -p "$BROOT"
 wsl.exe --import "$BUILDER" "$BROOT" "$ROOTFS"
 
-# 2. Install the immutable display stack + catalog apps, and bake the in-workspace
-#    manifest. Everything the runtime provides is fixed here, once.
-wsl.exe -d "$BUILDER" -- sh -euxc '
+# 2. Install the immutable display stack. The X tools live in Alpine's community
+#    repo, which the minirootfs ships disabled. (No wmctrl — Alpine doesn't
+#    package it; xdotool covers discovery + focus. See ENGINEERING_LOG #1.)
+wsl.exe -d "$BUILDER" -- sh -euxc "
+  echo 'https://dl-cdn.alpinelinux.org/alpine/$ALPINE/community' >> /etc/apk/repositories
   apk update
-  apk add --no-cache \
-    xvfb openbox xterm wmctrl xdotool \
-    ttf-dejavu font-noto \
-    netsurf-gtk vim
+  apk add --no-cache xvfb openbox xterm xdotool ttf-dejavu
   mkdir -p /opt/wse
-  # The runtime advertises itself from inside, too (defence in depth).
-  cat > /opt/wse/runtime.json <<JSON
-{ "id":"'"$NAME"'", "version":"'"$VER"'", "display":":0", "wm":"openbox" }
-JSON
-  # Boot script the adapter invokes to bring up the display before launching apps.
-  cat > /opt/wse/start-display.sh <<SH
-#!/bin/sh
-export DISPLAY=:0
-Xvfb :0 -screen 0 1920x1080x24 >/dev/null 2>&1 &
-sleep 1
-openbox >/dev/null 2>&1 &
-SH
-  chmod +x /opt/wse/start-display.sh
-'
+  printf '{ \"id\":\"$NAME\", \"version\":\"$VER\" }\n' > /opt/wse/runtime.json
+"
 
-# 3. Export to an immutable tar and content-address it.
+# 3. Install the runtime's own scripts (tracked recipe files, piped in — no
+#    heredoc quoting games, and reviewable in git).
+for f in start-display.sh launch.sh apps.conf; do
+  wsl.exe -d "$BUILDER" -- sh -c "cat > /opt/wse/$f" < "$IMG/$f"
+done
+wsl.exe -d "$BUILDER" -- sh -c "chmod +x /opt/wse/start-display.sh /opt/wse/launch.sh"
+
+# 4. Export to an immutable tar and content-address it.
 wsl.exe --export "$BUILDER" "$OUT"
-DIGEST="sha256:$(sha256sum "$OUT" | cut -d" " -f1)"
+DIGEST="sha256:$(sha256sum "$OUT" | cut -d' ' -f1)"
 echo "built $OUT"
 echo "digest $DIGEST"
 
-# 4. Stamp the digest into the manifest (the only mutable record; the image is not).
-MAN="$HERE/manifest.v$( echo "$VER" | cut -d. -f1 ).json"
+# 5. Stamp the digest into the manifest (the only mutable record; image is not).
+MAJOR="$(echo "$VER" | cut -d. -f1)"
+MAN="$HERE/manifest.v$MAJOR.json"
 if [ -f "$MAN" ]; then
   sed -i "s#\"digest\": \"[^\"]*\"#\"digest\": \"$DIGEST\"#" "$MAN"
   echo "stamped $MAN"

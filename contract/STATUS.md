@@ -12,23 +12,22 @@ Legend: ✓ passes its suite · ⏳ declared next, not yet · – not started ·
 | Capability | Suite checks | Mock | Windows (WSL2) | Linux | macOS |
 |------------|:---:|:---:|:---:|:---:|:---:|
 | **Core** (lifecycle, isolation, events, identity, **runtime**) | 12 | ✓ | ✓ (live) | – | – |
-| Applications (lifecycle: descriptor→instance) | 7 | ✓ | ⏳ | – | – |
-| Windows | 2 | ✓ | ⏳ | – | – |
+| Applications (lifecycle: descriptor→instance) | 7 | ✓ | ✓ (live) | – | – |
+| Windows | 2 | ✓ | ✓ (live) | – | – |
 | Clipboard | 5 | ✓ | ⏳ | – | – |
 | Storage | 8 | ✓ | ⏳ | – | – |
 | Devices | 9 | ✓ | ⏳ | – | – |
-| **run_all total** | **43** | **43/43** | **12/12** | – | – |
+| **run_all total** | **43** | **43/43** | **21/21** | – | – |
 
 - **Mock** — the reference implementation; declares everything; 43/43. Its runtime
   is an in-memory environment (`mock v1.0.0`) providing the full set.
-- **Windows** — the first real platform adapter; declares only Core today
-  (minimal + truthful), so `run_all` == the core suite, passing 12/12 live
-  against real WSL2 and leaving zero orphan distros. It runs the
-  **`wse-linux-x11` runtime** (v0.1.0 today: bare rootfs, no capabilities inside).
-  Capabilities turn on when the runtime ships them: building
-  [`wse-linux-x11` v1.0.0](../runtimes/wse-linux-x11/README.md) (display stack)
-  declares Applications + Windows, and the adapter bridges them —
-  effective = adapter ∩ runtime.
+- **Windows** — the first real platform adapter; **21/21 live** against real WSL2
+  (Core + Applications + Windows), launching real applications, zero orphan
+  distros. It runs the **[`wse-linux-x11` v1.0.0](../runtimes/wse-linux-x11/README.md)**
+  runtime (Xvfb + openbox + xterm + xdotool + launcher), which *provides*
+  Applications + Windows inside the workspace while the adapter *bridges* them —
+  effective = adapter ∩ runtime. Clipboard/Storage/Devices are next: each is a
+  runtime capability the image will ship plus an adapter bridge.
 - **Linux / macOS** — not started; each will be one crate implementing the same
   contract and passing this same suite.
 
