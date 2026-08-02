@@ -6,7 +6,7 @@
 # Runs on the Windows host and drives wsl.exe. See ./README.md.
 set -euo pipefail
 
-VER="${1:-1.0.0}"
+VER="${1:-1.1.0}"
 NAME="wse-linux-x11"
 BUILDER="wse-rt-builder-$$"                       # throwaway builder distro
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -32,17 +32,17 @@ wsl.exe --import "$BUILDER" "$BROOT" "$ROOTFS"
 wsl.exe -d "$BUILDER" -- sh -euxc "
   echo 'https://dl-cdn.alpinelinux.org/alpine/$ALPINE/community' >> /etc/apk/repositories
   apk update
-  apk add --no-cache xvfb openbox xterm xdotool ttf-dejavu
+  apk add --no-cache xvfb openbox xterm xdotool xclip ttf-dejavu
   mkdir -p /opt/wse
   printf '{ \"id\":\"$NAME\", \"version\":\"$VER\" }\n' > /opt/wse/runtime.json
 "
 
 # 3. Install the runtime's own scripts (tracked recipe files, piped in — no
 #    heredoc quoting games, and reviewable in git).
-for f in start-display.sh launch.sh apps.conf; do
+for f in start-display.sh launch.sh clip.sh apps.conf; do
   wsl.exe -d "$BUILDER" -- sh -c "cat > /opt/wse/$f" < "$IMG/$f"
 done
-wsl.exe -d "$BUILDER" -- sh -c "chmod +x /opt/wse/start-display.sh /opt/wse/launch.sh"
+wsl.exe -d "$BUILDER" -- sh -c "chmod +x /opt/wse/start-display.sh /opt/wse/launch.sh /opt/wse/clip.sh"
 
 # 4. Export to an immutable tar and content-address it.
 wsl.exe --export "$BUILDER" "$OUT"

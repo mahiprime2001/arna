@@ -18,14 +18,14 @@ use std::process::Command;
 
 use wse_common::*;
 use wse_contract::{
-    ApplicationsCapability, ContractVersion, IsolationAttestation, WindowsCapability,
-    WorkspaceAdapter, WorkspaceDef, CONTRACT_VERSION,
+    ApplicationsCapability, ClipboardCapability, ContractVersion, IsolationAttestation,
+    WindowsCapability, WorkspaceAdapter, WorkspaceDef, CONTRACT_VERSION,
 };
 
 // Pinned digests of the shipped runtime images (built by runtimes/*/build.sh).
 // Immutable: a change is a new version, never an in-place edit.
 const X11_DIGEST: &str =
-    "sha256:34be3169d4fc23e99be659e2b6224b401a19818b42d61a2053548ef733ee7dc4";
+    "sha256:baf95a179b091ce528135bfa488fe90387e079a386006223bb1db571152e212b";
 const LITE_DIGEST: &str =
     "sha256:730365b06319ce69416f88f16d313afc78224546c1d5dcd1e99ae7ace9e3bd20";
 
@@ -45,21 +45,23 @@ fn default_image_dir() -> PathBuf {
 }
 
 impl RuntimeSpec {
-    /// wse-linux-x11 v1.0.0 — the display-stack runtime (Applications + Windows).
+    /// wse-linux-x11 v1.1.0 — display stack + clipboard service (Applications,
+    /// Windows, Clipboard).
     pub fn linux_x11_v1() -> Self {
         let image = std::env::var("WSE_RUNTIME_IMAGE")
             .map(PathBuf::from)
-            .unwrap_or_else(|_| default_image_dir().join("wse-linux-x11-v1.0.0.tar"));
+            .unwrap_or_else(|_| default_image_dir().join("wse-linux-x11-v1.1.0.tar"));
         RuntimeSpec {
             descriptor: RuntimeDescriptor {
                 id: RuntimeId::from_raw("wse-linux-x11"),
                 name: "wse-linux-x11".into(),
-                version: RuntimeVersion::new(1, 0, 0),
+                version: RuntimeVersion::new(1, 1, 0),
                 base: "alpine-3.20".into(),
                 digest: X11_DIGEST.into(),
                 capabilities: CapabilitySet::none()
                     .with(Capability::Applications)
-                    .with(Capability::Windows),
+                    .with(Capability::Windows)
+                    .with(Capability::Clipboard),
                 metadata: HashMap::new(),
             },
             image,
@@ -179,6 +181,13 @@ impl WindowsAdapter {
         ])
     }
 
+    /// Bring the runtime's display up (idempotent; the runtime provides the
+    /// script). Needed before any op that touches X — launching apps or the
+    /// X11-backed clipboard.
+    fn ensure_display(&self, id: &WorkspaceId) -> Result<()> {
+        self.inside(id, "/opt/wse/start-display.sh").map(|_| ())
+    }
+
     /// The runtime image to import. Required — the runtime *is* the image.
     fn runtime_image(&self) -> Result<&PathBuf> {
         let image = &self.runtime.image;
@@ -265,6 +274,7 @@ impl WorkspaceAdapter for WindowsAdapter {
         CapabilitySet::none()
             .with(Capability::Applications)
             .with(Capability::Windows)
+            .with(Capability::Clipboard)
     }
 
     fn runtime(&self) -> RuntimeDescriptor {
@@ -319,6 +329,10 @@ impl WorkspaceAdapter for WindowsAdapter {
     fn windows(&mut self) -> Option<&mut dyn WindowsCapability> {
         Some(self)
     }
+
+    fn clipboard(&mut self) -> Option<&mut dyn ClipboardCapability> {
+        Some(self)
+    }
 }
 
 // ── Applications capability: map a catalog entry onto the runtime's launcher ──
@@ -334,7 +348,7 @@ impl ApplicationsCapability for WindowsAdapter {
         app: &ApplicationDescriptor,
     ) -> Result<ApplicationInstance> {
         // The runtime provides the display; the adapter only asks it to come up.
-        self.inside(id, "/opt/wse/start-display.sh")?;
+        self.ensure_display(id)?;
 
         let iid = ApplicationInstanceId::new();
         let marker = format!("wse-{iid}");
@@ -432,6 +446,39 @@ impl WindowsCapability for WindowsAdapter {
     }
 }
 
+// ── Clipboard capability: bridge to the runtime's clipboard service ──────────
+// The engine has already checked the capability + the role's clipboard right and
+// will emit the event. The adapter only translates: contract op -> runtime
+// clip.sh call, and runtime failure -> WseError. No X11 knowledge lives here; it
+// is all in the runtime's clip.sh (the "clipboard service").
+impl ClipboardCapability for WindowsAdapter {
+    fn clipboard_peek(&self, id: &WorkspaceId) -> Result<Option<ClipboardItem>> {
+        self.ensure_display(id)?;
+        let raw = self.inside(id, "/opt/wse/clip.sh get")?;
+        let trimmed = raw.trim();
+        if trimmed.is_empty() {
+            return Ok(None); // nothing owns the clipboard
+        }
+        let mut lines = trimmed.lines();
+        let mime = lines.next().unwrap_or("").trim().to_string();
+        let b64: String = lines.map(str::trim).collect();
+        let payload = base64_decode(&b64)?;
+        Ok(Some(ClipboardItem { mime, payload }))
+    }
+
+    fn clipboard_put(&mut self, id: &WorkspaceId, data: ClipboardItem) -> Result<()> {
+        self.ensure_display(id)?;
+        let b64 = base64_encode(&data.payload);
+        // mime comes from the contract item; base64 keeps the payload intact
+        // through the Windows -> wsl.exe -> sh layers.
+        self.inside(
+            id,
+            &format!("echo {b64} | /opt/wse/clip.sh set {}", data.mime),
+        )?;
+        Ok(())
+    }
+}
+
 // ── helpers (platform-facing; never leak above the boundary) ─────────────────
 
 /// wsl.exe emits UTF-16LE for management output. Decode it (or pass UTF-8 through).
@@ -464,6 +511,39 @@ fn is_drive_mount(mp: &str) -> bool {
     } else {
         false
     }
+}
+
+/// Minimal base64 decode (no dependency), inverse of `base64_encode`. Ignores
+/// whitespace and padding. Used to bring clipboard payloads back from the runtime.
+fn base64_decode(s: &str) -> Result<Vec<u8>> {
+    fn val(c: u8) -> Option<u32> {
+        match c {
+            b'A'..=b'Z' => Some((c - b'A') as u32),
+            b'a'..=b'z' => Some((c - b'a' + 26) as u32),
+            b'0'..=b'9' => Some((c - b'0' + 52) as u32),
+            b'+' => Some(62),
+            b'/' => Some(63),
+            _ => None,
+        }
+    }
+    let clean: Vec<u8> = s
+        .bytes()
+        .filter(|b| !b.is_ascii_whitespace() && *b != b'=')
+        .collect();
+    let mut out = Vec::with_capacity(clean.len() * 3 / 4);
+    for chunk in clean.chunks(4) {
+        let mut n: u32 = 0;
+        for &c in chunk {
+            let v = val(c).ok_or_else(|| WseError::Internal(format!("bad base64 byte {c}")))?;
+            n = (n << 6) | v;
+        }
+        n <<= 6 * (4 - chunk.len()); // pad to a full 24-bit group
+        let nbytes = chunk.len() * 6 / 8;
+        for i in 0..nbytes {
+            out.push(((n >> (16 - 8 * i)) & 0xff) as u8);
+        }
+    }
+    Ok(out)
 }
 
 /// Minimal base64 (no dependency) for shipping the wsl.conf through shell layers.

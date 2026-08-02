@@ -47,6 +47,38 @@ inventing a new one. A runtime is valid when:
    digest; adapters pin the version they ship. Retiring a version is removing its
    artifact, never mutating it — so historical attestations stay meaningful.
 
+## Runtime services (internal building blocks)
+
+A runtime provides each capability through a small internal **service** — a script
+or program inside the image that the adapter calls. These are **not contract
+concepts** and are never exposed publicly; they are the reusable internal
+structure of a runtime, documented here so every runtime doesn't reinvent it.
+
+```
+Runtime image
+├── display service    (start-display.sh)  — brings up Xvfb + WM; needed by the below
+├── launcher service   (launch.sh + apps.conf) — Applications: map entry -> command, return window
+├── clipboard service  (clip.sh)           — Clipboard: X11 CLIPBOARD selection, durable ownership
+├── storage service    (planned)           — Storage: workspace-owned persistent resources
+└── device service     (planned)           — Devices: external resources
+```
+
+Rules for a service:
+
+- **It knows nothing about WSE.** No roles, no policy, no events, no error
+  vocabulary. It performs a mechanical operation and reports success/failure and
+  data. The adapter translates its result into the contract (and `WseError`); the
+  engine owns policy and events.
+- **It is addressed by a stable in-image path** (`/opt/wse/<service>.sh`) so the
+  adapter needs no per-runtime knowledge beyond "call the clipboard service".
+- **It backs the capability with a real OS mechanism** where one exists (the
+  clipboard service uses the X11 CLIPBOARD selection via `xclip`), with durable
+  fallback so ownership survives the adapter's separate invocations.
+
+`wse-lite` provides *no* services — that is exactly why it provides no
+capabilities. Adding a service to a runtime (plus the matching adapter bridge) is
+how a capability turns on: `effective = adapter ∩ runtime`.
+
 ## Adding a runtime
 
 Create `runtimes/<name>/` with a `build.sh`, a `manifest.v<major>.json`, any

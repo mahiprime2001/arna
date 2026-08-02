@@ -557,6 +557,25 @@ where
         }
     });
 
+    r.check("clipboard/does_not_survive_workspace_destruction", || {
+        // Lifecycle, not implementation: the clipboard belongs to the WORKSPACE,
+        // not the runtime image. Write, destroy, then a FRESH workspace (a new
+        // instance of the same runtime) must start with an empty clipboard.
+        let mut e = TestEngine::new(make());
+        let a = e.create_workspace(cfg()).map_err(|e| e.to_string())?;
+        e.clipboard_write_in(&a, Role::Owner, ClipboardItem::text("secret"))
+            .map_err(|e| e.to_string())?;
+        e.destroy(&a).map_err(|e| e.to_string())?;
+        let b = e.create_workspace(cfg()).map_err(|e| e.to_string())?;
+        let got = e
+            .clipboard_read_out(&b, Role::Owner)
+            .map_err(|e| e.to_string())?;
+        ok(
+            got.is_none(),
+            "a workspace created after another's destruction must start with an empty clipboard",
+        )
+    });
+
     r
 }
 

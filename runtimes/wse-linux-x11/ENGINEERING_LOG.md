@@ -63,6 +63,18 @@ No contract impact — window discovery is a runtime/adapter mechanic, not contr
 Fix: drop wmctrl from `build.sh`; the readiness probe uses `xdotool
 getdisplaygeometry` instead of `xdpyinfo`, removing that dependency too.
 
+### #4 — xclip selection holder dies with its wsl session — **runtime-issue**
+Clipboard (wse-linux-x11 v1.1.0, +xclip). Same-session `set`→`get` roundtripped,
+but a `get` in a *separate* wsl.exe invocation returned nothing: `pgrep xclip` →
+none. WSL reaps a session's processes when the invocation ends; a bare `xclip -i`
+selection holder does not survive (Xvfb/openbox do, because start-display.sh
+detaches them). Classified runtime-issue — a property of the runtime's clipboard
+service, not the contract. Fix (in the runtime's clip.sh): make the service
+file-authoritative (durable ownership across invocations) AND publish to the real
+X11 CLIPBOARD via a `setsid`-detached xclip; `get` prefers the live X selection,
+falling back to the durable store. Contract, adapter interface, events all
+unchanged. No spec impact.
+
 ### #3 — `run_all` gated on adapter caps, not adapter ∩ runtime — **conformance-issue**
 Building the second runtime (wse-lite, provides nothing) surfaced that `run_all`
 chose suites from `adapter.capabilities()` alone. The same adapter on wse-lite
