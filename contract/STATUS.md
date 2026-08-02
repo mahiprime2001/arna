@@ -24,21 +24,24 @@ platform going forward.
 | Conformance   |    ✅    |  ✅  |   ✅    |    ✅      |
 | Applications  |    ✅    |  ✅  |   ✅    |    ✅      |
 | Windows       |    ✅    |  ✅  |   ✅    |    ✅      |
-| Clipboard     |    ✅    |  ✅  |   ⏳    |    ⏳      |
+| Clipboard     |    ✅    |  ✅  |   ⏳    |    ✅      |
 | Storage       |    ✅    |  ✅  |   ⏳    |    ⏳      |
 | Devices       |    ✅    |  ✅  |   ⏳    |    ⏳      |
 | Network       |    ⏳    |  ⏳  |   ⏳    |    ⏳      |
 
 "Windows-native complete" = every row above ✅ through Devices, `run_all` fully
-green. Native `run_all` is **21/21 live** (real Windows desktops + real isolated
-browser instances: Core 12 + Applications 7 + Windows 2, ~23s, zero leftover
-processes/desktops/profiles).
+green. Native `run_all` is **27/27 live** (real Windows desktops + real isolated
+browser instances: Core 12 + Applications 7 + Windows 2 + Clipboard 6, ~27s, zero
+leftover processes/desktops/profiles).
 
 Native services (adapter-internal, per platform-services framing): Application
 service (launch/stop/enumerate via CreateProcessW on the desktop), Window service
 (enumerate/focus/close via EnumDesktopWindows), Browser-profile manager (fresh
 isolated profile per instance), Catalog (browser-first; apps tagged Certified/
-Compatible/Experimental — apps we cannot isolate are simply absent → NotFound).
+Compatible/Experimental — apps we cannot isolate are simply absent → NotFound),
+Workspace-clipboard service (each workspace owns its clipboard; the OS clipboard
+is an external resource — modes: **Isolated** default/privacy-first,
+**Shared** = the Windows clipboard, **ControlledSync** = private + explicit sync).
 
 ## Conformance counts (live)
 

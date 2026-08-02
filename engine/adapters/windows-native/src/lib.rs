@@ -24,8 +24,8 @@ use std::time::{Duration, Instant};
 
 use wse_common::*;
 use wse_contract::{
-    ApplicationsCapability, ContractVersion, IsolationAttestation, WindowsCapability,
-    WorkspaceAdapter, WorkspaceDef, CONTRACT_VERSION,
+    ApplicationsCapability, ClipboardCapability, ContractVersion, IsolationAttestation,
+    WindowsCapability, WorkspaceAdapter, WorkspaceDef, CONTRACT_VERSION,
 };
 
 // ── Win32 FFI (kept entirely inside this crate) ──────────────────────────────
@@ -34,6 +34,8 @@ type Hwnd = *mut c_void;
 type Handle = *mut c_void;
 const GENERIC_ALL: u32 = 0x1000_0000;
 const WM_CLOSE: u32 = 0x0010;
+const CF_UNICODETEXT: u32 = 13;
+const GMEM_MOVEABLE: u32 = 0x0002;
 
 #[repr(C)]
 struct StartupInfoW {
@@ -84,6 +86,13 @@ extern "system" {
     fn GetWindowTextW(hwnd: Hwnd, s: *mut u16, n: i32) -> i32;
     fn GetWindowThreadProcessId(hwnd: Hwnd, pid: *mut u32) -> u32;
     fn PostMessageW(hwnd: Hwnd, msg: u32, w: usize, l: isize) -> i32;
+    // OS clipboard (the "external resource" the Shared mode bridges to).
+    fn OpenClipboard(hwnd: Hwnd) -> i32;
+    fn CloseClipboard() -> i32;
+    fn EmptyClipboard() -> i32;
+    fn SetClipboardData(fmt: u32, mem: Handle) -> Handle;
+    fn GetClipboardData(fmt: u32) -> Handle;
+    fn IsClipboardFormatAvailable(fmt: u32) -> i32;
 }
 
 #[link(name = "kernel32")]
@@ -101,6 +110,9 @@ extern "system" {
         pi: *mut ProcessInformation,
     ) -> i32;
     fn CloseHandle(h: Handle) -> i32;
+    fn GlobalAlloc(flags: u32, bytes: usize) -> Handle;
+    fn GlobalLock(h: Handle) -> *mut c_void;
+    fn GlobalUnlock(h: Handle) -> i32;
 }
 
 /// A NUL-terminated UTF-16 string for the Win32 `W` APIs.
@@ -148,6 +160,86 @@ fn kill_tree(pid: u32) {
     let _ = Command::new("taskkill")
         .args(["/F", "/T", "/PID", &pid.to_string()])
         .output();
+}
+
+// ── Workspace clipboard service ──────────────────────────────────────────────
+// Windows has ONE clipboard per session, but WSE wants one clipboard per
+// workspace. So the workspace OWNS its clipboard and the OS clipboard is an
+// external resource this service may or may not bridge to — the contract's
+// read/write never changes; only what they mean here. See contract/core has no
+// entry for this: it is an adapter implementation detail (the contract is
+// unchanged and locked).
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum ClipboardMode {
+    /// Default. The workspace clipboard is private and never reaches Windows —
+    /// copy in workspace A cannot be pasted in workspace B or on the real desktop.
+    #[default]
+    Isolated,
+    /// The workspace clipboard *is* the Windows clipboard (normal Windows).
+    Shared,
+    /// Private workspace clipboard, plus an explicit user-triggered sync to/from
+    /// Windows (the sync action is a native op, not part of the read/write
+    /// contract). For read/write it behaves like Isolated until a sync happens.
+    ControlledSync,
+}
+
+/// Write UTF-8 text to the OS clipboard (Shared mode). Best-effort: the clipboard
+/// can be briefly locked by another process, so retry a little.
+fn os_clipboard_write(text: &str) -> bool {
+    let wide_text: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
+    for _ in 0..5 {
+        unsafe {
+            if OpenClipboard(std::ptr::null_mut()) == 0 {
+                std::thread::sleep(Duration::from_millis(30));
+                continue;
+            }
+            EmptyClipboard();
+            let bytes = wide_text.len() * 2;
+            let h = GlobalAlloc(GMEM_MOVEABLE, bytes);
+            if !h.is_null() {
+                let p = GlobalLock(h) as *mut u16;
+                if !p.is_null() {
+                    std::ptr::copy_nonoverlapping(wide_text.as_ptr(), p, wide_text.len());
+                    GlobalUnlock(h);
+                    SetClipboardData(CF_UNICODETEXT, h); // system owns h now
+                }
+            }
+            CloseClipboard();
+            return true;
+        }
+    }
+    false
+}
+
+/// Read text from the OS clipboard (Shared mode), if it holds unicode text.
+fn os_clipboard_read() -> Option<String> {
+    for _ in 0..5 {
+        unsafe {
+            if OpenClipboard(std::ptr::null_mut()) == 0 {
+                std::thread::sleep(Duration::from_millis(30));
+                continue;
+            }
+            let mut out = None;
+            if IsClipboardFormatAvailable(CF_UNICODETEXT) != 0 {
+                let h = GetClipboardData(CF_UNICODETEXT);
+                if !h.is_null() {
+                    let p = GlobalLock(h) as *const u16;
+                    if !p.is_null() {
+                        let mut len = 0usize;
+                        while *p.add(len) != 0 {
+                            len += 1;
+                        }
+                        let slice = std::slice::from_raw_parts(p, len);
+                        out = Some(String::from_utf16_lossy(slice));
+                        GlobalUnlock(h);
+                    }
+                }
+            }
+            CloseClipboard();
+            return out;
+        }
+    }
+    None
 }
 
 // ── Catalog: the isolatable apps WSE knows how to launch ─────────────────────
@@ -214,11 +306,15 @@ struct WsState {
     instances: Vec<ApplicationInstance>,
     windows: Vec<NativeWindow>,
     meta: HashMap<ApplicationInstanceId, InstanceMeta>,
+    /// The workspace's OWN clipboard (Isolated/ControlledSync modes). Private to
+    /// the workspace; dropped when the workspace is destroyed.
+    clipboard: Option<ClipboardItem>,
 }
 
 pub struct WindowsNativeAdapter {
     data_dir: PathBuf,
     state: HashMap<WorkspaceId, WsState>,
+    clipboard_mode: ClipboardMode,
 }
 
 impl Default for WindowsNativeAdapter {
@@ -234,7 +330,14 @@ impl WindowsNativeAdapter {
         Self {
             data_dir,
             state: HashMap::new(),
+            clipboard_mode: ClipboardMode::default(), // Isolated (privacy-first)
         }
+    }
+
+    /// Choose how the workspace clipboard relates to the Windows clipboard.
+    pub fn with_clipboard_mode(mut self, mode: ClipboardMode) -> Self {
+        self.clipboard_mode = mode;
+        self
     }
 
     fn ws(&self, id: &WorkspaceId) -> Result<&WsState> {
@@ -376,18 +479,20 @@ impl WorkspaceAdapter for WindowsNativeAdapter {
         CapabilitySet::none()
             .with(Capability::Applications)
             .with(Capability::Windows)
+            .with(Capability::Clipboard)
     }
 
     fn runtime(&self) -> RuntimeDescriptor {
         RuntimeDescriptor {
             id: RuntimeId::from_raw("windows-native"),
             name: "windows-native".into(),
-            version: RuntimeVersion::new(0, 2, 0),
+            version: RuntimeVersion::new(0, 3, 0),
             base: "windows-host".into(),
             digest: "windows-native-host".into(),
             capabilities: CapabilitySet::none()
                 .with(Capability::Applications)
-                .with(Capability::Windows),
+                .with(Capability::Windows)
+                .with(Capability::Clipboard),
             metadata: HashMap::new(),
         }
     }
@@ -462,6 +567,59 @@ impl WorkspaceAdapter for WindowsNativeAdapter {
 
     fn windows(&mut self) -> Option<&mut dyn WindowsCapability> {
         Some(self)
+    }
+
+    fn clipboard(&mut self) -> Option<&mut dyn ClipboardCapability> {
+        Some(self)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    #[ignore = "touches the real OS clipboard"]
+    fn os_clipboard_roundtrips() {
+        // Verifies the Shared-mode Win32 clipboard bridge actually works.
+        assert!(os_clipboard_write("wse-shared-roundtrip"));
+        assert_eq!(os_clipboard_read().as_deref(), Some("wse-shared-roundtrip"));
+    }
+}
+
+// ── Clipboard service (contract face) ────────────────────────────────────────
+// The engine has checked the Clipboard capability + the role's clipboard right
+// and will emit the event. The adapter only decides what "the clipboard" means
+// for this workspace, per its mode. The contract (read/write) is unchanged.
+impl ClipboardCapability for WindowsNativeAdapter {
+    fn clipboard_peek(&self, id: &WorkspaceId) -> Result<Option<ClipboardItem>> {
+        let st = self
+            .state
+            .get(id)
+            .ok_or_else(|| WseError::NotFound(format!("workspace {id}")))?;
+        match self.clipboard_mode {
+            // Private workspace clipboard.
+            ClipboardMode::Isolated | ClipboardMode::ControlledSync => Ok(st.clipboard.clone()),
+            // The OS clipboard is the workspace clipboard.
+            ClipboardMode::Shared => Ok(os_clipboard_read().map(ClipboardItem::text)),
+        }
+    }
+
+    fn clipboard_put(&mut self, id: &WorkspaceId, data: ClipboardItem) -> Result<()> {
+        // In Shared mode the OS clipboard is the workspace clipboard; text/plain
+        // goes through the OS, anything else falls back to the private store.
+        if self.clipboard_mode == ClipboardMode::Shared && data.mime == "text/plain" {
+            let text = String::from_utf8_lossy(&data.payload).into_owned();
+            if os_clipboard_write(&text) {
+                return Ok(());
+            }
+        }
+        let st = self
+            .state
+            .get_mut(id)
+            .ok_or_else(|| WseError::NotFound(format!("workspace {id}")))?;
+        st.clipboard = Some(data);
+        Ok(())
     }
 }
 
