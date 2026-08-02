@@ -17,32 +17,45 @@ use wse_contract::{
 /// The engine's isolation policy — what it *requires* of an adapter's
 /// attestation before it will run a workspace. The adapter provides evidence;
 /// this policy is how the engine evaluates it (SPEC §18.3). Policy lives in the
-/// engine, never in the adapter.
-#[derive(Clone, Copy, Debug)]
+/// engine, never in the adapter. See contract/core/isolation.md.
+#[derive(Clone, Debug, Default)]
 pub struct IsolationPolicy {
-    /// The mandatory core. There is no partial-isolation tier, so this is true
-    /// by default and cannot be relaxed away in a conforming deployment.
-    pub require_sealed: bool,
-}
-
-impl Default for IsolationPolicy {
-    fn default() -> Self {
-        Self { require_sealed: true }
-    }
+    /// The isolation models this deployment accepts. `None` = accept any
+    /// recognized model whose guarantees are satisfied — the default/conformance
+    /// posture, so one suite validates adapters of different isolation models.
+    /// `Some(list)` = a hardened deployment that accepts only those models (e.g.
+    /// only `SealedVm`). Either way, an attestation whose model is *not satisfied*
+    /// is always rejected — there is no "run it unisolated" option.
+    pub accepted_models: Option<Vec<IsolationModel>>,
 }
 
 impl IsolationPolicy {
+    /// A hardened policy accepting only the given isolation models.
+    pub fn require(models: Vec<IsolationModel>) -> Self {
+        Self { accepted_models: Some(models) }
+    }
+
     /// Evaluate an adapter's attestation. Returns Ok, or the reasons it fails.
     pub fn evaluate(&self, att: &IsolationAttestation) -> std::result::Result<(), Vec<String>> {
-        if self.require_sealed && !att.sealed {
+        if !att.isolated {
             let mut why = att.details.clone();
             if why.is_empty() {
-                why.push("adapter did not attest the workspace is sealed".into());
+                why.push(format!(
+                    "adapter did not attest its '{}' isolation is satisfied",
+                    att.model
+                ));
             }
-            Err(why)
-        } else {
-            Ok(())
+            return Err(why);
         }
+        if let Some(models) = &self.accepted_models {
+            if !models.contains(&att.model) {
+                return Err(vec![format!(
+                    "isolation model '{}' is not accepted by this deployment's policy",
+                    att.model
+                )]);
+            }
+        }
+        Ok(())
     }
 }
 
@@ -211,7 +224,7 @@ impl<A: WorkspaceAdapter> Engine<A> {
 
     /// The isolation policy the engine evaluates attestations against.
     pub fn isolation_policy(&self) -> IsolationPolicy {
-        self.isolation_policy
+        self.isolation_policy.clone()
     }
 
     /// Everything the outside world may observe, in order.

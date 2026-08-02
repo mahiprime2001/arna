@@ -399,6 +399,34 @@ pub struct RuntimeAttestation {
     pub at: u128,
 }
 
+// ── isolation model (SPEC §18.3) ────────────────────────────────────────────
+/// The KIND of isolation a workspace provides. Different platforms isolate in
+/// different ways, so the attestation *names* its model and the engine's policy
+/// evaluates it honestly. This is NOT a tier on one scale — each model has its
+/// own full definition, and an attestation's `isolated` flag means *that model's*
+/// guarantees all hold. A deployment's policy chooses which models it accepts.
+#[derive(Clone, PartialEq, Eq, Debug, Default)]
+pub enum IsolationModel {
+    /// A sealed VM/container: no host filesystem, no host interop. The strict
+    /// default (WSL2, VMs). What "sealed" historically meant.
+    #[default]
+    SealedVm,
+    /// A separate host desktop plus an isolated per-app profile. Presentation and
+    /// input are separated and per-app storage is isolated, but the host
+    /// filesystem is SHARED. The native Windows app-layer model — honest about
+    /// what it does and does not seal.
+    DesktopProfile,
+}
+
+impl fmt::Display for IsolationModel {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            IsolationModel::SealedVm => "sealed-vm",
+            IsolationModel::DesktopProfile => "desktop-profile",
+        })
+    }
+}
+
 // ── members (SPEC §4, §15) ──────────────────────────────────────────────────
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Member {

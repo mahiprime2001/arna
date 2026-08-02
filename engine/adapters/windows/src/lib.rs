@@ -219,7 +219,7 @@ impl WindowsAdapter {
     /// No host drive is mounted, and host executables cannot be launched.
     fn verify_isolation(&self, id: &WorkspaceId) -> IsolationAttestation {
         let mut details = Vec::new();
-        let mut sealed = true;
+        let mut isolated = true;
 
         // /proc/mounts is authoritative: a host drive appears as a mount at
         // /mnt/<letter>. Empty /mnt/c directories left by WSL are not mounts.
@@ -232,14 +232,14 @@ impl WindowsAdapter {
                         .unwrap_or(false)
                 });
                 if host {
-                    sealed = false;
+                    isolated = false;
                     details.push("a host drive is mounted".into());
                 } else {
                     details.push("no host drives are mounted".into());
                 }
             }
             Err(e) => {
-                sealed = false;
+                isolated = false;
                 details.push(format!("could not read mounts: {e}"));
             }
         }
@@ -253,12 +253,16 @@ impl WindowsAdapter {
                 details.push("host executables cannot be launched".into())
             }
             _ => {
-                sealed = false;
+                isolated = false;
                 details.push("host executable launch was NOT blocked".into());
             }
         }
 
-        IsolationAttestation { sealed, details }
+        IsolationAttestation {
+            model: IsolationModel::SealedVm,
+            isolated,
+            details,
+        }
     }
 }
 

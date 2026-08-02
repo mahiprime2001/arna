@@ -63,6 +63,9 @@ Each is normative in its own file:
   populate it; they never invent events.
 - **[core/runtime.md](core/runtime.md)** — the immutable, versioned execution
   environment *inside* a workspace. The adapter orchestrates; the runtime executes.
+- **[core/isolation.md](core/isolation.md)** — isolation is mandatory core; the
+  attestation names its *model* (SealedVm, DesktopProfile) and the policy evaluates
+  it. No workspace runs unisolated.
 - **[core/conformance.md](core/conformance.md)** — what conforming means, and the
   repeatability rules the standard test suite itself obeys.
 

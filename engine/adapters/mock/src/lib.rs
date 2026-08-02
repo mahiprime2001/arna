@@ -106,7 +106,8 @@ impl WorkspaceAdapter for MockAdapter {
         let w = self.ws_mut(id)?;
         w.running = true;
         Ok(IsolationAttestation {
-            sealed: true,
+            model: IsolationModel::SealedVm,
+            isolated: true,
             details: vec!["mock: no host to leak to".into()],
         })
     }

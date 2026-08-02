@@ -8,23 +8,30 @@ Legend: ✅ done · ⏳ next · – not started.
 
 ## Dashboard
 
-| Area          | Contract | Mock | Windows |
-| ------------- | :------: | :--: | :-----: |
-| Core          |    ✅    |  ✅  |   ✅    |
-| Isolation     |    ✅    |  ✅  |   ✅    |
-| Runtime       |    ✅    |  ✅  |   ✅    |
-| Events        |    ✅    |  ✅  |   ✅    |
-| Identity      |    ✅    |  ✅  |   ✅    |
-| Permissions   |    ✅    |  ✅  |   ✅    |
-| Conformance   |    ✅    |  ✅  |   ✅    |
-| Applications  |    ✅    |  ✅  |   ✅    |
-| Windows       |    ✅    |  ✅  |   ✅    |
-| Clipboard     |    ✅    |  ✅  |   ⏳    |
-| Storage       |    ✅    |  ✅  |   ⏳    |
-| Devices       |    ✅    |  ✅  |   ⏳    |
-| Network       |    ⏳    |  ⏳  |   ⏳    |
+Two Windows adapters: **WSL** (`SealedVm` isolation, Linux apps — proved the
+contract/runtime/adapter boundaries) and **Native** (`DesktopProfile` isolation,
+native Windows apps, no WSL — the forward direction). Native is the reference
+platform going forward.
 
-"Windows complete" = every row above ✅ through Devices, `run_all` fully green.
+| Area          | Contract | Mock | Win/WSL | Win/Native |
+| ------------- | :------: | :--: | :-----: | :--------: |
+| Core          |    ✅    |  ✅  |   ✅    |    ✅      |
+| Isolation     |    ✅    |  ✅  |   ✅    |    ✅ (DesktopProfile) |
+| Runtime       |    ✅    |  ✅  |   ✅    |    ✅      |
+| Events        |    ✅    |  ✅  |   ✅    |    ✅      |
+| Identity      |    ✅    |  ✅  |   ✅    |    ✅      |
+| Permissions   |    ✅    |  ✅  |   ✅    |    ✅      |
+| Conformance   |    ✅    |  ✅  |   ✅    |    ✅      |
+| Applications  |    ✅    |  ✅  |   ✅    |    ⏳      |
+| Windows       |    ✅    |  ✅  |   ✅    |    ⏳      |
+| Clipboard     |    ✅    |  ✅  |   ⏳    |    ⏳      |
+| Storage       |    ✅    |  ✅  |   ⏳    |    ⏳      |
+| Devices       |    ✅    |  ✅  |   ⏳    |    ⏳      |
+| Network       |    ⏳    |  ⏳  |   ⏳    |    ⏳      |
+
+"Windows-native complete" = every row above ✅ through Devices, `run_all` fully
+green. Native `run_core` is **12/12 live** (real Windows desktops, ~0.03s — no
+image import).
 
 ## Conformance counts (live)
 

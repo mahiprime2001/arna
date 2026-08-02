@@ -12,6 +12,7 @@ members = [
     "core",
     "adapters/mock",
     "adapters/windows",
+    "adapters/windows-native",
     "conformance",
 ]
 

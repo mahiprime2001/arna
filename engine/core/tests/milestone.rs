@@ -114,7 +114,8 @@ fn refuses_unsealed_workspace() {
         }
         fn start(&mut self, _id: &WorkspaceId) -> Result<IsolationAttestation> {
             Ok(IsolationAttestation {
-                sealed: false,
+                model: wse_common::IsolationModel::SealedVm,
+                isolated: false,
                 details: vec!["host drive visible at /mnt/c".into()],
             })
         }
@@ -161,7 +162,8 @@ fn clipboard_op_on_non_declaring_adapter_is_unavailable() {
         }
         fn start(&mut self, _id: &WorkspaceId) -> Result<IsolationAttestation> {
             Ok(IsolationAttestation {
-                sealed: true,
+                model: wse_common::IsolationModel::SealedVm,
+                isolated: true,
                 details: vec![],
             })
         }

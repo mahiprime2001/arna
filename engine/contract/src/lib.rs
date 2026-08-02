@@ -51,16 +51,20 @@ pub struct WorkspaceDef {
 /// The isolation **evidence** an adapter returns when it starts a workspace.
 ///
 /// Deliberately named an *attestation*, not a proof: an adapter cannot
-/// mathematically prove isolation. It reports what it measured and checked
-/// (`sealed`, plus human-readable `details`). The ENGINE evaluates this
-/// attestation against its isolation policy (SPEC §18.3) and decides whether to
-/// run the workspace. The adapter provides evidence; the engine owns the policy.
+/// mathematically prove isolation. It names the isolation `model` it provides and
+/// reports whether that model's guarantees are `isolated` (satisfied), plus
+/// human-readable `details`. The ENGINE evaluates this against its isolation
+/// policy (SPEC §18.3) and decides whether to run the workspace. The adapter
+/// provides evidence; the engine owns the policy. Different platforms may attest
+/// different models (a sealed VM, a separate desktop + profile); the policy
+/// chooses which it accepts — see contract/core/isolation.md.
 #[derive(Clone, Debug, Default)]
 pub struct IsolationAttestation {
-    /// The adapter's assessment that the workspace is sealed (no host
-    /// filesystem, no host interop, etc.). Evidence, evaluated — never trusted
-    /// blindly.
-    pub sealed: bool,
+    /// Which isolation model this workspace provides.
+    pub model: IsolationModel,
+    /// The adapter's assessment that the declared model's guarantees all hold.
+    /// Evidence, evaluated — never trusted blindly.
+    pub isolated: bool,
     pub details: Vec<String>,
 }
 

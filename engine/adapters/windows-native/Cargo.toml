@@ -1,0 +1,17 @@
+[package]
+name = "wse-adapter-windows-native"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# The NATIVE Windows adapter: no WSL, no VM. Workspaces are a hidden Windows
+# desktop + (for browser apps) an isolated browser profile; apps run natively on
+# the host. Platform code lives ONLY here (adapter Rule 3). It talks to Win32
+# (user32/kernel32) via direct FFI, so it needs no external crates — keeping the
+# workspace lean, exactly like the wsl.exe adapter.
+[dependencies]
+wse-common = { path = "../../common" }
+wse-contract = { path = "../../contract" }
+
+[dev-dependencies]
+wse-conformance = { path = "../../conformance" }
