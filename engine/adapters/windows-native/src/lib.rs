@@ -18,14 +18,14 @@
 
 use std::collections::HashMap;
 use std::ffi::c_void;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, Instant};
 
 use wse_common::*;
 use wse_contract::{
     ApplicationsCapability, ClipboardCapability, ContractVersion, IsolationAttestation,
-    WindowsCapability, WorkspaceAdapter, WorkspaceDef, CONTRACT_VERSION,
+    StorageCapability, WindowsCapability, WorkspaceAdapter, WorkspaceDef, CONTRACT_VERSION,
 };
 
 // ── Win32 FFI (kept entirely inside this crate) ──────────────────────────────
@@ -160,6 +160,22 @@ fn kill_tree(pid: u32) {
     let _ = Command::new("taskkill")
         .args(["/F", "/T", "/PID", &pid.to_string()])
         .output();
+}
+
+/// Remove a directory tree, retrying briefly: a just-killed browser can hold file
+/// locks in its profile for a moment, so a single remove_dir_all can fail. This
+/// keeps destroy leaving zero leftover state (conformance criterion #6).
+fn robust_rmdir(path: &Path) {
+    for _ in 0..12 {
+        if !path.exists() {
+            return;
+        }
+        if std::fs::remove_dir_all(path).is_ok() && !path.exists() {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    let _ = std::fs::remove_dir_all(path);
 }
 
 // ── Workspace clipboard service ──────────────────────────────────────────────
@@ -302,7 +318,7 @@ struct InstanceMeta {
 struct WsState {
     desktop: isize,
     desktop_name: String,
-    profile_dir: PathBuf,
+    home: PathBuf,
     instances: Vec<ApplicationInstance>,
     windows: Vec<NativeWindow>,
     meta: HashMap<ApplicationInstanceId, InstanceMeta>,
@@ -311,8 +327,18 @@ struct WsState {
     clipboard: Option<ClipboardItem>,
 }
 
+/// The subdirectories every workspace home gets — its own little environment.
+/// `storage` holds contract resources; `profiles` holds per-app browser profiles;
+/// the rest are the workspace's home folders (the foundation for `workspace://`
+/// paths and, since ALL persistent state lives under one home, for future
+/// snapshots). See contract/capabilities/storage.md.
+const HOME_DIRS: &[&str] = &[
+    "storage", "profiles", "documents", "downloads", "config", "cache", "tmp", "desktop",
+];
+
 pub struct WindowsNativeAdapter {
-    data_dir: PathBuf,
+    /// Root under which every workspace home lives (`%USERPROFILE%\.wse\workspaces`).
+    home_root: PathBuf,
     state: HashMap<WorkspaceId, WsState>,
     clipboard_mode: ClipboardMode,
 }
@@ -325,13 +351,24 @@ impl Default for WindowsNativeAdapter {
 
 impl WindowsNativeAdapter {
     pub fn new() -> Self {
-        let data_dir = std::env::temp_dir().join("arna-native-workspaces");
-        let _ = std::fs::create_dir_all(&data_dir);
+        // Workspaces live in the user's home, like other tools' dot-dirs.
+        let base = std::env::var("USERPROFILE")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| std::env::temp_dir());
+        let home_root = base.join(".wse").join("workspaces");
+        let _ = std::fs::create_dir_all(&home_root);
         Self {
-            data_dir,
+            home_root,
             state: HashMap::new(),
             clipboard_mode: ClipboardMode::default(), // Isolated (privacy-first)
         }
+    }
+
+    /// Choose where workspace homes live (defaults to `%USERPROFILE%\.wse`).
+    pub fn with_home_root(mut self, root: PathBuf) -> Self {
+        let _ = std::fs::create_dir_all(&root);
+        self.home_root = root;
+        self
     }
 
     /// Choose how the workspace clipboard relates to the Windows clipboard.
@@ -358,14 +395,15 @@ impl WindowsNativeAdapter {
         let browser = find_browser()
             .ok_or_else(|| WseError::ResourceUnavailable("no Chromium browser found".into()))?;
 
-        let (desktop, desktop_name, profile_root) = {
+        let (desktop, desktop_name, home) = {
             let st = self.ws(id)?;
-            (st.desktop, st.desktop_name.clone(), st.profile_dir.clone())
+            (st.desktop, st.desktop_name.clone(), st.home.clone())
         };
 
-        // Browser profile manager: a fresh isolated profile per instance.
+        // Browser profile manager: a fresh isolated profile per instance, under
+        // the workspace's own Storage (profiles are persistent workspace state).
         let iid = ApplicationInstanceId::new();
-        let profile = profile_root.join(format!("inst-{iid}"));
+        let profile = home.join("profiles").join(format!("inst-{iid}"));
         std::fs::create_dir_all(&profile)
             .map_err(|e| WseError::Internal(format!("profile: {e}")))?;
 
@@ -381,7 +419,9 @@ impl WindowsNativeAdapter {
             profile.display(),
             spec.url
         );
-        let pid = create_process_on_desktop(&desktop_name, &cmdline)?;
+        // The app's working directory is the workspace home (workspace-scoped env).
+        let pid =
+            create_process_on_desktop(&desktop_name, &cmdline, &home.to_string_lossy())?;
 
         // Window service: poll for the new window this instance opened.
         let deadline = Instant::now() + Duration::from_secs(12);
@@ -431,17 +471,19 @@ impl WindowsNativeAdapter {
         }
         for (_, m) in st.meta.drain() {
             kill_tree(m.pid);
-            let _ = std::fs::remove_dir_all(&m.profile);
+            robust_rmdir(&m.profile);
         }
         st.windows.clear();
         st.instances.clear();
     }
 }
 
-/// Launch a command line on a named desktop; return the new process id.
-fn create_process_on_desktop(desktop: &str, cmdline: &str) -> Result<u32> {
+/// Launch a command line on a named desktop, with a working directory; return the
+/// new process id.
+fn create_process_on_desktop(desktop: &str, cmdline: &str, workdir: &str) -> Result<u32> {
     let mut desk = wide(desktop);
     let mut cmd = wide(cmdline);
+    let dir = wide(workdir);
     let mut si: StartupInfoW = unsafe { std::mem::zeroed() };
     si.cb = std::mem::size_of::<StartupInfoW>() as u32;
     si.lp_desktop = desk.as_mut_ptr();
@@ -455,7 +497,7 @@ fn create_process_on_desktop(desktop: &str, cmdline: &str) -> Result<u32> {
             0,
             0,
             std::ptr::null(),
-            std::ptr::null(),
+            dir.as_ptr(),
             &si,
             &mut pi,
         )
@@ -480,6 +522,7 @@ impl WorkspaceAdapter for WindowsNativeAdapter {
             .with(Capability::Applications)
             .with(Capability::Windows)
             .with(Capability::Clipboard)
+            .with(Capability::Storage)
     }
 
     fn runtime(&self) -> RuntimeDescriptor {
@@ -492,7 +535,8 @@ impl WorkspaceAdapter for WindowsNativeAdapter {
             capabilities: CapabilitySet::none()
                 .with(Capability::Applications)
                 .with(Capability::Windows)
-                .with(Capability::Clipboard),
+                .with(Capability::Clipboard)
+                .with(Capability::Storage),
             metadata: HashMap::new(),
         }
     }
@@ -512,15 +556,20 @@ impl WorkspaceAdapter for WindowsNativeAdapter {
         if hd.is_null() {
             return Err(WseError::Internal(format!("CreateDesktop('{name}') failed")));
         }
-        let profile_dir = self.data_dir.join(&name);
-        std::fs::create_dir_all(&profile_dir)
-            .map_err(|e| WseError::Internal(format!("profile dir: {e}")))?;
+        // The workspace's HOME: its own little environment. Every persistent
+        // thing (resources, profiles) lives under here, so destroy is one rm and
+        // a snapshot is one copy.
+        let home = self.home_root.join(&name);
+        for sub in HOME_DIRS {
+            std::fs::create_dir_all(home.join(sub))
+                .map_err(|e| WseError::Internal(format!("home dir {sub}: {e}")))?;
+        }
         self.state.insert(
             def.id.clone(),
             WsState {
                 desktop: hd as isize,
                 desktop_name: name,
-                profile_dir,
+                home,
                 ..Default::default()
             },
         );
@@ -534,7 +583,7 @@ impl WorkspaceAdapter for WindowsNativeAdapter {
             isolated: true,
             details: vec![
                 format!("separate desktop '{}' (own input + display)", st.desktop_name),
-                format!("isolated profile at {}", st.profile_dir.display()),
+                format!("isolated profile at {}", st.home.display()),
                 "shares the host filesystem — not a sealed VM".into(),
             ],
         })
@@ -557,7 +606,7 @@ impl WorkspaceAdapter for WindowsNativeAdapter {
         unsafe {
             CloseDesktop(st.desktop as Hdesk);
         }
-        let _ = std::fs::remove_dir_all(&st.profile_dir);
+        robust_rmdir(&st.home);
         Ok(())
     }
 
@@ -570,6 +619,10 @@ impl WorkspaceAdapter for WindowsNativeAdapter {
     }
 
     fn clipboard(&mut self) -> Option<&mut dyn ClipboardCapability> {
+        Some(self)
+    }
+
+    fn storage(&mut self) -> Option<&mut dyn StorageCapability> {
         Some(self)
     }
 }
@@ -653,13 +706,95 @@ impl ApplicationsCapability for WindowsNativeAdapter {
         st.windows.retain(|w| !inst.windows.contains(&w.id));
         if let Some(m) = st.meta.remove(instance) {
             kill_tree(m.pid);
-            let _ = std::fs::remove_dir_all(&m.profile);
+            robust_rmdir(&m.profile);
         }
         Ok(())
     }
 
     fn app_instances(&self, id: &WorkspaceId) -> Result<Vec<ApplicationInstance>> {
         Ok(self.state.get(id).map(|s| s.instances.clone()).unwrap_or_default())
+    }
+}
+
+// ── Storage service (contract face): the workspace's persistent memory ───────
+// Contract resources are stored as REAL FILES under the workspace home's
+// `storage/` folder: bytes in `<id>`, name in `<id>.name`. Because all persistent
+// state (resources + browser profiles) lives under one home directory, destroy is
+// a single rm and a snapshot would be a single copy. Resource ids are stable and
+// immutable; a deleted id never resolves (I3). Contract unchanged: this is just
+// where "resources" physically live.
+impl WindowsNativeAdapter {
+    fn storage_dir(&self, id: &WorkspaceId) -> Result<PathBuf> {
+        Ok(self.ws(id)?.home.join("storage"))
+    }
+}
+
+impl StorageCapability for WindowsNativeAdapter {
+    fn resource_create(
+        &mut self,
+        id: &WorkspaceId,
+        name: String,
+        kind: ResourceKind,
+    ) -> Result<ResourceMetadata> {
+        let dir = self.storage_dir(id)?;
+        let rid = ResourceId::new();
+        std::fs::write(dir.join(rid.as_str()), [])
+            .map_err(|e| WseError::Internal(format!("resource_create: {e}")))?;
+        let _ = std::fs::write(dir.join(format!("{rid}.name")), name.as_bytes());
+        Ok(ResourceMetadata { id: rid, name, kind, size: 0 })
+    }
+
+    fn resource_write(
+        &mut self,
+        id: &WorkspaceId,
+        resource: &ResourceId,
+        bytes: Vec<u8>,
+    ) -> Result<()> {
+        let path = self.storage_dir(id)?.join(resource.as_str());
+        if !path.exists() {
+            return Err(WseError::NotFound(format!("resource {resource}"))); // deleted/unknown (I3)
+        }
+        std::fs::write(&path, &bytes)
+            .map_err(|e| WseError::Internal(format!("resource_write: {e}")))
+    }
+
+    fn resource_read(&self, id: &WorkspaceId, resource: &ResourceId) -> Result<Vec<u8>> {
+        let path = self.storage_dir(id)?.join(resource.as_str());
+        std::fs::read(&path).map_err(|_| WseError::NotFound(format!("resource {resource}")))
+    }
+
+    fn resource_delete(&mut self, id: &WorkspaceId, resource: &ResourceId) -> Result<bool> {
+        let dir = self.storage_dir(id)?;
+        let existed = dir.join(resource.as_str()).exists();
+        let _ = std::fs::remove_file(dir.join(resource.as_str()));
+        let _ = std::fs::remove_file(dir.join(format!("{resource}.name")));
+        Ok(existed)
+    }
+
+    fn resource_list(&self, id: &WorkspaceId) -> Result<Vec<ResourceMetadata>> {
+        let dir = self.storage_dir(id)?;
+        let mut out = Vec::new();
+        let entries = match std::fs::read_dir(&dir) {
+            Ok(e) => e,
+            Err(_) => return Ok(out),
+        };
+        for entry in entries.flatten() {
+            let fname = entry.file_name();
+            let fname = fname.to_string_lossy();
+            if fname.ends_with(".name") {
+                continue; // sidecar, not a resource
+            }
+            let size = entry.metadata().map(|m| m.len()).unwrap_or(0);
+            let name = std::fs::read_to_string(dir.join(format!("{fname}.name")))
+                .unwrap_or_default();
+            out.push(ResourceMetadata {
+                id: ResourceId::from_raw(fname.to_string()),
+                name,
+                kind: ResourceKind::Blob,
+                size,
+            });
+        }
+        Ok(out)
     }
 }
 

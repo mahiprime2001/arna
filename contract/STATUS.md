@@ -25,14 +25,16 @@ platform going forward.
 | Applications  |    ✅    |  ✅  |   ✅    |    ✅      |
 | Windows       |    ✅    |  ✅  |   ✅    |    ✅      |
 | Clipboard     |    ✅    |  ✅  |   ⏳    |    ✅      |
-| Storage       |    ✅    |  ✅  |   ⏳    |    ⏳      |
+| Storage       |    ✅    |  ✅  |   ⏳    |    ✅      |
 | Devices       |    ✅    |  ✅  |   ⏳    |    ⏳      |
 | Network       |    ⏳    |  ⏳  |   ⏳    |    ⏳      |
 
-"Windows-native complete" = every row above ✅ through Devices, `run_all` fully
-green. Native `run_all` is **27/27 live** (real Windows desktops + real isolated
-browser instances: Core 12 + Applications 7 + Windows 2 + Clipboard 6, ~27s, zero
-leftover processes/desktops/profiles).
+**Minimum Complete Workspace reached** on native: Applications + Windows +
+Clipboard + Storage. A native workspace now has its own desktop, apps, windows,
+clipboard, and a persistent **home** (`%USERPROFILE%\.wse\workspaces\<id>\` with
+storage/profiles/documents/…). Native `run_all` is **35/35 live** (Core 12 +
+Applications 7 + Windows 2 + Clipboard 6 + Storage 8, ~30s, zero leftover
+processes/desktops/homes).
 
 Native services (adapter-internal, per platform-services framing): Application
 service (launch/stop/enumerate via CreateProcessW on the desktop), Window service
@@ -41,7 +43,12 @@ isolated profile per instance), Catalog (browser-first; apps tagged Certified/
 Compatible/Experimental — apps we cannot isolate are simply absent → NotFound),
 Workspace-clipboard service (each workspace owns its clipboard; the OS clipboard
 is an external resource — modes: **Isolated** default/privacy-first,
-**Shared** = the Windows clipboard, **ControlledSync** = private + explicit sync).
+**Shared** = the Windows clipboard, **ControlledSync** = private + explicit sync);
+Storage service (the workspace **home**: contract resources are real files under
+`home/storage/`; browser profiles live under `home/profiles/`; apps launch with
+the home as working dir. All persistent state under one home → destroy is one rm,
+snapshots would be one copy. Named subdirs are the foundation for `workspace://`
+paths).
 
 ## Conformance counts (live)
 
