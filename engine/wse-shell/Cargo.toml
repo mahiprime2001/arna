@@ -1,0 +1,17 @@
+[package]
+name = "wse-shell"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# WSE Desktop shell (v0.1): a thin, everyday driver over the engine + native
+# adapter. Not a framework demo — something to actually live in. Four ideas:
+# create, enter, launch, destroy.
+[[bin]]
+name = "wse"
+path = "src/main.rs"
+
+[dependencies]
+wse-common = { path = "../common" }
+wse-engine = { path = "../core" }
+wse-adapter-windows-native = { path = "../adapters/windows-native" }

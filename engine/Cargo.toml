@@ -13,6 +13,7 @@ members = [
     "adapters/mock",
     "adapters/windows",
     "adapters/windows-native",
+    "wse-shell",
     "conformance",
 ]
 

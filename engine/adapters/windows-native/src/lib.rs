@@ -69,6 +69,22 @@ struct ProcessInformation {
 
 type WndEnumProc = extern "system" fn(Hwnd, isize) -> i32;
 
+const WM_HOTKEY: u32 = 0x0312;
+const MOD_ALT: u32 = 0x0001;
+const MOD_CONTROL: u32 = 0x0002;
+const VK_Q: u32 = 0x51;
+
+#[repr(C)]
+struct Msg {
+    hwnd: Hwnd,
+    message: u32,
+    w_param: usize,
+    l_param: isize,
+    time: u32,
+    pt_x: i32,
+    pt_y: i32,
+}
+
 #[link(name = "user32")]
 extern "system" {
     fn CreateDesktopW(
@@ -80,6 +96,12 @@ extern "system" {
         sa: *const c_void,
     ) -> Hdesk;
     fn CloseDesktop(h: Hdesk) -> i32;
+    fn OpenDesktopW(name: *const u16, flags: u32, inherit: i32, access: u32) -> Hdesk;
+    fn SwitchDesktop(h: Hdesk) -> i32;
+    fn SetThreadDesktop(h: Hdesk) -> i32;
+    fn RegisterHotKey(hwnd: Hwnd, id: i32, modifiers: u32, vk: u32) -> i32;
+    fn UnregisterHotKey(hwnd: Hwnd, id: i32) -> i32;
+    fn GetMessageW(msg: *mut Msg, hwnd: Hwnd, min: u32, max: u32) -> i32;
     fn EnumDesktopWindows(hdesk: Hdesk, cb: WndEnumProc, lparam: isize) -> i32;
     fn IsWindowVisible(hwnd: Hwnd) -> i32;
     fn GetWindowTextLengthW(hwnd: Hwnd) -> i32;
@@ -122,6 +144,55 @@ fn wide(s: &str) -> Vec<u16> {
 
 fn desktop_name(id: &WorkspaceId) -> String {
     format!("wse-{id}")
+}
+
+// ── "Enter a workspace": make its desktop the one you see + interact with ─────
+// SwitchDesktop is *the* feature that turns a workspace from a technicality into a
+// place. We switch the user to the workspace desktop and arm a return hotkey
+// (Ctrl+Alt+Q) ON that desktop, so they can always get back to their real
+// desktop — the shell's console lives there.
+
+/// Enter a workspace's desktop. The user now sees + drives the apps running in it.
+/// Press **Ctrl+Alt+Q** to return to the normal desktop. Non-blocking: a small
+/// thread holds the return hotkey on the workspace desktop until it fires.
+pub fn enter_workspace_desktop(id: &WorkspaceId) {
+    let name = desktop_name(id);
+    std::thread::spawn(move || unsafe {
+        let target = OpenDesktopW(wide(&name).as_ptr(), 0, 0, GENERIC_ALL);
+        if target.is_null() {
+            return;
+        }
+        let default = OpenDesktopW(wide("Default").as_ptr(), 0, 0, GENERIC_ALL);
+        // The hotkey must belong to the workspace desktop, so this thread joins it.
+        SetThreadDesktop(target);
+        SwitchDesktop(target);
+        RegisterHotKey(std::ptr::null_mut(), 1, MOD_CONTROL | MOD_ALT, VK_Q);
+        let mut msg: Msg = std::mem::zeroed();
+        while GetMessageW(&mut msg, std::ptr::null_mut(), 0, 0) > 0 {
+            if msg.message == WM_HOTKEY {
+                if !default.is_null() {
+                    SwitchDesktop(default);
+                }
+                break;
+            }
+        }
+        UnregisterHotKey(std::ptr::null_mut(), 1);
+        CloseDesktop(target);
+        if !default.is_null() {
+            CloseDesktop(default);
+        }
+    });
+}
+
+/// Return to the normal (Default) desktop immediately.
+pub fn switch_to_default_desktop() {
+    unsafe {
+        let d = OpenDesktopW(wide("Default").as_ptr(), 0, 0, GENERIC_ALL);
+        if !d.is_null() {
+            SwitchDesktop(d);
+            CloseDesktop(d);
+        }
+    }
 }
 
 // ── Window service: enumerate windows on a desktop ───────────────────────────
