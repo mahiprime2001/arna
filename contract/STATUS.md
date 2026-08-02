@@ -22,16 +22,23 @@ platform going forward.
 | Identity      |    ✅    |  ✅  |   ✅    |    ✅      |
 | Permissions   |    ✅    |  ✅  |   ✅    |    ✅      |
 | Conformance   |    ✅    |  ✅  |   ✅    |    ✅      |
-| Applications  |    ✅    |  ✅  |   ✅    |    ⏳      |
-| Windows       |    ✅    |  ✅  |   ✅    |    ⏳      |
+| Applications  |    ✅    |  ✅  |   ✅    |    ✅      |
+| Windows       |    ✅    |  ✅  |   ✅    |    ✅      |
 | Clipboard     |    ✅    |  ✅  |   ⏳    |    ⏳      |
 | Storage       |    ✅    |  ✅  |   ⏳    |    ⏳      |
 | Devices       |    ✅    |  ✅  |   ⏳    |    ⏳      |
 | Network       |    ⏳    |  ⏳  |   ⏳    |    ⏳      |
 
 "Windows-native complete" = every row above ✅ through Devices, `run_all` fully
-green. Native `run_core` is **12/12 live** (real Windows desktops, ~0.03s — no
-image import).
+green. Native `run_all` is **21/21 live** (real Windows desktops + real isolated
+browser instances: Core 12 + Applications 7 + Windows 2, ~23s, zero leftover
+processes/desktops/profiles).
+
+Native services (adapter-internal, per platform-services framing): Application
+service (launch/stop/enumerate via CreateProcessW on the desktop), Window service
+(enumerate/focus/close via EnumDesktopWindows), Browser-profile manager (fresh
+isolated profile per instance), Catalog (browser-first; apps tagged Certified/
+Compatible/Experimental — apps we cannot isolate are simply absent → NotFound).
 
 ## Conformance counts (live)
 
