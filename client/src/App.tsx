@@ -31,6 +31,7 @@ import {
   wseDestroy,
   wseEnter,
   toWorkspaces,
+  openCodeServerWindow,
 } from "@/lib/wse";
 import type { AuthUser } from "@/lib/api";
 import { decryptFrom, encryptFor, initCrypto, myPublicKey } from "@/lib/crypto";
@@ -468,8 +469,10 @@ export default function App({
 
   const createWorkspace = (draft: Omit<Workspace, "id" | "state" | "createdAt">) => {
     if (isTauri()) {
-      // Pass the picked apps (chrome/vscode/terminal) — the engine opens them.
-      wseCreate(draft.name || "Workspace", draft.apps ?? []).then(setFromEngine);
+      // Runtime (native/docker) + picked apps — the engine opens them.
+      wseCreate(draft.name || "Workspace", draft.runtime ?? "native", draft.apps ?? []).then(
+        setFromEngine,
+      );
       return;
     }
     setWorkspaces((prev) => [
@@ -514,11 +517,24 @@ export default function App({
     setWorkspaces((prev) => prev.filter((x) => x.id !== w.id));
   };
 
-  // "Open" on the desktop app switches you into the workspace's real desktop
-  // (Ctrl+Alt+Q returns); in the browser it opens the in-app stage overlay.
+  // "Open": Docker workspaces open code-server in their own window; native
+  // workspaces switch you into their real desktop (Ctrl+Alt+Q returns); in the
+  // browser it's the in-app stage overlay.
   const handleOpenWorkspace = (w: Workspace) => {
     if (isTauri()) {
-      wseEnter(w.id).then(setFromEngine);
+      if (w.runtime === "docker") {
+        const openCodeServer = (url?: string | null) => {
+          if (url) openCodeServerWindow(w.id, w.name, url);
+        };
+        if (w.url) openCodeServer(w.url);
+        else
+          wseEnter(w.id).then((list) => {
+            setFromEngine(list);
+            openCodeServer(list.find((x) => x.id === w.id)?.url);
+          });
+        return;
+      }
+      wseEnter(w.id).then(setFromEngine); // native: switch desktop
       return;
     }
     setOpenWorkspace(w);

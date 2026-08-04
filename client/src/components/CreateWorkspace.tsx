@@ -9,6 +9,8 @@ import {
   Trash,
   Info,
   ShieldCheck,
+  WindowsLogo,
+  Cube,
 } from "@phosphor-icons/react";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
@@ -156,6 +158,28 @@ export function CreateWorkspace({
               onChange={(e) => set("name", e.target.value)}
               placeholder="Design review, Pair session, Client sandbox…"
             />
+          </Section>
+
+          <Section
+            title="Runtime"
+            hint="How the workspace runs — the same UI, a different engine underneath."
+          >
+            <div className="flex gap-2.5">
+              <Choice
+                active={d.runtime !== "docker"}
+                onClick={() => set("runtime", "native")}
+                icon={<WindowsLogo size={18} />}
+                title="Native Windows"
+                hint="Real Windows apps (Chrome, VS Code, Office) on a separate desktop. Shares your files and network."
+              />
+              <Choice
+                active={d.runtime === "docker"}
+                onClick={() => set("runtime", "docker")}
+                icon={<Cube size={18} />}
+                title="Docker sandbox"
+                hint="Own filesystem + own network (own IP/ports). VS Code in the browser. Needs Docker running."
+              />
+            </div>
           </Section>
 
           <Section

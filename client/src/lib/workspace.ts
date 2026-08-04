@@ -148,6 +148,10 @@ export interface Workspace {
   /** SPEC §4.6.2: what a Collaborator may do, within what the host allows. */
   collaboratorGrants: Record<Capability, boolean>;
   createdAt: number;
+  /** Which runtime runs this workspace (native Windows, or a Docker sandbox). */
+  runtime?: "native" | "docker";
+  /** For Docker workspaces: the embedded code-server URL (when running). */
+  url?: string | null;
 }
 
 /**
@@ -167,6 +171,7 @@ export function newWorkspaceId(): string {
 export function draftWorkspace(): Omit<Workspace, "id" | "state" | "createdAt"> {
   return {
     name: "",
+    runtime: "native",
     persistence: "saved",
     apps: ["vscode", "chrome"],
     shares: [],
