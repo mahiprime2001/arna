@@ -10,7 +10,8 @@ use std::collections::{HashMap, HashSet};
 use std::io::{self, Write};
 
 use wse_adapter_windows_native::{
-    enter_workspace_desktop, spawn_workspace_dock, switch_to_default_desktop, WindowsNativeAdapter,
+    enter_workspace_desktop, import_default_profile, launch_imported_browser, spawn_workspace_dock,
+    switch_to_default_desktop, WindowsNativeAdapter,
 };
 use wse_common::{ApplicationDescriptor, Persistence, WorkspaceId, WorkspaceState};
 use wse_engine::{Engine, WorkspaceConfig};
@@ -38,7 +39,8 @@ fn help() {
         "\nWSE Desktop — commands:\n\
          \x20 create <name>            make a new workspace\n\
          \x20 ls                       list workspaces\n\
-         \x20 launch <name> <app>      run an app in a workspace (browser|terminal|editor)\n\
+         \x20 launch <name> <app>      run an app (browser | mine = your imported profile)\n\
+         \x20 import <name> [edge|chrome]  copy your real browser profile into a workspace\n\
          \x20 enter <name>             switch to the workspace's desktop  (Ctrl+Alt+Q to return)\n\
          \x20 back                     return to your normal desktop\n\
          \x20 suspend <name>           suspend a workspace\n\
@@ -92,24 +94,49 @@ fn main() {
                 }
             }
             "launch" => match (parts.get(1), parts.get(2)) {
-                (Some(&name), Some(&app)) => match (names.get(name), app_entry(app)) {
-                    (Some(id), Some(entry)) => {
-                        let id = id.clone();
-                        if engine.state(&id) != Some(WorkspaceState::Running) {
-                            if let Err(e) = engine.start(&id) {
-                                println!("error starting: {e}");
-                                continue;
-                            }
+                (Some(&name), Some(&app)) => {
+                    let Some(id) = names.get(name).cloned() else {
+                        println!("no workspace '{name}'");
+                        continue;
+                    };
+                    if engine.state(&id) != Some(WorkspaceState::Running) {
+                        if let Err(e) = engine.start(&id) {
+                            println!("error starting: {e}");
+                            continue;
                         }
-                        match engine.launch(&id, entry) {
+                    }
+                    // "mine"/"mybrowser" launches your imported profile.
+                    if matches!(app.to_lowercase().as_str(), "mine" | "mybrowser" | "myprofile") {
+                        match launch_imported_browser(&id) {
+                            Ok(_) => println!("launched your imported browser in '{name}'"),
+                            Err(e) => println!("error: {e}"),
+                        }
+                        continue;
+                    }
+                    match app_entry(app) {
+                        Some(entry) => match engine.launch(&id, entry) {
                             Ok(_) => println!("launched {app} in '{name}'"),
+                            Err(e) => println!("error: {e}"),
+                        },
+                        None => println!("unknown app '{app}' (try: browser, mine)"),
+                    }
+                }
+                _ => println!("usage: launch <name> <app>"),
+            },
+            "import" => match parts.get(1) {
+                Some(&name) => match names.get(name) {
+                    Some(id) => {
+                        let chrome = parts.get(2).map(|s| s.eq_ignore_ascii_case("chrome")).unwrap_or(false);
+                        let src = if chrome { "Chrome" } else { "Edge" };
+                        println!("importing your {src} profile (close {src} first for logins)...");
+                        match import_default_profile(id, chrome) {
+                            Ok(_) => println!("imported — use 'launch {name} mine' or the dock's 'My Browser'"),
                             Err(e) => println!("error: {e}"),
                         }
                     }
-                    (None, _) => println!("no workspace '{name}'"),
-                    (_, None) => println!("unknown app '{app}' (try: browser, terminal, editor)"),
+                    None => println!("no workspace '{name}'"),
                 },
-                _ => println!("usage: launch <name> <app>"),
+                None => println!("usage: import <name> [edge|chrome]"),
             },
             "enter" | "open" => match parts.get(1).and_then(|n| names.get(*n)) {
                 Some(id) => {

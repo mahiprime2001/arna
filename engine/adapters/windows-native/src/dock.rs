@@ -50,6 +50,7 @@ const ID_FOCUS: u32 = 1002;
 const ID_MINIMIZE: u32 = 1003;
 const ID_CLOSE: u32 = 1004;
 const ID_LEAVE: u32 = 1005;
+const ID_MY_BROWSER: u32 = 1006;
 const ID_LIST: u32 = 2000;
 const TIMER_ID: usize = 1;
 
@@ -230,6 +231,19 @@ fn handle_command(id: u32) {
                 );
                 let _ = create_process_on_desktop(&ctx.desktop_name, &cmd, &ctx.home);
             }
+            ID_MY_BROWSER => {
+                // Your imported profile (logins/bookmarks), if one was imported.
+                let imported = ctx.profiles.join("imported");
+                if imported.exists() {
+                    let cmd = format!(
+                        "\"{}\" --user-data-dir=\"{}\" --no-first-run --no-default-browser-check \
+                         --new-window",
+                        ctx.browser.display(),
+                        imported.display()
+                    );
+                    let _ = create_process_on_desktop(&ctx.desktop_name, &cmd, &ctx.home);
+                }
+            }
             ID_FOCUS | ID_MINIMIZE | ID_CLOSE => {
                 if let Some(h) = selected(ctx.listbox) {
                     let hw = h as Hwnd;
@@ -356,16 +370,17 @@ pub(crate) fn spawn_dock(desktop_name: String, browser: PathBuf, profiles: PathB
                 std::ptr::null(),
             );
         };
-        button("+ New Browser", ID_NEW_BROWSER, 10, 34);
+        button("+ New Browser", ID_NEW_BROWSER, 10, 32);
+        button("My Browser", ID_MY_BROWSER, 46, 28);
         let list = CreateWindowExW(
             0,
             wide("LISTBOX").as_ptr(),
             std::ptr::null(),
             WS_CHILD | WS_VISIBLE | WS_BORDER | WS_VSCROLL | LBS_NOTIFY,
             8,
-            52,
+            82,
             168,
-            screen_h - 268,
+            screen_h - 298,
             main,
             (ID_LIST as usize) as Handle,
             hinst,

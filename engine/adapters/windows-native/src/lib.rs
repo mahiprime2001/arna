@@ -186,20 +186,122 @@ pub fn enter_workspace_desktop(id: &WorkspaceId) {
     });
 }
 
-/// Spawn the workspace dock on a workspace's desktop — a little shell (launch a
-/// browser, Focus/Minimize/Close/Leave windows) so the desktop is usable without
-/// a taskbar. Reconstructs the workspace home from the default convention
-/// (`%USERPROFILE%\.wse\workspaces\wse-<id>`). Safe to call once per workspace.
-pub fn spawn_workspace_dock(id: &WorkspaceId) {
-    let name = desktop_name(id);
+/// A workspace's home dir under the default convention
+/// (`%USERPROFILE%\.wse\workspaces\wse-<id>`).
+pub(crate) fn workspace_home(id: &WorkspaceId) -> PathBuf {
     let base = std::env::var("USERPROFILE")
         .map(PathBuf::from)
         .unwrap_or_else(|_| std::env::temp_dir());
-    let home = base.join(".wse").join("workspaces").join(&name);
+    base.join(".wse").join("workspaces").join(desktop_name(id))
+}
+
+/// Spawn the workspace dock on a workspace's desktop — a little shell (launch a
+/// browser, Focus/Minimize/Close/Leave windows) so the desktop is usable without
+/// a taskbar. Safe to call once per workspace.
+pub fn spawn_workspace_dock(id: &WorkspaceId) {
+    let name = desktop_name(id);
+    let home = workspace_home(id);
     let profiles = home.join("profiles");
     let _ = std::fs::create_dir_all(&profiles);
     let Some(browser) = find_browser() else { return };
     dock::spawn_dock(name, browser, profiles, home.to_string_lossy().into_owned());
+}
+
+/// Import your real Edge (or Chrome) profile into a workspace, so its browser has
+/// your logins, bookmarks and extensions — but ISOLATED (it's a copy; changes
+/// stay in the workspace). Close the source browser first for a clean copy of
+/// cookies/logins (locked files are skipped). Launch it with the "My Browser"
+/// dock button or `launch_imported_browser`.
+pub fn import_default_profile(id: &WorkspaceId, chrome: bool) -> Result<()> {
+    let local = std::env::var("LOCALAPPDATA")
+        .map(PathBuf::from)
+        .map_err(|_| WseError::Internal("no LOCALAPPDATA".into()))?;
+    let src_root = if chrome {
+        local.join("Google").join("Chrome").join("User Data")
+    } else {
+        local.join("Microsoft").join("Edge").join("User Data")
+    };
+    if !src_root.exists() {
+        return Err(WseError::NotFound(format!(
+            "{} profile not found at {}",
+            if chrome { "Chrome" } else { "Edge" },
+            src_root.display()
+        )));
+    }
+    let dst = workspace_home(id).join("profiles").join("imported");
+    let _ = std::fs::remove_dir_all(&dst); // fresh import
+    std::fs::create_dir_all(&dst).map_err(|e| WseError::Internal(format!("import dst: {e}")))?;
+
+    // Local State holds the profile's encryption key (DPAPI, same user → works).
+    let _ = std::fs::copy(src_root.join("Local State"), dst.join("Local State"));
+    // The user's profile subdir, copied into "Default" so a plain launch finds it.
+    let prof = if src_root.join("Default").exists() {
+        src_root.join("Default")
+    } else {
+        first_profile_dir(&src_root).unwrap_or_else(|| src_root.join("Default"))
+    };
+    copy_tree(&prof, &dst.join("Default"));
+    Ok(())
+}
+
+/// Launch a browser on the workspace desktop using the imported profile.
+pub fn launch_imported_browser(id: &WorkspaceId) -> Result<()> {
+    let home = workspace_home(id);
+    let imported = home.join("profiles").join("imported");
+    if !imported.exists() {
+        return Err(WseError::NotFound(
+            "no imported profile — run import first".into(),
+        ));
+    }
+    let browser = find_browser()
+        .ok_or_else(|| WseError::ResourceUnavailable("no Chromium browser found".into()))?;
+    let cmd = format!(
+        "\"{}\" --user-data-dir=\"{}\" --no-first-run --no-default-browser-check --new-window",
+        browser.display(),
+        imported.display()
+    );
+    create_process_on_desktop(&desktop_name(id), &cmd, &home.to_string_lossy())?;
+    Ok(())
+}
+
+fn first_profile_dir(root: &Path) -> Option<PathBuf> {
+    std::fs::read_dir(root).ok()?.flatten().find_map(|e| {
+        let p = e.path();
+        if p.is_dir() && p.file_name()?.to_string_lossy().starts_with("Profile ") {
+            Some(p)
+        } else {
+            None
+        }
+    })
+}
+
+/// Best-effort recursive copy that skips browser caches and lock files (large or
+/// locked). Failures on individual files are ignored so a running browser doesn't
+/// abort the whole import.
+fn copy_tree(src: &Path, dst: &Path) {
+    const SKIP: &[&str] = &[
+        "Cache", "Code Cache", "GPUCache", "DawnCache", "DawnGraphiteCache",
+        "GrShaderCache", "ShaderCache", "Service Worker", "Crashpad", "CrashpadMetrics",
+        "component_crx_cache", "Safe Browsing", "Lock", "SingletonLock", "SingletonCookie",
+        "SingletonSocket",
+    ];
+    let _ = std::fs::create_dir_all(dst);
+    let Ok(entries) = std::fs::read_dir(src) else { return };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let name_s = name.to_string_lossy();
+        if SKIP.iter().any(|s| name_s.eq_ignore_ascii_case(s)) {
+            continue;
+        }
+        let sp = entry.path();
+        let dp = dst.join(&name);
+        match entry.file_type() {
+            Ok(t) if t.is_dir() => copy_tree(&sp, &dp),
+            _ => {
+                let _ = std::fs::copy(&sp, &dp);
+            }
+        }
+    }
 }
 
 /// The titles of the visible windows currently on a workspace's desktop
@@ -742,6 +844,25 @@ mod tests {
         // Verifies the Shared-mode Win32 clipboard bridge actually works.
         assert!(os_clipboard_write("wse-shared-roundtrip"));
         assert_eq!(os_clipboard_read().as_deref(), Some("wse-shared-roundtrip"));
+    }
+
+    #[test]
+    fn copy_tree_copies_files_and_skips_caches() {
+        // The profile-import engine, on synthetic data (never your real profile).
+        let tmp = std::env::temp_dir().join(format!("wse-copytest-{}", std::process::id()));
+        let (src, dst) = (tmp.join("src"), tmp.join("dst"));
+        std::fs::create_dir_all(src.join("Cache")).unwrap();
+        std::fs::write(src.join("Cache").join("big.bin"), b"junk").unwrap();
+        std::fs::write(src.join("Bookmarks"), b"marks").unwrap();
+        std::fs::create_dir_all(src.join("Local Storage")).unwrap();
+        std::fs::write(src.join("Local Storage").join("x"), b"y").unwrap();
+
+        copy_tree(&src, &dst);
+
+        assert!(dst.join("Bookmarks").exists(), "real files must copy");
+        assert!(dst.join("Local Storage").join("x").exists(), "nested files must copy");
+        assert!(!dst.join("Cache").exists(), "cache dirs must be skipped");
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 }
 
