@@ -1,9 +1,13 @@
-//! WSE workspaces embedded in the Tauri backend. The native engine holds raw
-//! desktop handles (not Send/Sync), so it runs on its own dedicated thread and
-//! Tauri commands talk to it over a channel. Every call returns the workspace
-//! state as a JSON string the frontend parses.
+//! WSE workspaces embedded in the Tauri backend. Two runtimes behind one UI:
+//!  - **native** — separate Windows desktop + real Windows apps (no strong
+//!    isolation). The native engine holds raw desktop handles (not Send/Sync),
+//!    so everything runs on this one dedicated thread.
+//!  - **docker** — a real sandbox container: own filesystem, own network (own IP
+//!    + mapped ports), running code-server the Arna UI embeds.
+//! The engine is unchanged; docker is simply another runtime alongside it. Every
+//! call returns the merged workspace state as JSON.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::mpsc::{sync_channel, SyncSender};
 use std::sync::Mutex;
 use std::thread;
@@ -15,9 +19,11 @@ use wse_adapter_windows_native::{
 use wse_common::{ApplicationDescriptor, Persistence, WorkspaceId, WorkspaceState};
 use wse_engine::{Engine, WorkspaceConfig};
 
+use crate::docker;
+
 pub enum Cmd {
     List,
-    Create(String, Vec<String>), // name, selected UI app ids
+    Create(String, String, Vec<String>), // name, runtime, selected UI app ids
     Start(String),
     Launch(String),
     Enter(String),
@@ -27,13 +33,12 @@ pub enum Cmd {
     Browser(bool),        // chrome
 }
 
-/// Map a UI app id to the engine's catalog entry (None = not launchable yet).
 fn map_app(ui: &str) -> Option<&'static str> {
     match ui {
         "chrome" | "edge" | "browser" => Some("browser"),
         "vscode" | "code" | "editor" => Some("editor"),
         "terminal" | "term" => Some("terminal"),
-        _ => None, // e.g. "files" — not isolatable yet
+        _ => None,
     }
 }
 
@@ -42,26 +47,34 @@ struct Req {
     reply: SyncSender<String>,
 }
 
-/// Handle the frontend talks to. Send + Sync (the non-Send engine stays on its
-/// own thread behind the channel).
 pub struct Workspaces {
     tx: Mutex<SyncSender<Req>>,
+}
+
+/// Everything the runtime thread owns.
+struct Rt {
+    engine: Engine<WindowsNativeAdapter>,
+    docked: HashSet<WorkspaceId>,
+    chrome: HashMap<WorkspaceId, bool>,
+    apps: HashMap<WorkspaceId, Vec<String>>,
+    /// Docker workspaces: id -> display name.
+    dockers: HashMap<String, String>,
 }
 
 impl Workspaces {
     pub fn new() -> Self {
         let (tx, rx) = sync_channel::<Req>(64);
         thread::spawn(move || {
-            let mut engine = Engine::new(WindowsNativeAdapter::new());
-            let mut docked: HashSet<WorkspaceId> = HashSet::new();
-            let mut chrome: std::collections::HashMap<WorkspaceId, bool> =
-                std::collections::HashMap::new();
-            // Which apps (engine entries) each workspace should open.
-            let mut apps: std::collections::HashMap<WorkspaceId, Vec<String>> =
-                std::collections::HashMap::new();
+            let mut rt = Rt {
+                engine: Engine::new(WindowsNativeAdapter::new()),
+                docked: HashSet::new(),
+                chrome: HashMap::new(),
+                apps: HashMap::new(),
+                dockers: HashMap::new(),
+            };
             while let Ok(req) = rx.recv() {
-                exec(&mut engine, &mut docked, &mut chrome, &mut apps, req.cmd);
-                let _ = req.reply.send(state_json(&mut engine));
+                exec(&mut rt, req.cmd);
+                let _ = req.reply.send(state_json(&mut rt));
             }
         });
         Workspaces { tx: Mutex::new(tx) }
@@ -79,7 +92,7 @@ impl Workspaces {
 }
 
 fn empty() -> String {
-    "{\"workspaces\":[]}".into()
+    "{\"workspaces\":[],\"docker\":false}".into()
 }
 
 fn catalog() -> Vec<ApplicationDescriptor> {
@@ -94,10 +107,12 @@ fn esc(s: &str) -> String {
     s.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
-fn state_json(engine: &mut Engine<WindowsNativeAdapter>) -> String {
-    let mut out = String::from("{\"workspaces\":[");
-    for (i, id) in engine.workspace_ids().into_iter().enumerate() {
-        let Some(idy) = engine.identity(&id) else { continue };
+fn state_json(rt: &mut Rt) -> String {
+    let mut items: Vec<String> = Vec::new();
+
+    // Native workspaces.
+    for id in rt.engine.workspace_ids() {
+        let Some(idy) = rt.engine.identity(&id) else { continue };
         let state = match idy.state {
             WorkspaceState::Running => "running",
             WorkspaceState::Saved => "suspended",
@@ -105,88 +120,116 @@ fn state_json(engine: &mut Engine<WindowsNativeAdapter>) -> String {
             _ => "gone",
         };
         let apps = if idy.state == WorkspaceState::Running {
-            engine.app_instances(&id).map(|v| v.len()).unwrap_or(0)
+            rt.engine.app_instances(&id).map(|v| v.len()).unwrap_or(0)
         } else {
             0
         };
-        if i > 0 {
-            out.push(',');
-        }
-        out.push_str(&format!(
-            "{{\"id\":\"{}\",\"name\":\"{}\",\"state\":\"{}\",\"apps\":{}}}",
-            id,
-            esc(&idy.name),
-            state,
-            apps
+        items.push(format!(
+            "{{\"id\":\"{}\",\"name\":\"{}\",\"runtime\":\"native\",\"state\":\"{}\",\"apps\":{},\"url\":null}}",
+            id, esc(&idy.name), state, apps
         ));
     }
-    out.push_str("]}");
-    out
+
+    // Docker workspaces.
+    for (id, name) in &rt.dockers {
+        let running = docker::running(id);
+        let state = if running { "running" } else { "suspended" };
+        let url = match docker::url(id) {
+            Some(u) if running => format!("\"{}\"", esc(&u)),
+            _ => "null".into(),
+        };
+        items.push(format!(
+            "{{\"id\":\"{}\",\"name\":\"{}\",\"runtime\":\"docker\",\"state\":\"{}\",\"apps\":{},\"url\":{}}}",
+            id, esc(name), state, if running { 1 } else { 0 }, url
+        ));
+    }
+
+    format!(
+        "{{\"workspaces\":[{}],\"docker\":{}}}",
+        items.join(","),
+        docker::available()
+    )
 }
 
-fn exec(
-    engine: &mut Engine<WindowsNativeAdapter>,
-    docked: &mut HashSet<WorkspaceId>,
-    chrome: &mut std::collections::HashMap<WorkspaceId, bool>,
-    apps: &mut std::collections::HashMap<WorkspaceId, Vec<String>>,
-    cmd: Cmd,
-) {
+fn exec(rt: &mut Rt, cmd: Cmd) {
     match cmd {
         Cmd::List => {}
-        Cmd::Create(name, ui_apps) => {
+        Cmd::Create(name, runtime, ui_apps) => {
             let name = if name.trim().is_empty() { "Workspace".to_string() } else { name };
-            let cfg = WorkspaceConfig::new(&name, Persistence::Temporary, catalog());
-            if let Ok(id) = engine.create_workspace(cfg) {
-                chrome.insert(id.clone(), ui_apps.iter().any(|a| a == "chrome"));
-                let mut entries: Vec<String> =
-                    ui_apps.iter().filter_map(|a| map_app(a)).map(String::from).collect();
-                entries.dedup();
-                if entries.is_empty() {
-                    entries.push("browser".into()); // never open to nothing
+            if runtime == "docker" {
+                let id = WorkspaceId::new().to_string();
+                if docker::create(&id) {
+                    rt.dockers.insert(id, name);
                 }
-                apps.insert(id, entries);
+            } else {
+                let cfg = WorkspaceConfig::new(&name, Persistence::Temporary, catalog());
+                if let Ok(id) = rt.engine.create_workspace(cfg) {
+                    rt.chrome.insert(id.clone(), ui_apps.iter().any(|a| a == "chrome"));
+                    let mut entries: Vec<String> =
+                        ui_apps.iter().filter_map(|a| map_app(a)).map(String::from).collect();
+                    entries.dedup();
+                    if entries.is_empty() {
+                        entries.push("browser".into());
+                    }
+                    rt.apps.insert(id, entries);
+                }
             }
         }
+        Cmd::Start(id) | Cmd::Launch(id) if rt.dockers.contains_key(&id) => {
+            docker::start(&id);
+        }
+        Cmd::Enter(id) if rt.dockers.contains_key(&id) => {
+            // Docker "enter" = make sure it's running; the UI opens code-server.
+            if !docker::running(&id) {
+                docker::start(&id);
+            }
+        }
+        Cmd::Suspend(id) if rt.dockers.contains_key(&id) => {
+            docker::stop(&id);
+        }
+        Cmd::Destroy(id) if rt.dockers.contains_key(&id) => {
+            docker::destroy(&id);
+            rt.dockers.remove(&id);
+        }
+        // ── native paths ─────────────────────────────────────────────────────
         Cmd::Start(id) => {
-            let _ = engine.start(&WorkspaceId::from_raw(id));
+            let _ = rt.engine.start(&WorkspaceId::from_raw(id));
         }
         Cmd::Launch(id) => {
             let id = WorkspaceId::from_raw(id);
-            set_preferred_browser(chrome.get(&id).copied().unwrap_or(false));
-            if engine.state(&id) != Some(WorkspaceState::Running) {
-                let _ = engine.start(&id);
+            set_preferred_browser(rt.chrome.get(&id).copied().unwrap_or(false));
+            if rt.engine.state(&id) != Some(WorkspaceState::Running) {
+                let _ = rt.engine.start(&id);
             }
-            let _ = engine.launch(&id, "browser");
+            let _ = rt.engine.launch(&id, "browser");
         }
         Cmd::Enter(id) => {
             let id = WorkspaceId::from_raw(id);
-            set_preferred_browser(chrome.get(&id).copied().unwrap_or(false));
-            if engine.state(&id) != Some(WorkspaceState::Running) {
-                let _ = engine.start(&id);
+            set_preferred_browser(rt.chrome.get(&id).copied().unwrap_or(false));
+            if rt.engine.state(&id) != Some(WorkspaceState::Running) {
+                let _ = rt.engine.start(&id);
             }
-            // First time in: open the workspace's selected apps so you don't land
-            // on an empty desktop.
-            let empty = engine.app_instances(&id).map(|v| v.is_empty()).unwrap_or(true);
+            let empty = rt.engine.app_instances(&id).map(|v| v.is_empty()).unwrap_or(true);
             if empty {
-                let want = apps.get(&id).cloned().unwrap_or_else(|| vec!["browser".into()]);
+                let want = rt.apps.get(&id).cloned().unwrap_or_else(|| vec!["browser".into()]);
                 for entry in want {
-                    let _ = engine.launch(&id, &entry);
+                    let _ = rt.engine.launch(&id, &entry);
                 }
             }
-            if docked.insert(id.clone()) {
+            if rt.docked.insert(id.clone()) {
                 spawn_workspace_dock(&id);
             }
             enter_workspace_desktop(&id);
         }
         Cmd::Suspend(id) => {
-            let _ = engine.stop(&WorkspaceId::from_raw(id));
+            let _ = rt.engine.stop(&WorkspaceId::from_raw(id));
         }
         Cmd::Destroy(id) => {
             let id = WorkspaceId::from_raw(id);
-            let _ = engine.destroy(&id);
-            docked.remove(&id);
-            chrome.remove(&id);
-            apps.remove(&id);
+            let _ = rt.engine.destroy(&id);
+            rt.docked.remove(&id);
+            rt.chrome.remove(&id);
+            rt.apps.remove(&id);
         }
         Cmd::Import(id, is_chrome) => {
             let _ = import_default_profile(&WorkspaceId::from_raw(id), is_chrome);

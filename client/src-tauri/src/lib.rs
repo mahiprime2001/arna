@@ -1,3 +1,4 @@
+mod docker;
 mod workspaces;
 use workspaces::{Cmd, Workspaces};
 
@@ -6,8 +7,13 @@ fn ws_list(state: tauri::State<Workspaces>) -> String {
     state.call(Cmd::List)
 }
 #[tauri::command]
-fn ws_create(name: String, apps: Vec<String>, state: tauri::State<Workspaces>) -> String {
-    state.call(Cmd::Create(name, apps))
+fn ws_create(
+    name: String,
+    runtime: String,
+    apps: Vec<String>,
+    state: tauri::State<Workspaces>,
+) -> String {
+    state.call(Cmd::Create(name, runtime, apps))
 }
 #[tauri::command]
 fn ws_start(id: String, state: tauri::State<Workspaces>) -> String {
