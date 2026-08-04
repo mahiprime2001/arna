@@ -138,9 +138,13 @@ fn state_json(rt: &mut Rt) -> String {
             Some(u) if running => format!("\"{}\"", esc(&u)),
             _ => "null".into(),
         };
+        let lan = match docker::lan_url(id) {
+            Some(u) if running => format!("\"{}\"", esc(&u)),
+            _ => "null".into(),
+        };
         items.push(format!(
-            "{{\"id\":\"{}\",\"name\":\"{}\",\"runtime\":\"docker\",\"state\":\"{}\",\"apps\":{},\"url\":{}}}",
-            id, esc(name), state, if running { 1 } else { 0 }, url
+            "{{\"id\":\"{}\",\"name\":\"{}\",\"runtime\":\"docker\",\"state\":\"{}\",\"apps\":{},\"url\":{},\"lanUrl\":{}}}",
+            id, esc(name), state, if running { 1 } else { 0 }, url, lan
         ));
     }
 

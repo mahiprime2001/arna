@@ -26,6 +26,7 @@ export type EngineWs = {
   state: string;
   apps: number;
   url: string | null;
+  lanUrl?: string | null;
 };
 
 export function isTauri(): boolean {
@@ -86,6 +87,7 @@ export function toWorkspace(e: EngineWs): Workspace {
     createdAt: Date.now(),
     runtime: e.runtime,
     url: e.url,
+    lanUrl: e.lanUrl ?? null,
   } as Workspace;
 }
 

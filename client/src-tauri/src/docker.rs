@@ -40,7 +40,13 @@ pub fn available() -> bool {
 }
 
 /// Create + start a code-server container for a workspace. Own filesystem
-/// (a named volume), own network (container IP + a random localhost port → 8080).
+/// (a named volume), own network (container IP + a random host port → 8080).
+///
+/// The host port is published on **all interfaces** (`0.0.0.0`), not just
+/// loopback, so a second machine on the same LAN can open the workspace's URL
+/// (see [`lan_url`]). `--auth none` keeps the local embed frictionless — meaning
+/// anyone who can reach the port while the container runs can open it, which is
+/// fine on a trusted home/office LAN. Stop or destroy the workspace to close it.
 pub fn create(id: &str) -> bool {
     let name = format!("wse-{id}");
     let vol = format!("wse-{id}-data:/home/coder");
@@ -52,7 +58,7 @@ pub fn create(id: &str) -> bool {
         "--hostname",
         "workspace",
         "-p",
-        "127.0.0.1::8080", // random host port -> code-server 8080
+        "0.0.0.0::8080", // random host port on ALL interfaces -> code-server 8080
         "-v",
         &vol,
         IMAGE,
@@ -85,14 +91,37 @@ pub fn running(id: &str) -> bool {
         .unwrap_or(false)
 }
 
-/// The code-server URL for a running container (from the mapped host port).
-pub fn url(id: &str) -> Option<String> {
+/// The host port code-server is mapped to (Docker picks a random free one).
+fn host_port(id: &str) -> Option<String> {
     let mapping = docker(&["port", &format!("wse-{id}"), "8080"])?;
-    let hostport = mapping.lines().next()?.trim();
-    if hostport.is_empty() {
-        return None;
+    // e.g. "0.0.0.0:49153" or "[::]:49153" — the port is after the last ':'.
+    let line = mapping.lines().next()?.trim();
+    let port = line.rsplit(':').next()?.trim();
+    if port.is_empty() {
+        None
+    } else {
+        Some(port.to_string())
     }
-    // docker may print 0.0.0.0:PORT — normalise to localhost.
-    let hostport = hostport.replace("0.0.0.0", "127.0.0.1");
-    Some(format!("http://{hostport}"))
+}
+
+/// The code-server URL for a running container, on **this** machine (loopback).
+/// Used by the embedded Arna editor window.
+pub fn url(id: &str) -> Option<String> {
+    Some(format!("http://127.0.0.1:{}", host_port(id)?))
+}
+
+/// The URL a **second machine on the same LAN** opens to reach this workspace —
+/// this host's LAN IP + the mapped port. `None` if the LAN IP can't be found or
+/// the container isn't publishing yet.
+pub fn lan_url(id: &str) -> Option<String> {
+    Some(format!("http://{}:{}", lan_ip()?, host_port(id)?))
+}
+
+/// This machine's primary LAN IP. Opens a UDP socket toward a public address and
+/// reads back the local address the OS would route through — no packets are sent,
+/// it just resolves the outbound interface. Falls back to `None` if offline.
+fn lan_ip() -> Option<String> {
+    let sock = std::net::UdpSocket::bind("0.0.0.0:0").ok()?;
+    sock.connect("8.8.8.8:80").ok()?;
+    Some(sock.local_addr().ok()?.ip().to_string())
 }

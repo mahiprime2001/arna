@@ -153,6 +153,9 @@ export interface Workspace {
   runtime?: "native" | "docker" | "cloud";
   /** For Docker workspaces: the embedded code-server URL (when running). */
   url?: string | null;
+  /** For Docker workspaces: the LAN URL a second machine on the same network
+   *  opens to reach this workspace (this host's IP + the mapped port). */
+  lanUrl?: string | null;
 }
 
 /**

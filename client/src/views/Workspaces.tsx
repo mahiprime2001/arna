@@ -55,6 +55,13 @@ function WorkspaceCard({
     setCopied(true);
     setTimeout(() => setCopied(false), 1600);
   };
+  const [copiedUrl, setCopiedUrl] = useState(false);
+  const copyLan = () => {
+    if (!w.lanUrl) return;
+    navigator.clipboard?.writeText(w.lanUrl);
+    setCopiedUrl(true);
+    setTimeout(() => setCopiedUrl(false), 1600);
+  };
 
   // Buttons are offered only for transitions the spec permits from here.
   const can = (to: WorkspaceState) => canTransition(w.state, to);
@@ -121,6 +128,22 @@ function WorkspaceCard({
             <Copy size={12} />
             {copied ? "Copied" : w.id}
           </button>
+
+          {w.lanUrl && (
+            <div className="mt-3 rounded-md border border-line bg-elevated/50 p-2.5">
+              <p className="text-[11px] font-medium text-muted">
+                Open on another device (same Wi-Fi)
+              </p>
+              <button
+                onClick={copyLan}
+                title="Copy the LAN URL"
+                className="mt-1 inline-flex max-w-full items-center gap-1.5 font-mono text-[11.5px] text-ink transition-colors hover:text-muted"
+              >
+                <Copy size={12} className="shrink-0" />
+                <span className="truncate">{copiedUrl ? "Copied" : w.lanUrl}</span>
+              </button>
+            </div>
+          )}
         </div>
       </div>
 
