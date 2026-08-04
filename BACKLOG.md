@@ -5,7 +5,7 @@ daily use proves they're needed** — not on speculation. Each line notes the *w
 that would justify it.
 
 ## WSE v2 — Resource Projection (the architecture)
-- **[Resource Projection Model](docs/resource-projection-model.md)** — the generic
+- **[Workspace Resource Model (WRM)](docs/workspace-resource-model.md)** — the generic
   engine: apps are *data* (manifests), resources have classes (executable /
   package / config / data / credential / cache), each projected by a mode (host /
   overlay / workspace / merge / temporary / deny). One `ResourceProjector` builds a

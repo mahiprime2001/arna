@@ -16,6 +16,7 @@ members = [
     "wse-shell",
     "wse-app",
     "wse-server",
+    "wrm",
     "conformance",
 ]
 

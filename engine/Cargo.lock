@@ -84,3 +84,7 @@ dependencies = [
  "wse-common",
  "wse-engine",
 ]
+
+[[package]]
+name = "wse-wrm"
+version = "0.1.0"

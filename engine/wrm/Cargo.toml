@@ -1,0 +1,11 @@
+[package]
+name = "wse-wrm"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# The Workspace Resource Model: manifests (apps as data) + projection policies ->
+# a LaunchPlan (the IR). The projector knows no application; runtimes execute the
+# plan. See docs/workspace-resource-model.md. Pure logic, no platform deps.
+[lib]
+path = "src/lib.rs"

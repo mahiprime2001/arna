@@ -1,9 +1,20 @@
-# WSE v2 — The Resource Projection Model
+# The Workspace Resource Model (WRM)
 
-**Status: architecture design. No code yet.** This is the generic model the last
-several iterations were converging toward. It subsumes
+**The core model of WSE.** It defines the resource taxonomy, projection semantics,
+launch planning, runtime negotiation, and workspace behaviour. It subsumes
 [Host Resource Projection](host-resource-projection.md) (the motivation) and the
 Overlay Engine (already built) into one engine.
+
+**The keystone is the contract between the two halves** (see §5b/§5c): the
+**LaunchPlan** — an OS-agnostic intermediate representation the projector emits and
+the runtime executes — and the **Runtime Descriptor** — what a runtime declares it
+can satisfy. The projector never learns an OS; the runtime never learns an app;
+the LaunchPlan is their only shared language.
+
+```
+Workspace → Resource Projector → LaunchPlan (IR) → Runtime → Operating System
+              (WHAT: policy)      the contract     (HOW)
+```
 
 > The engine knows nothing about Python, Chrome, or VS Code. **Applications are
 > consumers of resources. WSE virtualizes resources.** An application is *data* (a
@@ -186,6 +197,74 @@ Nothing in the projector says "Python" or "Chrome." Add an app = add a manifest.
 
 ---
 
+## 5b. The LaunchPlan — the contract (IR)
+
+The single most important object in WSE. The projector's only output; the runtime's
+only input. OS-agnostic and app-agnostic — it describes *what to run and with which
+projected resources*, never *how* to realise them.
+
+```rust
+struct LaunchPlan {
+    executable: PathBuf,             // resolved from the manifest's candidates
+    arguments: Vec<String>,          // filled from staged resources
+    working_directory: PathBuf,
+    environment: Vec<(String, String)>,   // the Workspace Runtime Context
+    resources: Vec<StagedResource>,  // each resource + its chosen mode + paths
+    requirements: RuntimeRequirements,     // the modes/features this plan needs
+}
+
+struct StagedResource {
+    name: String,
+    class: ResourceClass,
+    mode: ProjectionMode,            // host | workspace | overlay | merge | temporary | deny
+    workspace_path: Option<PathBuf>, // where the workspace copy lives (if any)
+    host_path: Option<PathBuf>,      // the origin (for host/overlay/merge)
+}
+```
+
+The plan is **declarative about resources**: it says "extensions: mode=workspace at
+`<home>/vscode/ext`" — it does *not* copy anything. Realising a `StagedResource`
+(create the dir, run the overlay copy, mount a volume) is the **runtime's** job,
+done its own way (native: dirs + env; Docker: mounts). This keeps the projector
+free of all fs/OS work.
+
+## 5c. The Runtime Descriptor — capability negotiation
+
+The mirror of the plan: what a runtime can do. The projector/policy negotiate
+against it *before* execution, exactly like capability negotiation in the core
+contract.
+
+```yaml
+# native-windows
+runtime: native-windows
+supports: [host, workspace, overlay, merge, temporary]   # deny is WEAK here
+applications: native            # real Windows .exe
+limitations:
+  process_namespace: false
+  kernel_isolation: false
+  registry_projection: false    # can't project the registry (yet)
+  deny_is_a_wall: false         # deny = "not wired in", not "cannot access"
+```
+```yaml
+# docker
+runtime: docker
+supports: [workspace, overlay, deny, temporary, host]
+applications: linux             # not native Windows apps
+limitations:
+  deny_is_a_wall: true          # true isolation
+  native_windows_apps: false
+```
+
+**The flow becomes:**
+```
+Projection Policy → LaunchPlan → Runtime.can_satisfy(plan)? → execute | capability error
+```
+A runtime that can't satisfy a plan's requirements returns a capability error
+(never a crash) — and the UI can suggest a runtime that can (e.g. "this needs a
+real `deny` wall — use Docker"). Same `WseError` vocabulary as the core contract.
+
+---
+
 ## 6. The four engines are one pipeline
 
 - **Overlay Engine** — the mechanism behind the `overlay` mode (copy + diff +
@@ -239,14 +318,26 @@ v2 is the realization that these are the *same engine* with different config.
 
 ---
 
-## 10. Build order (when real use calls for it)
+## 10. Validation — the pipeline is proven (`engine/wrm`)
 
-Design first, per the discipline. The first *implementable* slice, when ready:
+The core claim is validated in code (`wse-wrm`, pure logic, no platform deps):
 
-> The **ResourceProjector for one app (VS Code)** with **Clean** vs **Development**
-> profiles — reusing the Overlay Engine and an environment block. Prove the
-> pipeline (manifest + policy → plan → launch) end-to-end on one app, then the rest
-> is more manifests, not more engine.
+- **`project(manifest, policy, home) -> LaunchPlan`** — one generic function; grep
+  it, there is no `"vscode"` or `"python"` in it.
+- VS Code under **Clean** vs **Development** yields different plans from the policy
+  alone (extensions: a fresh workspace dir vs the host's real extensions), same
+  executable — *no app-specific code*.
+- A **totally different app** (Python, env-based via `PYTHONPATH`) goes through the
+  *same* `project` with zero changes — proving app support is data, not engine.
+- **Runtime negotiation**: native + Docker both satisfy a normal plan; a plan that
+  requires a real `deny` wall is *refused by native* (`missing() == [Deny]`, a
+  capability result, not a crash) and *accepted by Docker*.
 
-That validates the whole model with the least code, and every subsequent app is
-data.
+So application support is data-driven and runtimes execute/negotiate plans rather
+than embedding application knowledge — the central claim of WSE v2. **Every
+subsequent app is a manifest, not more engine.**
+
+**Next (wiring, not architecture):** feed a `LaunchPlan` to the real native runtime
+(`create_process_flags` already takes an env + command) so a workspace launches VS
+Code *from the plan*, and stage `overlay`/`workspace` dirs via the Overlay Engine.
+Then a profile picker in the create dialog. None of that changes the model.
