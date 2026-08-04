@@ -11,6 +11,8 @@ import {
   GlobeX,
   Clock,
   Monitor,
+  Cube,
+  Cloud,
 } from "@phosphor-icons/react";
 import { Card } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
@@ -70,6 +72,21 @@ function WorkspaceCard({
               )}
             >
               {STATE_LABEL[w.state]}
+            </span>
+            <span className="ml-auto inline-flex shrink-0 items-center gap-1 rounded-full bg-elevated px-2 py-0.5 text-[11px] text-muted">
+              {w.runtime === "docker" ? (
+                <>
+                  <Cube size={12} weight="fill" /> Docker
+                </>
+              ) : w.runtime === "cloud" ? (
+                <>
+                  <Cloud size={12} weight="fill" /> Cloud
+                </>
+              ) : (
+                <>
+                  <Monitor size={12} weight="fill" /> Native
+                </>
+              )}
             </span>
           </div>
           <p className="mt-1 text-[12.5px] text-muted">{describe(w)}</p>

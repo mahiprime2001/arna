@@ -148,8 +148,9 @@ export interface Workspace {
   /** SPEC §4.6.2: what a Collaborator may do, within what the host allows. */
   collaboratorGrants: Record<Capability, boolean>;
   createdAt: number;
-  /** Which runtime runs this workspace (native Windows, or a Docker sandbox). */
-  runtime?: "native" | "docker";
+  /** Which runtime runs this workspace (native Windows, a Docker sandbox, or —
+   *  later — a cloud VM). */
+  runtime?: "native" | "docker" | "cloud";
   /** For Docker workspaces: the embedded code-server URL (when running). */
   url?: string | null;
 }
