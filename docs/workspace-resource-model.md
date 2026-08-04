@@ -133,6 +133,18 @@ resources:
   cache:    { class: cache,   env: "PYTHONPYCACHEPREFIX" }
 ```
 
+> **Refinement (for multi-OS): discovery is not the manifest's job.** A manifest
+> should describe an app's *resources* platform-neutrally and refer to the app by a
+> *logical id* (`vscode`). *Finding* the executable — Windows `Code.exe` paths vs
+> Linux `code` vs a macOS `.app` — is OS-specific and belongs in an **Application
+> Registry**:
+> ```
+> Application Registry → Discovery → Resolved Installation → (feeds the plan's executable)
+> ```
+> The registry resolves `vscode` → the real binary on *this* OS; the manifest and
+> projector stay platform-neutral. (The proof crate inlines `exe_candidates` for
+> now — fine for one OS; split it out when a second OS lands.)
+
 ### 4b. Projection policy — the *mode* per resource (per workspace / profile)
 
 Default-by-class, with per-app / per-layer overrides. **Profiles** are named
@@ -154,7 +166,11 @@ overrides:
 
 Profiles to ship: **Clean** (executables only), **Development** (runtimes +
 packages + editor extensions, no secrets), **Personal** (full browser profile),
-**Custom**.
+**AI / Data Science**, **Custom**.
+
+> **Naming:** to users these are **Workspace Profiles** ("Development", "Clean",
+> "Personal"). *Projection policy* is the internal/engine term. The UI says
+> profile; the engine says policy — same object.
 
 ---
 
@@ -227,6 +243,12 @@ The plan is **declarative about resources**: it says "extensions: mode=workspace
 (create the dir, run the overlay copy, mount a volume) is the **runtime's** job,
 done its own way (native: dirs + env; Docker: mounts). This keeps the projector
 free of all fs/OS work.
+
+> The LaunchPlan is only the **input** half of the runtime boundary. What the
+> runtime *returns* (the running instance + how to tear it down) is the
+> **[Runtime Execution Contract](runtime-execution-contract.md)** — the
+> `ExecutionContext`. Suspend/resume, snapshots, monitoring, and migration all
+> build on that, not on the plan.
 
 ## 5c. The Runtime Descriptor — capability negotiation
 
