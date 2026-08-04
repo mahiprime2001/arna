@@ -5,6 +5,28 @@ workspaces on one machine; each owns its applications, windows, clipboard,
 storage, and browser profiles, using native Windows apps and standard APIs — no
 VMs, no WSL.
 
+## The three phases
+
+The roadmap is one arc in three phases, not a flat list:
+
+```
+Specification  →  Implementation  →  Validation
+  (the docs)       (generic wiring)    (live in it)
+```
+
+**We are leaving Specification.** The v1 contract and the v2 WRM (both boundary
+halves — see [docs/](docs/README.md)) are frozen. The next milestone is not a
+feature; it is a proof:
+
+> **First LaunchPlan executed without application-specific runtime code.**
+
+When one `LaunchPlan` flows `projector → Runtime::execute → ExecutionContext` and the
+native runtime contains *no* `if app == …` branch, the architecture is proven and
+every further application is manifest authoring, not engineering. VS Code is the
+intended first stress test — it touches nearly every resource class (executable,
+extensions, settings, workspace storage, environment, terminals, Git). If VS Code
+goes fully manifest-driven, WRM is proven.
+
 ## Windows v1 — the Minimum Complete Workspace ✅
 
 - [x] Engine (contract + conformance)
