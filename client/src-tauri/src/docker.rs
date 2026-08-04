@@ -5,6 +5,8 @@
 //! `docker` CLI (no SDK dependency).
 
 use std::process::Command;
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
 /// The base image: Ubuntu + code-server (full VS Code, runs your code inside).
 const IMAGE: &str = "codercom/code-server:latest";
@@ -18,8 +20,22 @@ fn docker(args: &[&str]) -> Option<String> {
     }
 }
 
-/// Is the Docker daemon reachable? (Docker Desktop running.)
+// Cache availability so we don't shell out to `docker` on every UI poll (and so a
+// machine without Docker stays snappy — WSE never requires Docker).
+static AVAIL: Mutex<Option<(Instant, bool)>> = Mutex::new(None);
+
+/// Is the Docker daemon reachable? (Docker Desktop running.) Cached ~8s.
 pub fn available() -> bool {
+    if let Ok(mut c) = AVAIL.lock() {
+        if let Some((t, v)) = *c {
+            if t.elapsed() < Duration::from_secs(8) {
+                return v;
+            }
+        }
+        let v = docker(&["version", "--format", "{{.Server.Version}}"]).is_some();
+        *c = Some((Instant::now(), v));
+        return v;
+    }
     docker(&["version", "--format", "{{.Server.Version}}"]).is_some()
 }
 

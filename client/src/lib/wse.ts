@@ -33,9 +33,17 @@ export function isTauri(): boolean {
     "undefined";
 }
 
+// Whether a Docker runtime is available (Docker Desktop running). Updated from
+// every state reply; the create dialog uses it to offer/withhold the Docker
+// runtime — WSE never *requires* Docker.
+let _dockerAvailable = false;
+export const dockerAvailable = () => _dockerAvailable;
+
 function parse(json: string): EngineWs[] {
   try {
-    return (JSON.parse(json).workspaces ?? []) as EngineWs[];
+    const o = JSON.parse(json);
+    _dockerAvailable = !!o.docker;
+    return (o.workspaces ?? []) as EngineWs[];
   } catch {
     return [];
   }

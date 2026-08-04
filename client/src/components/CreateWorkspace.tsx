@@ -16,6 +16,7 @@ import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
 import { Switch } from "@/components/ui/Switch";
 import { cn } from "@/lib/utils";
+import { isTauri, dockerAvailable } from "@/lib/wse";
 import {
   CATALOG,
   CAPABILITY_LABEL,
@@ -49,23 +50,32 @@ function Choice({
   icon,
   title,
   hint,
+  disabled = false,
 }: {
   active: boolean;
   onClick: () => void;
   icon: React.ReactNode;
   title: string;
   hint: string;
+  disabled?: boolean;
 }) {
   return (
     <button
-      onClick={onClick}
+      onClick={disabled ? undefined : onClick}
+      disabled={disabled}
       aria-pressed={active}
       className={cn(
         "flex flex-1 gap-3 rounded-lg border p-3 text-left transition-colors",
-        active ? "border-brand bg-brand-soft" : "border-line hover:bg-elevated",
+        disabled
+          ? "cursor-not-allowed border-line opacity-50"
+          : active
+            ? "border-brand bg-brand-soft"
+            : "border-line hover:bg-elevated",
       )}
     >
-      <span className={cn("mt-0.5 shrink-0", active ? "text-brand" : "text-muted")}>{icon}</span>
+      <span className={cn("mt-0.5 shrink-0", active && !disabled ? "text-brand" : "text-muted")}>
+        {icon}
+      </span>
       <span className="min-w-0">
         <span className="block text-[13.5px] font-medium">{title}</span>
         <span className="mt-0.5 block text-[12px] leading-relaxed text-muted">{hint}</span>
@@ -175,9 +185,14 @@ export function CreateWorkspace({
               <Choice
                 active={d.runtime === "docker"}
                 onClick={() => set("runtime", "docker")}
+                disabled={isTauri() && !dockerAvailable()}
                 icon={<Cube size={18} />}
                 title="Docker sandbox"
-                hint="Own filesystem + own network (own IP/ports). VS Code in the browser. Needs Docker running."
+                hint={
+                  isTauri() && !dockerAvailable()
+                    ? "Unavailable — start Docker Desktop to use this runtime."
+                    : "Own filesystem + own network (own IP/ports). VS Code in the browser."
+                }
               />
             </div>
           </Section>
