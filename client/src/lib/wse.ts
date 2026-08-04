@@ -19,6 +19,41 @@ export function openCodeServerWindow(id: string, title: string, url: string) {
   });
 }
 
+/// Turn whatever a friend pasted — a full URL, or a bare `host:port[/path]` —
+/// into a clean http URL. Returns null if it isn't a workspace address (e.g. a
+/// bare workspace ID, which can't be resolved without a discovery service).
+export function normalizeInvite(raw: string): string | null {
+  const s = raw.trim();
+  if (!s) return null;
+  const hasScheme = /^https?:\/\//i.test(s);
+  const looksHostPort = /^[\w.-]+:\d{2,5}(\/|$)/.test(s);
+  if (!hasScheme && !looksHostPort) return null;
+  try {
+    const u = new URL(hasScheme ? s : `http://${s}`);
+    return u.hostname ? u.toString() : null;
+  } catch {
+    return null;
+  }
+}
+
+/// Join a workspace from an invite link. Opens code-server in its own app window
+/// (desktop) or a new tab (browser). Returns an error message, or null on success.
+export function joinByLink(raw: string): string | null {
+  const url = normalizeInvite(raw);
+  if (!url) {
+    return "Paste the invite link your friend sent — an http://… address (or host:port). A bare workspace ID can't be joined on the same network without the backend.";
+  }
+  let h = 0;
+  for (let i = 0; i < url.length; i++) h = (h * 31 + url.charCodeAt(i)) | 0;
+  const id = `join-${(h >>> 0).toString(36)}`;
+  if (isTauri()) {
+    openCodeServerWindow(id, "Joined workspace", url);
+  } else {
+    window.open(url, "_blank", "noopener");
+  }
+  return null;
+}
+
 export type EngineWs = {
   id: string;
   name: string;

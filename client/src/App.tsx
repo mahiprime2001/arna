@@ -32,6 +32,7 @@ import {
   wseEnter,
   toWorkspaces,
   openCodeServerWindow,
+  joinByLink,
 } from "@/lib/wse";
 import type { AuthUser } from "@/lib/api";
 import { decryptFrom, encryptFor, initCrypto, myPublicKey } from "@/lib/crypto";
@@ -610,6 +611,7 @@ export default function App({
                     onTransition={transitionWorkspace}
                     onDelete={deleteWorkspace}
                     onOpen={handleOpenWorkspace}
+                    onJoin={joinByLink}
                   />
                 )}
                 {route === "friends" && (

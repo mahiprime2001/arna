@@ -13,6 +13,7 @@ import {
   Monitor,
   Cube,
   Cloud,
+  SignIn,
 } from "@phosphor-icons/react";
 import { Card } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
@@ -132,15 +133,15 @@ function WorkspaceCard({
           {w.lanUrl && (
             <div className="mt-3 rounded-md border border-line bg-elevated/50 p-2.5">
               <p className="text-[11px] font-medium text-muted">
-                Open on another device (same Wi-Fi)
+                Invite link — friends on your Wi-Fi can join
               </p>
               <button
                 onClick={copyLan}
-                title="Copy the LAN URL"
+                title="Copy the invite link"
                 className="mt-1 inline-flex max-w-full items-center gap-1.5 font-mono text-[11.5px] text-ink transition-colors hover:text-muted"
               >
                 <Copy size={12} className="shrink-0" />
-                <span className="truncate">{copiedUrl ? "Copied" : w.lanUrl}</span>
+                <span className="truncate">{copiedUrl ? "Copied — send this to a friend" : w.lanUrl}</span>
               </button>
             </div>
           )}
@@ -187,14 +188,29 @@ export function Workspaces({
   onTransition,
   onDelete,
   onOpen,
+  onJoin,
 }: {
   workspaces: Workspace[];
   onCreate: (draft: Omit<Workspace, "id" | "state" | "createdAt">) => void;
   onTransition: (id: string, to: WorkspaceState) => void;
   onDelete: (w: Workspace) => void;
   onOpen: (w: Workspace) => void;
+  onJoin?: (link: string) => string | null;
 }) {
   const [creating, setCreating] = useState(false);
+  const [joining, setJoining] = useState(false);
+  const [joinLink, setJoinLink] = useState("");
+  const [joinError, setJoinError] = useState<string | null>(null);
+
+  const submitJoin = () => {
+    const err = onJoin?.(joinLink) ?? "Joining isn't available here.";
+    if (err) {
+      setJoinError(err);
+    } else {
+      setJoinLink("");
+      setJoining(false);
+    }
+  };
 
   return (
     <div className="animate-fade-up space-y-6">
@@ -202,11 +218,41 @@ export function Workspaces({
         title="Workspaces"
         subtitle="Isolated places you lend to people you invite."
         action={
-          <Button onClick={() => setCreating(true)}>
-            <Plus size={16} weight="bold" /> New workspace
-          </Button>
+          <div className="flex gap-2">
+            <Button variant="outline" onClick={() => setJoining((v) => !v)}>
+              <SignIn size={16} weight="bold" /> Join
+            </Button>
+            <Button onClick={() => setCreating(true)}>
+              <Plus size={16} weight="bold" /> New workspace
+            </Button>
+          </div>
         }
       />
+
+      {joining && (
+        <Card className="p-4">
+          <h3 className="text-sm font-semibold">Join a friend's workspace</h3>
+          <p className="mt-1 text-[12.5px] text-muted">
+            Paste the invite link they sent you. You both need to be on the same Wi-Fi.
+          </p>
+          <div className="mt-3 flex flex-col gap-2 sm:flex-row">
+            <input
+              value={joinLink}
+              onChange={(e) => {
+                setJoinLink(e.target.value);
+                setJoinError(null);
+              }}
+              onKeyDown={(e) => e.key === "Enter" && submitJoin()}
+              placeholder="http://192.168.1.5:49153"
+              className="flex-1 rounded-md border border-line bg-elevated px-3 py-2 font-mono text-[12.5px] outline-none focus:border-brand"
+            />
+            <Button onClick={submitJoin}>
+              <SignIn size={14} weight="fill" /> Join
+            </Button>
+          </div>
+          {joinError && <p className="mt-2 text-[12px] text-danger">{joinError}</p>}
+        </Card>
+      )}
 
       {workspaces.length === 0 ? (
         <Card className="flex flex-col items-center gap-3 px-6 py-16 text-center">
