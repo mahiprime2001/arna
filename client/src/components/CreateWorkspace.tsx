@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { createPortal } from "react-dom";
 import {
   X,
   Clock,
@@ -121,7 +122,7 @@ export function CreateWorkspace({
     (c) => DEFAULT_CAPABILITIES.collaborator[c] === "configurable",
   );
 
-  return (
+  return createPortal(
     <div
       className="fixed inset-0 z-50 grid place-items-center overflow-y-auto bg-black/50 p-6"
       onClick={onClose}
@@ -331,6 +332,7 @@ export function CreateWorkspace({
           </div>
         </footer>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
