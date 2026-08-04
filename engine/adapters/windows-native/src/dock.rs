@@ -1,9 +1,10 @@
-//! The **workspace dock** — a thin always-on-top bar on the left edge of a
-//! workspace desktop. A fresh Windows desktop has NO taskbar or Start menu, so
-//! without this you can't get a minimized window back or launch anything. The
-//! dock gives the workspace its own tiny shell: launch a browser, and Focus /
-//! Minimize / Close / Leave the windows running there. It runs on a thread whose
-//! desktop is the workspace desktop, with its own Win32 message loop.
+//! The **workspace dock** — a small, floating, Mac-style bar at the bottom of a
+//! workspace desktop. A fresh Windows desktop has no taskbar/Start, so without
+//! this a minimized or closed window is lost. The dock is a rounded translucent
+//! strip of app icons: click an icon to focus/restore that window (this is how
+//! you bring a minimized app back), right-click to close. Plus a "+" launcher, a
+//! "My" (imported profile) tile, and an "Exit" tile back to your real desktop.
+//! It floats (doesn't reserve screen space) and is owner-drawn (raw GDI).
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -23,36 +24,81 @@ type EnumProc = extern "system" fn(Hwnd, isize) -> i32;
 const GENERIC_ALL: u32 = 0x1000_0000;
 const WS_POPUP: u32 = 0x8000_0000;
 const WS_VISIBLE: u32 = 0x1000_0000;
-const WS_CHILD: u32 = 0x4000_0000;
-const WS_BORDER: u32 = 0x0080_0000;
-const WS_VSCROLL: u32 = 0x0020_0000;
 const WS_EX_TOPMOST: u32 = 0x0000_0008;
 const WS_EX_TOOLWINDOW: u32 = 0x0000_0080;
-const BS_PUSHBUTTON: u32 = 0;
-const LBS_NOTIFY: u32 = 0x0001;
+const WS_EX_LAYERED: u32 = 0x0008_0000;
+const LWA_ALPHA: u32 = 2;
 const SW_RESTORE: i32 = 9;
-const SW_MINIMIZE: i32 = 6;
+const SM_CXSCREEN: i32 = 0;
 const SM_CYSCREEN: i32 = 1;
-const WM_COMMAND: u32 = 0x0111;
+const WM_PAINT: u32 = 0x000F;
 const WM_TIMER: u32 = 0x0113;
 const WM_DESTROY: u32 = 0x0002;
 const WM_CLOSE: u32 = 0x0010;
-const LB_ADDSTRING: u32 = 0x0180;
-const LB_RESETCONTENT: u32 = 0x0184;
-const LB_GETCURSEL: u32 = 0x0188;
-const LB_SETITEMDATA: u32 = 0x019A;
-const LB_GETITEMDATA: u32 = 0x0199;
+const WM_LBUTTONDOWN: u32 = 0x0201;
+const WM_RBUTTONDOWN: u32 = 0x0204;
+const WM_GETICON: u32 = 0x007F;
 const IDC_ARROW: u32 = 32512;
-
-// control ids
-const ID_NEW_BROWSER: u32 = 1001;
-const ID_FOCUS: u32 = 1002;
-const ID_MINIMIZE: u32 = 1003;
-const ID_CLOSE: u32 = 1004;
-const ID_LEAVE: u32 = 1005;
-const ID_MY_BROWSER: u32 = 1006;
-const ID_LIST: u32 = 2000;
+const DI_NORMAL: u32 = 0x0003;
+const NULL_PEN: i32 = 8;
+const TRANSPARENT: i32 = 1;
+const DT_CENTER: u32 = 0x0000_0001;
+const DT_VCENTER: u32 = 0x0000_0004;
+const DT_SINGLELINE: u32 = 0x0000_0020;
+const GCLP_HICON: i32 = -14;
+const SWP_NOACTIVATE: u32 = 0x0010;
+const HWND_TOPMOST: isize = -1;
 const TIMER_ID: usize = 1;
+
+// layout
+const PAD: i32 = 12;
+const TILE: i32 = 56;
+const GAP: i32 = 8;
+const ICON: i32 = 36;
+const HEIGHT: i32 = TILE + 20;
+
+#[derive(Clone)]
+enum TileKind {
+    NewBrowser,
+    MyBrowser,
+    Exit,
+    App(isize),
+}
+
+struct Tile {
+    kind: TileKind,
+    x: i32,
+    w: i32,
+}
+
+#[repr(C)]
+struct Rect {
+    left: i32,
+    top: i32,
+    right: i32,
+    bottom: i32,
+}
+
+#[repr(C)]
+struct PaintStruct {
+    hdc: Handle,
+    erase: i32,
+    rc_paint: Rect,
+    restore: i32,
+    inc_update: i32,
+    reserved: [u8; 32],
+}
+
+#[repr(C)]
+struct Msg {
+    hwnd: Hwnd,
+    message: u32,
+    w_param: usize,
+    l_param: isize,
+    time: u32,
+    pt_x: i32,
+    pt_y: i32,
+}
 
 #[repr(C)]
 struct WndClassW {
@@ -68,60 +114,67 @@ struct WndClassW {
     class_name: *const u16,
 }
 
-#[repr(C)]
-struct Msg {
-    hwnd: Hwnd,
-    message: u32,
-    w_param: usize,
-    l_param: isize,
-    time: u32,
-    pt_x: i32,
-    pt_y: i32,
-}
-
 #[link(name = "user32")]
 extern "system" {
     fn RegisterClassW(c: *const WndClassW) -> u16;
     fn CreateWindowExW(
-        ex: u32,
-        class: *const u16,
-        name: *const u16,
-        style: u32,
-        x: i32,
-        y: i32,
-        w: i32,
-        h: i32,
-        parent: Hwnd,
-        menu: Handle,
-        inst: Handle,
-        param: *const c_void,
+        ex: u32, class: *const u16, name: *const u16, style: u32,
+        x: i32, y: i32, w: i32, h: i32,
+        parent: Hwnd, menu: Handle, inst: Handle, param: *const c_void,
     ) -> Hwnd;
     fn DefWindowProcW(h: Hwnd, m: u32, w: usize, l: isize) -> isize;
-    fn ShowWindow(h: Hwnd, cmd: i32) -> i32;
     fn TranslateMessage(m: *const Msg) -> i32;
     fn DispatchMessageW(m: *const Msg) -> isize;
     fn PostQuitMessage(code: i32);
     fn GetMessageW(m: *mut Msg, h: Hwnd, min: u32, max: u32) -> i32;
     fn SendMessageW(h: Hwnd, m: u32, w: usize, l: isize) -> isize;
     fn PostMessageW(h: Hwnd, m: u32, w: usize, l: isize) -> i32;
-    fn SetTimer(h: Hwnd, id: usize, ms: u32, proc_: *const c_void) -> usize;
+    fn SetTimer(h: Hwnd, id: usize, ms: u32, p: *const c_void) -> usize;
     fn KillTimer(h: Hwnd, id: usize) -> i32;
     fn GetSystemMetrics(i: i32) -> i32;
     fn LoadCursorW(inst: Handle, name: u32) -> Handle;
+    fn ShowWindow(h: Hwnd, cmd: i32) -> i32;
     fn SetForegroundWindow(h: Hwnd) -> i32;
+    fn BringWindowToTop(h: Hwnd) -> i32;
+    fn SetWindowPos(h: Hwnd, after: isize, x: i32, y: i32, w: i32, ht: i32, flags: u32) -> i32;
+    fn SetWindowRgn(h: Hwnd, rgn: Handle, redraw: i32) -> i32;
+    fn InvalidateRect(h: Hwnd, r: *const Rect, erase: i32) -> i32;
+    fn SetLayeredWindowAttributes(h: Hwnd, key: u32, alpha: u8, flags: u32) -> i32;
+    fn BeginPaint(h: Hwnd, ps: *mut PaintStruct) -> Handle;
+    fn EndPaint(h: Hwnd, ps: *const PaintStruct) -> i32;
+    fn GetClientRect(h: Hwnd, r: *mut Rect) -> i32;
+    fn FillRect(hdc: Handle, r: *const Rect, brush: Handle) -> i32;
+    fn DrawTextW(hdc: Handle, text: *const u16, count: i32, r: *mut Rect, fmt: u32) -> i32;
+    fn DrawIconEx(hdc: Handle, x: i32, y: i32, icon: Handle, cx: i32, cy: i32, step: u32, brush: Handle, flags: u32) -> i32;
+    fn GetClassLongPtrW(h: Hwnd, index: i32) -> usize;
     fn EnumDesktopWindows(d: Hdesk, cb: EnumProc, l: isize) -> i32;
     fn IsWindowVisible(h: Hwnd) -> i32;
     fn GetWindowTextLengthW(h: Hwnd) -> i32;
-    fn GetWindowTextW(h: Hwnd, s: *mut u16, n: i32) -> i32;
     fn OpenDesktopW(name: *const u16, flags: u32, inherit: i32, access: u32) -> Hdesk;
     fn SwitchDesktop(d: Hdesk) -> i32;
     fn SetThreadDesktop(d: Hdesk) -> i32;
     fn CloseDesktop(d: Hdesk) -> i32;
 }
 
+#[link(name = "gdi32")]
+extern "system" {
+    fn CreateSolidBrush(color: u32) -> Handle;
+    fn CreateRoundRectRgn(l: i32, t: i32, r: i32, b: i32, w: i32, h: i32) -> Handle;
+    fn RoundRect(hdc: Handle, l: i32, t: i32, r: i32, b: i32, w: i32, h: i32) -> i32;
+    fn SelectObject(hdc: Handle, obj: Handle) -> Handle;
+    fn DeleteObject(obj: Handle) -> i32;
+    fn GetStockObject(i: i32) -> Handle;
+    fn SetBkMode(hdc: Handle, mode: i32) -> i32;
+    fn SetTextColor(hdc: Handle, color: u32) -> u32;
+}
+
 #[link(name = "kernel32")]
 extern "system" {
     fn GetModuleHandleW(name: *const u16) -> Handle;
+}
+
+fn rgb(r: u8, g: u8, b: u8) -> u32 {
+    (r as u32) | ((g as u32) << 8) | ((b as u32) << 16)
 }
 
 struct DockCtx {
@@ -130,7 +183,7 @@ struct DockCtx {
     home: String,
     desktop_name: String,
     self_hwnd: isize,
-    listbox: isize,
+    tiles: Vec<Tile>,
     counter: u32,
 }
 
@@ -138,137 +191,191 @@ thread_local! {
     static CTX: RefCell<Option<DockCtx>> = const { RefCell::new(None) };
 }
 
-// desktop_name -> dock main hwnd, so destroy() can close the dock cleanly.
 static REGISTRY: Mutex<Option<HashMap<String, isize>>> = Mutex::new(None);
 static CLASS_SEQ: AtomicU32 = AtomicU32::new(0);
 
-/// Close the dock on a desktop (called from the adapter's destroy).
 pub(crate) fn close(desktop_name: &str) {
     let hwnd = REGISTRY
         .lock()
         .ok()
         .and_then(|g| g.as_ref().and_then(|m| m.get(desktop_name).copied()));
     if let Some(h) = hwnd {
-        unsafe {
-            PostMessageW(h as Hwnd, WM_CLOSE, 0, 0);
-        }
+        unsafe { PostMessageW(h as Hwnd, WM_CLOSE, 0, 0); }
     }
 }
 
-/// All titled, visible top-level windows on the current thread's desktop.
-fn windows_here() -> Vec<(isize, String)> {
+/// Visible, titled top-level windows on the current thread's desktop.
+fn windows_here() -> Vec<isize> {
     extern "system" fn cb(h: Hwnd, l: isize) -> i32 {
         unsafe {
-            let out = &mut *(l as *mut Vec<(isize, String)>);
+            let out = &mut *(l as *mut Vec<isize>);
             if IsWindowVisible(h) == 0 {
                 return 1;
             }
-            let len = GetWindowTextLengthW(h);
-            if len <= 0 {
+            if GetWindowTextLengthW(h) <= 0 {
                 return 1;
             }
-            let mut buf = vec![0u16; len as usize + 1];
-            let n = GetWindowTextW(h, buf.as_mut_ptr(), buf.len() as i32);
-            out.push((h as isize, String::from_utf16_lossy(&buf[..n.max(0) as usize])));
+            out.push(h as isize);
         }
         1
     }
-    let mut out: Vec<(isize, String)> = Vec::new();
-    unsafe {
-        EnumDesktopWindows(std::ptr::null_mut(), cb, &mut out as *mut _ as isize);
-    }
+    let mut out: Vec<isize> = Vec::new();
+    unsafe { EnumDesktopWindows(std::ptr::null_mut(), cb, &mut out as *mut _ as isize); }
     out
 }
 
-fn refresh() {
+/// Rebuild the tile list from the current windows and re-lay-out / resize.
+fn refresh(hwnd: Hwnd) {
     CTX.with(|c| {
-        if let Some(ctx) = &*c.borrow() {
-            let list = ctx.listbox as Hwnd;
-            unsafe {
-                SendMessageW(list, LB_RESETCONTENT, 0, 0);
+        let mut b = c.borrow_mut();
+        let Some(ctx) = &mut *b else { return };
+        let mut kinds: Vec<TileKind> = vec![TileKind::NewBrowser];
+        if ctx.profiles.join("imported").exists() {
+            kinds.push(TileKind::MyBrowser);
+        }
+        for h in windows_here() {
+            if h != ctx.self_hwnd {
+                kinds.push(TileKind::App(h));
             }
-            for (h, title) in windows_here() {
-                if h == ctx.self_hwnd {
-                    continue; // don't list the dock itself
-                }
-                let w = wide(&title);
-                let idx = unsafe { SendMessageW(list, LB_ADDSTRING, 0, w.as_ptr() as isize) };
-                if idx >= 0 {
-                    unsafe {
-                        SendMessageW(list, LB_SETITEMDATA, idx as usize, h);
-                    }
-                }
-            }
+        }
+        kinds.push(TileKind::Exit);
+
+        let mut tiles = Vec::new();
+        let mut x = PAD;
+        for k in kinds {
+            tiles.push(Tile { kind: k, x, w: TILE });
+            x += TILE + GAP;
+        }
+        let width = x - GAP + PAD;
+        ctx.tiles = tiles;
+
+        unsafe {
+            let sw = GetSystemMetrics(SM_CXSCREEN);
+            let sh = GetSystemMetrics(SM_CYSCREEN);
+            let px = (sw - width) / 2;
+            let py = sh - HEIGHT - 28;
+            SetWindowPos(hwnd, HWND_TOPMOST, px, py, width, HEIGHT, SWP_NOACTIVATE);
+            let rgn = CreateRoundRectRgn(0, 0, width + 1, HEIGHT + 1, 22, 22);
+            SetWindowRgn(hwnd, rgn, 1);
+            InvalidateRect(hwnd, std::ptr::null(), 1);
         }
     });
 }
 
-fn selected(list: isize) -> Option<isize> {
+fn app_icon(hwnd: Hwnd) -> Handle {
     unsafe {
-        let idx = SendMessageW(list as Hwnd, LB_GETCURSEL, 0, 0);
-        if idx < 0 {
-            None
-        } else {
-            Some(SendMessageW(list as Hwnd, LB_GETITEMDATA, idx as usize, 0))
+        let mut h = SendMessageW(hwnd, WM_GETICON, 1, 0); // ICON_BIG
+        if h == 0 {
+            h = SendMessageW(hwnd, WM_GETICON, 2, 0); // ICON_SMALL2
         }
+        if h == 0 {
+            h = GetClassLongPtrW(hwnd, GCLP_HICON) as isize;
+        }
+        h as Handle
     }
 }
 
-fn handle_command(id: u32) {
+fn draw_glyph(hdc: Handle, x: i32, text: &str) {
+    let mut r = Rect { left: x, top: 0, right: x + TILE, bottom: HEIGHT };
+    let w = wide(text);
+    unsafe {
+        SetTextColor(hdc, rgb(235, 235, 240));
+        DrawTextW(hdc, w.as_ptr(), -1, &mut r, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    }
+}
+
+fn paint(hwnd: Hwnd) {
     CTX.with(|c| {
-        let mut b = c.borrow_mut();
-        let Some(ctx) = &mut *b else { return };
-        match id {
-            ID_NEW_BROWSER => {
-                let profile = ctx.profiles.join(format!("dock-{}", ctx.counter));
-                ctx.counter += 1;
-                let _ = std::fs::create_dir_all(&profile);
-                let cmd = format!(
-                    "\"{}\" --user-data-dir=\"{}\" --no-first-run --no-default-browser-check \
-                     --new-window about:blank",
-                    ctx.browser.display(),
-                    profile.display()
-                );
-                let _ = create_process_on_desktop(&ctx.desktop_name, &cmd, &ctx.home);
-            }
-            ID_MY_BROWSER => {
-                // Your imported profile (logins/bookmarks), if one was imported.
-                let imported = ctx.profiles.join("imported");
-                if imported.exists() {
-                    let cmd = format!(
-                        "\"{}\" --user-data-dir=\"{}\" --no-first-run --no-default-browser-check \
-                         --new-window",
-                        ctx.browser.display(),
-                        imported.display()
-                    );
-                    let _ = create_process_on_desktop(&ctx.desktop_name, &cmd, &ctx.home);
-                }
-            }
-            ID_FOCUS | ID_MINIMIZE | ID_CLOSE => {
-                if let Some(h) = selected(ctx.listbox) {
-                    let hw = h as Hwnd;
-                    unsafe {
-                        match id {
-                            ID_FOCUS => {
-                                ShowWindow(hw, SW_RESTORE);
-                                SetForegroundWindow(hw);
-                            }
-                            ID_MINIMIZE => {
-                                ShowWindow(hw, SW_MINIMIZE);
-                            }
-                            ID_CLOSE => {
-                                PostMessageW(hw, WM_CLOSE, 0, 0);
-                            }
-                            _ => {}
+        let b = c.borrow();
+        let Some(ctx) = &*b else { return };
+        unsafe {
+            let mut ps: PaintStruct = std::mem::zeroed();
+            let hdc = BeginPaint(hwnd, &mut ps);
+            let mut rc: Rect = std::mem::zeroed();
+            GetClientRect(hwnd, &mut rc);
+
+            let bg = CreateSolidBrush(rgb(28, 28, 34));
+            FillRect(hdc, &rc, bg);
+            DeleteObject(bg);
+
+            SetBkMode(hdc, TRANSPARENT);
+            let tile_brush = CreateSolidBrush(rgb(54, 54, 64));
+            let null_pen = GetStockObject(NULL_PEN);
+            SelectObject(hdc, null_pen);
+            let old_brush = SelectObject(hdc, tile_brush);
+
+            let icon_off = (TILE - ICON) / 2;
+            for t in &ctx.tiles {
+                // rounded tile background
+                RoundRect(hdc, t.x, 10, t.x + TILE, 10 + TILE, 14, 14);
+                match &t.kind {
+                    TileKind::NewBrowser => draw_glyph(hdc, t.x, "+"),
+                    TileKind::MyBrowser => draw_glyph(hdc, t.x, "My"),
+                    TileKind::Exit => draw_glyph(hdc, t.x, "Exit"),
+                    TileKind::App(h) => {
+                        let icon = app_icon(*h as Hwnd);
+                        if !icon.is_null() {
+                            DrawIconEx(hdc, t.x + icon_off, 10 + icon_off, icon, ICON, ICON, 0, std::ptr::null_mut(), DI_NORMAL);
+                        } else {
+                            draw_glyph(hdc, t.x, "App");
                         }
                     }
                 }
             }
-            ID_LEAVE => unsafe {
+            SelectObject(hdc, old_brush);
+            DeleteObject(tile_brush);
+            EndPaint(hwnd, &ps);
+        }
+    });
+}
+
+fn on_click(x: i32, right: bool) {
+    CTX.with(|c| {
+        let mut b = c.borrow_mut();
+        let Some(ctx) = &mut *b else { return };
+        // Clone the clicked tile's kind so the borrow of `ctx.tiles` ends here.
+        let hit = ctx
+            .tiles
+            .iter()
+            .find(|t| x >= t.x && x < t.x + t.w)
+            .map(|t| t.kind.clone());
+        let Some(tile) = hit else { return };
+        match tile {
+            TileKind::NewBrowser if !right => {
+                let profile = ctx.profiles.join(format!("dock-{}", ctx.counter));
+                ctx.counter += 1;
+                let _ = std::fs::create_dir_all(&profile);
+                let cmd = format!(
+                    "\"{}\" --user-data-dir=\"{}\" --no-first-run --no-default-browser-check --new-window about:blank",
+                    ctx.browser.display(), profile.display()
+                );
+                let _ = create_process_on_desktop(&ctx.desktop_name, &cmd, &ctx.home);
+            }
+            TileKind::MyBrowser if !right => {
+                let imported = ctx.profiles.join("imported");
+                if imported.exists() {
+                    let cmd = format!(
+                        "\"{}\" --user-data-dir=\"{}\" --no-first-run --no-default-browser-check --new-window",
+                        ctx.browser.display(), imported.display()
+                    );
+                    let _ = create_process_on_desktop(&ctx.desktop_name, &cmd, &ctx.home);
+                }
+            }
+            TileKind::Exit if !right => unsafe {
                 let def = OpenDesktopW(wide("Default").as_ptr(), 0, 0, GENERIC_ALL);
                 if !def.is_null() {
                     SwitchDesktop(def);
                     CloseDesktop(def);
+                }
+            },
+            TileKind::App(h) => unsafe {
+                let hw = h as Hwnd;
+                if right {
+                    PostMessageW(hw, WM_CLOSE, 0, 0); // right-click closes
+                } else {
+                    ShowWindow(hw, SW_RESTORE); // <- brings a minimized window back
+                    BringWindowToTop(hw);
+                    SetForegroundWindow(hw);
                 }
             },
             _ => {}
@@ -278,18 +385,24 @@ fn handle_command(id: u32) {
 
 extern "system" fn wnd_proc(hwnd: Hwnd, msg: u32, w: usize, l: isize) -> isize {
     match msg {
-        WM_COMMAND => {
-            handle_command((w & 0xFFFF) as u32);
+        WM_PAINT => {
+            paint(hwnd);
+            0
+        }
+        WM_LBUTTONDOWN => {
+            on_click((l & 0xFFFF) as i16 as i32, false);
+            0
+        }
+        WM_RBUTTONDOWN => {
+            on_click((l & 0xFFFF) as i16 as i32, true);
             0
         }
         WM_TIMER => {
-            refresh();
+            refresh(hwnd);
             0
         }
         WM_DESTROY => {
-            unsafe {
-                KillTimer(hwnd, TIMER_ID);
-            }
+            unsafe { KillTimer(hwnd, TIMER_ID); }
             CTX.with(|c| {
                 if let Some(ctx) = &*c.borrow() {
                     if let Ok(mut g) = REGISTRY.lock() {
@@ -299,17 +412,15 @@ extern "system" fn wnd_proc(hwnd: Hwnd, msg: u32, w: usize, l: isize) -> isize {
                     }
                 }
             });
-            unsafe {
-                PostQuitMessage(0);
-            }
+            unsafe { PostQuitMessage(0); }
             0
         }
         _ => unsafe { DefWindowProcW(hwnd, msg, w, l) },
     }
 }
 
-/// Launch the dock on `desktop_name`. Non-blocking: it lives on its own thread
-/// with a message loop until the workspace is destroyed.
+/// Launch the dock on `desktop_name`. Non-blocking: own thread + message loop
+/// until the workspace is destroyed.
 pub(crate) fn spawn_dock(desktop_name: String, browser: PathBuf, profiles: PathBuf, home: String) {
     std::thread::spawn(move || unsafe {
         let hdesk = OpenDesktopW(wide(&desktop_name).as_ptr(), 0, 0, GENERIC_ALL);
@@ -328,22 +439,18 @@ pub(crate) fn spawn_dock(desktop_name: String, browser: PathBuf, profiles: PathB
             h_instance: hinst,
             h_icon: std::ptr::null_mut(),
             h_cursor: LoadCursorW(std::ptr::null_mut(), IDC_ARROW),
-            hbr_background: 16 as Handle, // COLOR_BTNFACE+1
+            hbr_background: std::ptr::null_mut(),
             menu_name: std::ptr::null(),
             class_name: class_w.as_ptr(),
         };
         RegisterClassW(&wc);
 
-        let screen_h = GetSystemMetrics(SM_CYSCREEN);
         let main = CreateWindowExW(
-            WS_EX_TOPMOST | WS_EX_TOOLWINDOW,
+            WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_LAYERED,
             class_w.as_ptr(),
             wide("WSE").as_ptr(),
-            WS_POPUP | WS_VISIBLE | WS_BORDER,
-            0,
-            0,
-            184,
-            screen_h,
+            WS_POPUP | WS_VISIBLE,
+            0, 0, 200, HEIGHT,
             std::ptr::null_mut(),
             std::ptr::null_mut(),
             hinst,
@@ -353,43 +460,7 @@ pub(crate) fn spawn_dock(desktop_name: String, browser: PathBuf, profiles: PathB
             CloseDesktop(hdesk);
             return;
         }
-
-        let button = |text: &str, id: u32, y: i32, h: i32| {
-            CreateWindowExW(
-                0,
-                wide("BUTTON").as_ptr(),
-                wide(text).as_ptr(),
-                WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
-                8,
-                y,
-                168,
-                h,
-                main,
-                (id as usize) as Handle,
-                hinst,
-                std::ptr::null(),
-            );
-        };
-        button("+ New Browser", ID_NEW_BROWSER, 10, 32);
-        button("My Browser", ID_MY_BROWSER, 46, 28);
-        let list = CreateWindowExW(
-            0,
-            wide("LISTBOX").as_ptr(),
-            std::ptr::null(),
-            WS_CHILD | WS_VISIBLE | WS_BORDER | WS_VSCROLL | LBS_NOTIFY,
-            8,
-            82,
-            168,
-            screen_h - 298,
-            main,
-            (ID_LIST as usize) as Handle,
-            hinst,
-            std::ptr::null(),
-        );
-        button("Focus", ID_FOCUS, screen_h - 208, 30);
-        button("Minimize", ID_MINIMIZE, screen_h - 174, 30);
-        button("Close app", ID_CLOSE, screen_h - 140, 30);
-        button("Leave (Ctrl+Alt+Q)", ID_LEAVE, screen_h - 98, 34);
+        SetLayeredWindowAttributes(main, 0, 240, LWA_ALPHA);
 
         CTX.with(|c| {
             *c.borrow_mut() = Some(DockCtx {
@@ -398,7 +469,7 @@ pub(crate) fn spawn_dock(desktop_name: String, browser: PathBuf, profiles: PathB
                 home,
                 desktop_name: desktop_name.clone(),
                 self_hwnd: main as isize,
-                listbox: list as isize,
+                tiles: Vec::new(),
                 counter: 0,
             });
         });
@@ -407,8 +478,8 @@ pub(crate) fn spawn_dock(desktop_name: String, browser: PathBuf, profiles: PathB
             g.get_or_insert_with(HashMap::new)
                 .insert(desktop_name.clone(), main as isize);
         }
+        refresh(main);
         SetTimer(main, TIMER_ID, 1000, std::ptr::null());
-        refresh();
 
         let mut msg: Msg = std::mem::zeroed();
         while GetMessageW(&mut msg, std::ptr::null_mut(), 0, 0) > 0 {
