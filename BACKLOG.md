@@ -4,11 +4,22 @@ Not scheduled. These are pulled into [ROADMAP.md](ROADMAP.md) **only when real
 daily use proves they're needed** — not on speculation. Each line notes the *wish*
 that would justify it.
 
+## Subsystems (designed, use-driven)
+- **Host Resource Projection** — a workspace receives a host-controlled *view* of
+  the host (executables / packages / config / credentials, per layer), instead of
+  copying or "virtualizing Python". Profiles: Clean / Development / Personal /
+  Custom. Design: [docs/host-resource-projection.md](docs/host-resource-projection.md).
+  Build when real use reveals the projection matrix.
+- **Workspace Overlay** — engine built + unit-tested (share → diff → merge/discard);
+  needs Tauri commands + a "Changes" review panel + launch-on-overlay wiring.
+
 ## Capabilities
 - **Devices** (external resources) — deferred; nobody can experience WSE yet, and
   Devices won't change that. A shell will.
-- **Network**
-- **Collaboration / multi-user**
+- **Network** — build in layers (shared → firewall rules → virtual adapter →
+  private network); don't jump to full virtualization.
+- **Collaboration / multi-user** — invite with a projection profile that denies
+  secrets (see Host Resource Projection).
 
 ## Experience (most likely to surface from daily use)
 - **Snapshots** — "I wish opening a workspace restored my apps." Storage already
