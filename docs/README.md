@@ -11,6 +11,8 @@ are data (manifests); runtimes execute plans. This index is the map.
 
 ## Start here (reading path for a new engineer)
 
+0. **[design-principles.md](design-principles.md)** — the ten principles. Read these
+   *before* any code; every decision traces back to one.
 1. **[contract/VISION.md](../contract/VISION.md)** — what WSE is and why.
 2. **[contract/CONTRACT.md](../contract/CONTRACT.md)** — the v1 contract, the map of
    the core concepts and the rules that bind them.
@@ -40,6 +42,10 @@ Every boundary has both halves — the symmetry that makes it a spec:
 | Runtime   | LaunchPlan           | ExecutionContext   |
 
 ---
+
+## 0. Philosophy
+- [design-principles.md](design-principles.md) — the ten frozen principles + the
+  Policy → Planner → Executor → State pattern. The philosophy every other doc obeys.
 
 ## 1. Vision & product
 - [contract/VISION.md](../contract/VISION.md) — three pillars, principles.
