@@ -6,8 +6,8 @@ fn ws_list(state: tauri::State<Workspaces>) -> String {
     state.call(Cmd::List)
 }
 #[tauri::command]
-fn ws_create(name: String, chrome: bool, state: tauri::State<Workspaces>) -> String {
-    state.call(Cmd::Create(name, chrome))
+fn ws_create(name: String, apps: Vec<String>, state: tauri::State<Workspaces>) -> String {
+    state.call(Cmd::Create(name, apps))
 }
 #[tauri::command]
 fn ws_start(id: String, state: tauri::State<Workspaces>) -> String {

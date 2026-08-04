@@ -29,7 +29,7 @@ async function cmd(name: string, args?: Record<string, unknown>): Promise<Engine
 }
 
 export const wseList = () => cmd("ws_list");
-export const wseCreate = (name: string, chrome: boolean) => cmd("ws_create", { name, chrome });
+export const wseCreate = (name: string, apps: string[]) => cmd("ws_create", { name, apps });
 export const wseStart = (id: string) => cmd("ws_start", { id });
 export const wseLaunch = (id: string) => cmd("ws_launch", { id });
 export const wseEnter = (id: string) => cmd("ws_enter", { id });

@@ -468,9 +468,8 @@ export default function App({
 
   const createWorkspace = (draft: Omit<Workspace, "id" | "state" | "createdAt">) => {
     if (isTauri()) {
-      // "Chrome" selected in the app picker → use Chrome; else Edge.
-      const useChrome = draft.apps?.includes("chrome") ?? false;
-      wseCreate(draft.name || "Workspace", useChrome).then(setFromEngine);
+      // Pass the picked apps (chrome/vscode/terminal) — the engine opens them.
+      wseCreate(draft.name || "Workspace", draft.apps ?? []).then(setFromEngine);
       return;
     }
     setWorkspaces((prev) => [

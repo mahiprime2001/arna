@@ -17,7 +17,7 @@ use wse_engine::{Engine, WorkspaceConfig};
 
 pub enum Cmd {
     List,
-    Create(String, bool), // name, prefer chrome
+    Create(String, Vec<String>), // name, selected UI app ids
     Start(String),
     Launch(String),
     Enter(String),
@@ -25,6 +25,16 @@ pub enum Cmd {
     Destroy(String),
     Import(String, bool), // id, chrome
     Browser(bool),        // chrome
+}
+
+/// Map a UI app id to the engine's catalog entry (None = not launchable yet).
+fn map_app(ui: &str) -> Option<&'static str> {
+    match ui {
+        "chrome" | "edge" | "browser" => Some("browser"),
+        "vscode" | "code" | "editor" => Some("editor"),
+        "terminal" | "term" => Some("terminal"),
+        _ => None, // e.g. "files" — not isolatable yet
+    }
 }
 
 struct Req {
@@ -46,8 +56,11 @@ impl Workspaces {
             let mut docked: HashSet<WorkspaceId> = HashSet::new();
             let mut chrome: std::collections::HashMap<WorkspaceId, bool> =
                 std::collections::HashMap::new();
+            // Which apps (engine entries) each workspace should open.
+            let mut apps: std::collections::HashMap<WorkspaceId, Vec<String>> =
+                std::collections::HashMap::new();
             while let Ok(req) = rx.recv() {
-                exec(&mut engine, &mut docked, &mut chrome, req.cmd);
+                exec(&mut engine, &mut docked, &mut chrome, &mut apps, req.cmd);
                 let _ = req.reply.send(state_json(&mut engine));
             }
         });
@@ -115,15 +128,23 @@ fn exec(
     engine: &mut Engine<WindowsNativeAdapter>,
     docked: &mut HashSet<WorkspaceId>,
     chrome: &mut std::collections::HashMap<WorkspaceId, bool>,
+    apps: &mut std::collections::HashMap<WorkspaceId, Vec<String>>,
     cmd: Cmd,
 ) {
     match cmd {
         Cmd::List => {}
-        Cmd::Create(name, prefer_chrome) => {
+        Cmd::Create(name, ui_apps) => {
             let name = if name.trim().is_empty() { "Workspace".to_string() } else { name };
             let cfg = WorkspaceConfig::new(&name, Persistence::Temporary, catalog());
             if let Ok(id) = engine.create_workspace(cfg) {
-                chrome.insert(id, prefer_chrome);
+                chrome.insert(id.clone(), ui_apps.iter().any(|a| a == "chrome"));
+                let mut entries: Vec<String> =
+                    ui_apps.iter().filter_map(|a| map_app(a)).map(String::from).collect();
+                entries.dedup();
+                if entries.is_empty() {
+                    entries.push("browser".into()); // never open to nothing
+                }
+                apps.insert(id, entries);
             }
         }
         Cmd::Start(id) => {
@@ -143,11 +164,14 @@ fn exec(
             if engine.state(&id) != Some(WorkspaceState::Running) {
                 let _ = engine.start(&id);
             }
-            // Don't drop you onto an empty desktop: launch the workspace's browser
-            // if nothing is running yet.
+            // First time in: open the workspace's selected apps so you don't land
+            // on an empty desktop.
             let empty = engine.app_instances(&id).map(|v| v.is_empty()).unwrap_or(true);
             if empty {
-                let _ = engine.launch(&id, "browser");
+                let want = apps.get(&id).cloned().unwrap_or_else(|| vec!["browser".into()]);
+                for entry in want {
+                    let _ = engine.launch(&id, &entry);
+                }
             }
             if docked.insert(id.clone()) {
                 spawn_workspace_dock(&id);
@@ -162,6 +186,7 @@ fn exec(
             let _ = engine.destroy(&id);
             docked.remove(&id);
             chrome.remove(&id);
+            apps.remove(&id);
         }
         Cmd::Import(id, is_chrome) => {
             let _ = import_default_profile(&WorkspaceId::from_raw(id), is_chrome);

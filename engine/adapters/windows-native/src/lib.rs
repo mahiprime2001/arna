@@ -480,19 +480,18 @@ enum SupportLevel {
 }
 
 struct CatalogEntry {
-    url: &'static str,
     #[allow(dead_code)]
     level: SupportLevel,
 }
 
-/// Map a catalog `entry` to how the native runtime launches it. Browser-first:
-/// every entry is a web app in an isolated browser instance (Certified). Apps we
-/// cannot isolate cleanly are simply absent — the engine reports them NotFound.
+/// The apps this runtime knows how to launch, isolated, on a workspace desktop:
+/// a browser (Chrome/Edge), VS Code, and a terminal. Anything else is NotFound.
+/// The actual command is built by `build_command`.
 fn catalog(entry: &str) -> Option<CatalogEntry> {
     match entry {
-        "browser" => Some(CatalogEntry { url: "about:blank", level: SupportLevel::Certified }),
-        "editor" => Some(CatalogEntry { url: "about:blank", level: SupportLevel::Certified }),
-        "terminal" => Some(CatalogEntry { url: "about:blank", level: SupportLevel::Certified }),
+        "browser" => Some(CatalogEntry { level: SupportLevel::Certified }),
+        "editor" => Some(CatalogEntry { level: SupportLevel::Compatible }),
+        "terminal" => Some(CatalogEntry { level: SupportLevel::Compatible }),
         _ => None,
     }
 }
@@ -531,6 +530,65 @@ pub(crate) fn find_browser() -> Option<PathBuf> {
         first_existing(&CHROME_PATHS).or_else(|| first_existing(&EDGE_PATHS))
     } else {
         first_existing(&EDGE_PATHS).or_else(|| first_existing(&CHROME_PATHS))
+    }
+}
+
+/// Locate installed VS Code (user or system install, stable or Insiders).
+fn find_vscode() -> Option<PathBuf> {
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    if let Ok(local) = std::env::var("LOCALAPPDATA") {
+        let l = PathBuf::from(local);
+        candidates.push(l.join(r"Programs\Microsoft VS Code\Code.exe"));
+        candidates.push(l.join(r"Programs\Microsoft VS Code Insiders\Code - Insiders.exe"));
+    }
+    candidates.push(PathBuf::from(r"C:\Program Files\Microsoft VS Code\Code.exe"));
+    candidates.push(PathBuf::from(r"C:\Program Files\Microsoft VS Code Insiders\Code - Insiders.exe"));
+    candidates.into_iter().find(|p| p.exists())
+}
+
+/// Build the launch command for a catalog entry. `profile` isolates the instance
+/// (a unique dir forces a fresh window, not a redirect to an existing one);
+/// `home` is the workspace home (working dir / folder to open). Returns the
+/// command line + CreateProcess flags, or None if the app isn't installed.
+fn build_command(entry: &str, profile: &Path, home: &Path) -> Option<(String, u32)> {
+    match entry {
+        "browser" => {
+            let b = find_browser()?;
+            Some((
+                format!(
+                    "\"{}\" --user-data-dir=\"{}\" --no-first-run --no-default-browser-check \
+                     --new-window about:blank",
+                    b.display(),
+                    profile.display()
+                ),
+                0,
+            ))
+        }
+        "editor" => {
+            let code = find_vscode()?;
+            Some((
+                format!(
+                    "\"{}\" --new-window --user-data-dir=\"{}\" --extensions-dir=\"{}\" \"{}\"",
+                    code.display(),
+                    profile.display(),
+                    profile.join("ext").display(),
+                    home.display()
+                ),
+                0,
+            ))
+        }
+        "terminal" => {
+            // A PowerShell console on the workspace desktop — reliable and
+            // per-desktop (unlike single-instance Windows Terminal).
+            Some((
+                format!(
+                    "powershell.exe -NoExit -Command \"Set-Location -LiteralPath '{}'\"",
+                    home.display()
+                ),
+                CREATE_NEW_CONSOLE,
+            ))
+        }
+        _ => None,
     }
 }
 
@@ -623,38 +681,33 @@ impl WindowsNativeAdapter {
         id: &WorkspaceId,
         app: &ApplicationDescriptor,
     ) -> Result<ApplicationInstance> {
-        let spec = catalog(&app.entry)
-            .ok_or_else(|| WseError::NotFound(format!("app {}", app.entry)))?;
-        let browser = find_browser()
-            .ok_or_else(|| WseError::ResourceUnavailable("no Chromium browser found".into()))?;
+        // Known catalog app? (undetectability — unknown entries are NotFound.)
+        if catalog(&app.entry).is_none() {
+            return Err(WseError::NotFound(format!("app {}", app.entry)));
+        }
 
         let (desktop, desktop_name, home) = {
             let st = self.ws(id)?;
             (st.desktop, st.desktop_name.clone(), st.home.clone())
         };
 
-        // Browser profile manager: a fresh isolated profile per instance, under
-        // the workspace's own Storage (profiles are persistent workspace state).
+        // A fresh isolated profile per instance, under the workspace's Storage.
         let iid = ApplicationInstanceId::new();
         let profile = home.join("profiles").join(format!("inst-{iid}"));
         std::fs::create_dir_all(&profile)
             .map_err(|e| WseError::Internal(format!("profile: {e}")))?;
 
+        // Which app to run (browser / VS Code / terminal); None if not installed.
+        let (cmdline, flags) = build_command(&app.entry, &profile, &home).ok_or_else(|| {
+            WseError::ResourceUnavailable(format!("app '{}' is not installed", app.entry))
+        })?;
+
         // Which windows already exist on the desktop — so we can spot the new one.
         let before: std::collections::HashSet<isize> =
             windows_on(desktop as Hdesk).into_iter().map(|(_, h, _)| h).collect();
 
-        // Launch on the workspace desktop (lpDesktop), own profile, new window.
-        let cmdline = format!(
-            "\"{}\" --user-data-dir=\"{}\" --no-first-run --no-default-browser-check \
-             --new-window {}",
-            browser.display(),
-            profile.display(),
-            spec.url
-        );
-        // The app's working directory is the workspace home (workspace-scoped env).
-        let pid =
-            create_process_on_desktop(&desktop_name, &cmdline, &home.to_string_lossy())?;
+        // Launch on the workspace desktop (lpDesktop), working dir = workspace home.
+        let pid = create_process_flags(&desktop_name, &cmdline, &home.to_string_lossy(), flags)?;
 
         // Window service: poll for the new window this instance opened.
         let deadline = Instant::now() + Duration::from_secs(12);
@@ -714,6 +767,13 @@ impl WindowsNativeAdapter {
 /// Launch a command line on a named desktop, with a working directory; return the
 /// new process id.
 pub(crate) fn create_process_on_desktop(desktop: &str, cmdline: &str, workdir: &str) -> Result<u32> {
+    create_process_flags(desktop, cmdline, workdir, 0)
+}
+
+/// New console window for console apps (terminals).
+const CREATE_NEW_CONSOLE: u32 = 0x0000_0010;
+
+fn create_process_flags(desktop: &str, cmdline: &str, workdir: &str, flags: u32) -> Result<u32> {
     let mut desk = wide(desktop);
     let mut cmd = wide(cmdline);
     let dir = wide(workdir);
@@ -728,7 +788,7 @@ pub(crate) fn create_process_on_desktop(desktop: &str, cmdline: &str, workdir: &
             std::ptr::null(),
             std::ptr::null(),
             0,
-            0,
+            flags,
             std::ptr::null(),
             dir.as_ptr(),
             &si,
