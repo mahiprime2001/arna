@@ -6,10 +6,12 @@
 //! session). Persisting workspaces across restarts is a daemon — a backlog item
 //! for when daily use asks for it.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::{self, Write};
 
-use wse_adapter_windows_native::{enter_workspace_desktop, switch_to_default_desktop, WindowsNativeAdapter};
+use wse_adapter_windows_native::{
+    enter_workspace_desktop, spawn_workspace_dock, switch_to_default_desktop, WindowsNativeAdapter,
+};
 use wse_common::{ApplicationDescriptor, Persistence, WorkspaceId, WorkspaceState};
 use wse_engine::{Engine, WorkspaceConfig};
 
@@ -49,6 +51,7 @@ fn help() {
 fn main() {
     let mut engine = Engine::new(WindowsNativeAdapter::new());
     let mut names: HashMap<String, WorkspaceId> = HashMap::new();
+    let mut docked: HashSet<WorkspaceId> = HashSet::new();
 
     println!("WSE Desktop v0.1 — native Windows workspaces. Type 'help'.");
     let stdin = io::stdin();
@@ -110,8 +113,13 @@ fn main() {
             },
             "enter" | "open" => match parts.get(1).and_then(|n| names.get(*n)) {
                 Some(id) => {
+                    // Give the workspace a dock (its taskbar) the first time you
+                    // enter it, so you can launch/restore/close apps from inside.
+                    if docked.insert(id.clone()) {
+                        spawn_workspace_dock(id);
+                    }
                     enter_workspace_desktop(id);
-                    println!("entered — press Ctrl+Alt+Q to return to your desktop");
+                    println!("entered — dock is on the left; Ctrl+Alt+Q to return");
                 }
                 None => println!("usage: enter <name>"),
             },

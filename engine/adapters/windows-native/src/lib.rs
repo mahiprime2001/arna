@@ -28,6 +28,8 @@ use wse_contract::{
     StorageCapability, WindowsCapability, WorkspaceAdapter, WorkspaceDef, CONTRACT_VERSION,
 };
 
+mod dock;
+
 // ── Win32 FFI (kept entirely inside this crate) ──────────────────────────────
 type Hdesk = *mut c_void;
 type Hwnd = *mut c_void;
@@ -138,11 +140,11 @@ extern "system" {
 }
 
 /// A NUL-terminated UTF-16 string for the Win32 `W` APIs.
-fn wide(s: &str) -> Vec<u16> {
+pub(crate) fn wide(s: &str) -> Vec<u16> {
     s.encode_utf16().chain(std::iter::once(0)).collect()
 }
 
-fn desktop_name(id: &WorkspaceId) -> String {
+pub(crate) fn desktop_name(id: &WorkspaceId) -> String {
     format!("wse-{id}")
 }
 
@@ -182,6 +184,37 @@ pub fn enter_workspace_desktop(id: &WorkspaceId) {
             CloseDesktop(default);
         }
     });
+}
+
+/// Spawn the workspace dock on a workspace's desktop — a little shell (launch a
+/// browser, Focus/Minimize/Close/Leave windows) so the desktop is usable without
+/// a taskbar. Reconstructs the workspace home from the default convention
+/// (`%USERPROFILE%\.wse\workspaces\wse-<id>`). Safe to call once per workspace.
+pub fn spawn_workspace_dock(id: &WorkspaceId) {
+    let name = desktop_name(id);
+    let base = std::env::var("USERPROFILE")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| std::env::temp_dir());
+    let home = base.join(".wse").join("workspaces").join(&name);
+    let profiles = home.join("profiles");
+    let _ = std::fs::create_dir_all(&profiles);
+    let Some(browser) = find_browser() else { return };
+    dock::spawn_dock(name, browser, profiles, home.to_string_lossy().into_owned());
+}
+
+/// The titles of the visible windows currently on a workspace's desktop
+/// (diagnostic — includes the dock and any apps). Empty if the desktop is gone.
+pub fn desktop_window_titles(id: &WorkspaceId) -> Vec<String> {
+    let name = desktop_name(id);
+    unsafe {
+        let d = OpenDesktopW(wide(&name).as_ptr(), 0, 0, GENERIC_ALL);
+        if d.is_null() {
+            return Vec::new();
+        }
+        let ws = windows_on(d);
+        CloseDesktop(d);
+        ws.into_iter().map(|(_, _, t)| t).collect()
+    }
 }
 
 /// Return to the normal (Default) desktop immediately.
@@ -361,7 +394,7 @@ fn catalog(entry: &str) -> Option<CatalogEntry> {
 }
 
 /// Locate an installed Chromium browser (Edge is present on every Win11).
-fn find_browser() -> Option<PathBuf> {
+pub(crate) fn find_browser() -> Option<PathBuf> {
     let candidates = [
         r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
         r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
@@ -551,7 +584,7 @@ impl WindowsNativeAdapter {
 
 /// Launch a command line on a named desktop, with a working directory; return the
 /// new process id.
-fn create_process_on_desktop(desktop: &str, cmdline: &str, workdir: &str) -> Result<u32> {
+pub(crate) fn create_process_on_desktop(desktop: &str, cmdline: &str, workdir: &str) -> Result<u32> {
     let mut desk = wide(desktop);
     let mut cmd = wide(cmdline);
     let dir = wide(workdir);
@@ -672,6 +705,7 @@ impl WorkspaceAdapter for WindowsNativeAdapter {
             .state
             .remove(id)
             .ok_or_else(|| WseError::NotFound(format!("workspace {id}")))?;
+        dock::close(&st.desktop_name); // ask the dock thread to exit first
         Self::teardown_apps(&mut st);
         std::thread::sleep(Duration::from_millis(300)); // let windows/threads exit
         unsafe {
