@@ -17,7 +17,7 @@ use wse_engine::{Engine, WorkspaceConfig};
 
 pub enum Cmd {
     List,
-    Create(String),
+    Create(String, bool), // name, prefer chrome
     Start(String),
     Launch(String),
     Enter(String),
@@ -44,8 +44,10 @@ impl Workspaces {
         thread::spawn(move || {
             let mut engine = Engine::new(WindowsNativeAdapter::new());
             let mut docked: HashSet<WorkspaceId> = HashSet::new();
+            let mut chrome: std::collections::HashMap<WorkspaceId, bool> =
+                std::collections::HashMap::new();
             while let Ok(req) = rx.recv() {
-                exec(&mut engine, &mut docked, req.cmd);
+                exec(&mut engine, &mut docked, &mut chrome, req.cmd);
                 let _ = req.reply.send(state_json(&mut engine));
             }
         });
@@ -109,19 +111,27 @@ fn state_json(engine: &mut Engine<WindowsNativeAdapter>) -> String {
     out
 }
 
-fn exec(engine: &mut Engine<WindowsNativeAdapter>, docked: &mut HashSet<WorkspaceId>, cmd: Cmd) {
+fn exec(
+    engine: &mut Engine<WindowsNativeAdapter>,
+    docked: &mut HashSet<WorkspaceId>,
+    chrome: &mut std::collections::HashMap<WorkspaceId, bool>,
+    cmd: Cmd,
+) {
     match cmd {
         Cmd::List => {}
-        Cmd::Create(name) => {
+        Cmd::Create(name, prefer_chrome) => {
             let name = if name.trim().is_empty() { "Workspace".to_string() } else { name };
             let cfg = WorkspaceConfig::new(&name, Persistence::Temporary, catalog());
-            let _ = engine.create_workspace(cfg);
+            if let Ok(id) = engine.create_workspace(cfg) {
+                chrome.insert(id, prefer_chrome);
+            }
         }
         Cmd::Start(id) => {
             let _ = engine.start(&WorkspaceId::from_raw(id));
         }
         Cmd::Launch(id) => {
             let id = WorkspaceId::from_raw(id);
+            set_preferred_browser(chrome.get(&id).copied().unwrap_or(false));
             if engine.state(&id) != Some(WorkspaceState::Running) {
                 let _ = engine.start(&id);
             }
@@ -129,8 +139,15 @@ fn exec(engine: &mut Engine<WindowsNativeAdapter>, docked: &mut HashSet<Workspac
         }
         Cmd::Enter(id) => {
             let id = WorkspaceId::from_raw(id);
+            set_preferred_browser(chrome.get(&id).copied().unwrap_or(false));
             if engine.state(&id) != Some(WorkspaceState::Running) {
                 let _ = engine.start(&id);
+            }
+            // Don't drop you onto an empty desktop: launch the workspace's browser
+            // if nothing is running yet.
+            let empty = engine.app_instances(&id).map(|v| v.is_empty()).unwrap_or(true);
+            if empty {
+                let _ = engine.launch(&id, "browser");
             }
             if docked.insert(id.clone()) {
                 spawn_workspace_dock(&id);
@@ -144,10 +161,11 @@ fn exec(engine: &mut Engine<WindowsNativeAdapter>, docked: &mut HashSet<Workspac
             let id = WorkspaceId::from_raw(id);
             let _ = engine.destroy(&id);
             docked.remove(&id);
+            chrome.remove(&id);
         }
-        Cmd::Import(id, chrome) => {
-            let _ = import_default_profile(&WorkspaceId::from_raw(id), chrome);
+        Cmd::Import(id, is_chrome) => {
+            let _ = import_default_profile(&WorkspaceId::from_raw(id), is_chrome);
         }
-        Cmd::Browser(chrome) => set_preferred_browser(chrome),
+        Cmd::Browser(is_chrome) => set_preferred_browser(is_chrome),
     }
 }
