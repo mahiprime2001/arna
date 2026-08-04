@@ -10,8 +10,8 @@ use std::collections::{HashMap, HashSet};
 use std::io::{self, Write};
 
 use wse_adapter_windows_native::{
-    enter_workspace_desktop, import_default_profile, launch_imported_browser, spawn_workspace_dock,
-    switch_to_default_desktop, WindowsNativeAdapter,
+    chrome_available, enter_workspace_desktop, import_default_profile, launch_imported_browser,
+    set_preferred_browser, spawn_workspace_dock, switch_to_default_desktop, WindowsNativeAdapter,
 };
 use wse_common::{ApplicationDescriptor, Persistence, WorkspaceId, WorkspaceState};
 use wse_engine::{Engine, WorkspaceConfig};
@@ -41,6 +41,7 @@ fn help() {
          \x20 ls                       list workspaces\n\
          \x20 launch <name> <app>      run an app (browser | mine = your imported profile)\n\
          \x20 import <name> [edge|chrome]  copy your real browser profile into a workspace\n\
+         \x20 browser <chrome|edge>    choose which browser WSE launches\n\
          \x20 enter <name>             switch to the workspace's desktop  (Ctrl+Alt+Q to return)\n\
          \x20 back                     return to your normal desktop\n\
          \x20 suspend <name>           suspend a workspace\n\
@@ -105,6 +106,12 @@ fn main() {
                             continue;
                         }
                     }
+                    // `launch <ws> chrome|edge` also picks that browser.
+                    match app.to_lowercase().as_str() {
+                        "chrome" => set_preferred_browser(true),
+                        "edge" => set_preferred_browser(false),
+                        _ => {}
+                    }
                     // "mine"/"mybrowser" launches your imported profile.
                     if matches!(app.to_lowercase().as_str(), "mine" | "mybrowser" | "myprofile") {
                         match launch_imported_browser(&id) {
@@ -149,6 +156,21 @@ fn main() {
                     println!("entered — dock is on the left; Ctrl+Alt+Q to return");
                 }
                 None => println!("usage: enter <name>"),
+            },
+            "browser" => match parts.get(1).map(|s| s.to_lowercase()) {
+                Some(b) if b == "chrome" => {
+                    if chrome_available() {
+                        set_preferred_browser(true);
+                        println!("browser set to Chrome");
+                    } else {
+                        println!("Chrome not found — install it, then try again");
+                    }
+                }
+                Some(b) if b == "edge" => {
+                    set_preferred_browser(false);
+                    println!("browser set to Edge");
+                }
+                _ => println!("usage: browser <chrome|edge>  (Chrome available: {})", chrome_available()),
             },
             "back" => switch_to_default_desktop(),
             "suspend" => match parts.get(1).and_then(|n| names.get(*n)) {

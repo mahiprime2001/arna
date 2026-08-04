@@ -241,6 +241,8 @@ pub fn import_default_profile(id: &WorkspaceId, chrome: bool) -> Result<()> {
         first_profile_dir(&src_root).unwrap_or_else(|| src_root.join("Default"))
     };
     copy_tree(&prof, &dst.join("Default"));
+    // If you imported Chrome, launch Chrome too.
+    set_preferred_browser(chrome);
     Ok(())
 }
 
@@ -495,16 +497,41 @@ fn catalog(entry: &str) -> Option<CatalogEntry> {
     }
 }
 
-/// Locate an installed Chromium browser (Edge is present on every Win11).
+// Which Chromium browser WSE launches. Default Edge (always on Win11); set to
+// Chrome with `set_preferred_browser(true)` (the shell's `browser chrome`).
+static PREFER_CHROME: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Choose Chrome (true) or Edge (false) as the browser for subsequent launches.
+pub fn set_preferred_browser(chrome: bool) {
+    PREFER_CHROME.store(chrome, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Is Chrome available on this machine?
+pub fn chrome_available() -> bool {
+    first_existing(&CHROME_PATHS).is_some()
+}
+
+const EDGE_PATHS: [&str; 3] = [
+    r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
+    r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
+    r"C:\Program Files (x86)\Microsoft\Edge Beta\Application\msedge.exe",
+];
+const CHROME_PATHS: [&str; 2] = [
+    r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+    r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+];
+
+fn first_existing(paths: &[&str]) -> Option<PathBuf> {
+    paths.iter().map(PathBuf::from).find(|p| p.exists())
+}
+
+/// Locate the preferred installed Chromium browser (falls back to the other).
 pub(crate) fn find_browser() -> Option<PathBuf> {
-    let candidates = [
-        r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
-        r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
-        r"C:\Program Files (x86)\Microsoft\Edge Beta\Application\msedge.exe",
-        r"C:\Program Files\Google\Chrome\Application\chrome.exe",
-        r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
-    ];
-    candidates.iter().map(PathBuf::from).find(|p| p.exists())
+    if PREFER_CHROME.load(std::sync::atomic::Ordering::Relaxed) {
+        first_existing(&CHROME_PATHS).or_else(|| first_existing(&EDGE_PATHS))
+    } else {
+        first_existing(&EDGE_PATHS).or_else(|| first_existing(&CHROME_PATHS))
+    }
 }
 
 // ── per-workspace state ──────────────────────────────────────────────────────
