@@ -22,6 +22,16 @@ import {
   type WirePayload,
 } from "@/lib/mock";
 import * as api from "@/lib/api";
+import {
+  isTauri,
+  wseList,
+  wseCreate,
+  wseStart,
+  wseSuspend,
+  wseDestroy,
+  wseEnter,
+  toWorkspaces,
+} from "@/lib/wse";
 import type { AuthUser } from "@/lib/api";
 import { decryptFrom, encryptFor, initCrypto, myPublicKey } from "@/lib/crypto";
 import {
@@ -438,18 +448,52 @@ export default function App({
     sendOp(friendId, { op: "typing", on }, true);
 
   // ── workspaces ────────────────────────────────────────────────────────────
-  const createWorkspace = (draft: Omit<Workspace, "id" | "state" | "createdAt">) =>
+  // Under Tauri, workspaces are REAL (the native WSE engine in the Rust backend);
+  // in a plain browser they stay device-local mock. Same UI either way.
+  const setFromEngine = (list: Awaited<ReturnType<typeof wseList>>) =>
+    setWorkspaces(toWorkspaces(list));
+
+  // Keep the list live with the engine while running as the desktop app.
+  useEffect(() => {
+    if (!isTauri()) return;
+    let alive = true;
+    const refresh = () => wseList().then((l) => alive && setFromEngine(l));
+    refresh();
+    const t = setInterval(refresh, 2000);
+    return () => {
+      alive = false;
+      clearInterval(t);
+    };
+  }, []);
+
+  const createWorkspace = (draft: Omit<Workspace, "id" | "state" | "createdAt">) => {
+    if (isTauri()) {
+      wseCreate(draft.name || "Workspace").then(setFromEngine);
+      return;
+    }
     setWorkspaces((prev) => [
       { ...draft, id: newWorkspaceId(), state: "created", createdAt: Date.now() },
       ...prev,
     ]);
+  };
 
   // Refuse anything the spec's state machine doesn't permit, rather than
   // trusting the UI to only offer legal buttons (SPEC §5.2).
-  const transitionWorkspace = (id: string, to: WorkspaceState) =>
+  const transitionWorkspace = (id: string, to: WorkspaceState) => {
+    if (isTauri()) {
+      const run =
+        to === "running" || to === "resuming"
+          ? wseStart(id)
+          : to === "paused" || to === "saved"
+            ? wseSuspend(id)
+            : null;
+      if (run) run.then(setFromEngine);
+      return;
+    }
     setWorkspaces((prev) =>
       prev.map((w) => (w.id === id && canTransition(w.state, to) ? { ...w, state: to } : w)),
     );
+  };
 
   // SPEC §5.5: deletion destroys contents, it does not merely unlist them.
   const deleteWorkspace = (w: Workspace) => {
@@ -461,7 +505,22 @@ export default function App({
           : "Its saved contents are destroyed for good."
       }\n\nThis cannot be undone.`,
     );
-    if (ok) setWorkspaces((prev) => prev.filter((x) => x.id !== w.id));
+    if (!ok) return;
+    if (isTauri()) {
+      wseDestroy(w.id).then(setFromEngine);
+      return;
+    }
+    setWorkspaces((prev) => prev.filter((x) => x.id !== w.id));
+  };
+
+  // "Open" on the desktop app switches you into the workspace's real desktop
+  // (Ctrl+Alt+Q returns); in the browser it opens the in-app stage overlay.
+  const handleOpenWorkspace = (w: Workspace) => {
+    if (isTauri()) {
+      wseEnter(w.id).then(setFromEngine);
+      return;
+    }
+    setOpenWorkspace(w);
   };
 
   const startCall = (peerId: number, name: string, kind: CallKind) =>
@@ -533,7 +592,7 @@ export default function App({
                     onCreate={createWorkspace}
                     onTransition={transitionWorkspace}
                     onDelete={deleteWorkspace}
-                    onOpen={setOpenWorkspace}
+                    onOpen={handleOpenWorkspace}
                   />
                 )}
                 {route === "friends" && (
