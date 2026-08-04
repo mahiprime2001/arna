@@ -1,0 +1,18 @@
+[package]
+name = "wse-server"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# The local WSE daemon: holds the engine + workspaces and exposes them over a
+# localhost socket (text commands in, JSON state out) so a UI client (Flutter)
+# can drive them. Runs on the Windows machine (the engine is native). Because it
+# stays alive across UI connects/disconnects, workspaces persist for the session.
+[[bin]]
+name = "wse-server"
+path = "src/main.rs"
+
+[dependencies]
+wse-common = { path = "../common" }
+wse-engine = { path = "../core" }
+wse-adapter-windows-native = { path = "../adapters/windows-native" }

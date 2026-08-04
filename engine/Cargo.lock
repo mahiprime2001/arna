@@ -68,6 +68,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "wse-server"
+version = "0.1.0"
+dependencies = [
+ "wse-adapter-windows-native",
+ "wse-common",
+ "wse-engine",
+]
+
+[[package]]
 name = "wse-shell"
 version = "0.1.0"
 dependencies = [

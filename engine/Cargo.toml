@@ -15,6 +15,7 @@ members = [
     "adapters/windows-native",
     "wse-shell",
     "wse-app",
+    "wse-server",
     "conformance",
 ]
 
