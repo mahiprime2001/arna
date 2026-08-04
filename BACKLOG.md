@@ -4,12 +4,15 @@ Not scheduled. These are pulled into [ROADMAP.md](ROADMAP.md) **only when real
 daily use proves they're needed** — not on speculation. Each line notes the *wish*
 that would justify it.
 
-## Subsystems (designed, use-driven)
-- **Host Resource Projection** — a workspace receives a host-controlled *view* of
-  the host (executables / packages / config / credentials, per layer), instead of
-  copying or "virtualizing Python". Profiles: Clean / Development / Personal /
-  Custom. Design: [docs/host-resource-projection.md](docs/host-resource-projection.md).
-  Build when real use reveals the projection matrix.
+## WSE v2 — Resource Projection (the architecture)
+- **[Resource Projection Model](docs/resource-projection-model.md)** — the generic
+  engine: apps are *data* (manifests), resources have classes (executable /
+  package / config / data / credential / cache), each projected by a mode (host /
+  overlay / workspace / merge / temporary / deny). One `ResourceProjector` builds a
+  Launch Plan; runtimes execute it at their own isolation strength. Subsumes the
+  Overlay Engine (built) + Host Resource Projection. **First slice when ready:** the
+  projector for VS Code with Clean/Development profiles.
+- [Host Resource Projection](docs/host-resource-projection.md) — the motivation.
 - **Workspace Overlay** — engine built + unit-tested (share → diff → merge/discard);
   needs Tauri commands + a "Changes" review panel + launch-on-overlay wiring.
 

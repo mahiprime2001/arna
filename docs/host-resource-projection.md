@@ -4,6 +4,12 @@
 native runtime. Its detailed shape (which resources, what granularity) should be
 driven by real use — see "When to build" below.
 
+> **This is the motivation. The full, generic model is now in
+> [resource-projection-model.md](resource-projection-model.md)** (WSE v2) — where
+> apps become data, resources have classes + projection modes, and one
+> `ResourceProjector` replaces per-app code. Read that for the architecture; this
+> doc for the "why".
+
 ## The idea
 
 Turn the user's question from:
