@@ -29,6 +29,11 @@ use wse_contract::{
 };
 
 mod dock;
+mod overlay;
+pub use overlay::{
+    changes as overlay_changes, discard as overlay_discard, import as overlay_import,
+    list as overlay_list, merge as overlay_merge, Change as OverlayChange,
+};
 
 // ── Win32 FFI (kept entirely inside this crate) ──────────────────────────────
 type Hdesk = *mut c_void;
