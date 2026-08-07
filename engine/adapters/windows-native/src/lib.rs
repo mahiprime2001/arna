@@ -600,6 +600,18 @@ fn build_command(entry: &str, profile: &Path, home: &Path) -> Option<(String, u3
     }
 }
 
+/// The apps WSE launches the DATA-DRIVEN way: an entry name -> (WRM manifest,
+/// projection policy). This is the ONLY place an entry maps to a manifest — no
+/// application logic reaches the executor. Apps not listed here still use the
+/// legacy `build_command` path until they get a manifest (browser, terminal).
+fn wrm_app(entry: &str) -> Option<(&'static wse_wrm::AppManifest, &'static wse_wrm::Policy)> {
+    match entry {
+        // VS Code: fresh, workspace-scoped extensions + user data (CLEAN).
+        "editor" => Some((&wse_wrm::manifests::VSCODE, &wse_wrm::policies::CLEAN)),
+        _ => None,
+    }
+}
+
 // ── per-workspace state ──────────────────────────────────────────────────────
 struct NativeWindow {
     id: WindowId,
@@ -610,7 +622,12 @@ struct NativeWindow {
 
 struct InstanceMeta {
     pid: u32,
+    /// The dir to remove when the instance stops (a per-instance profile for
+    /// legacy apps, or the workspace-scoped resource root for WRM apps).
     profile: PathBuf,
+    /// For WRM-launched apps: the Job that owns the instance's process tree.
+    /// `Some` -> terminate the Job on stop; `None` -> kill the pid tree (legacy).
+    job: Option<job::Job>,
 }
 
 #[derive(Default)]
@@ -702,23 +719,34 @@ impl WindowsNativeAdapter {
             (st.desktop, st.desktop_name.clone(), st.home.clone())
         };
 
-        // A fresh isolated profile per instance, under the workspace's Storage.
         let iid = ApplicationInstanceId::new();
-        let profile = home.join("profiles").join(format!("inst-{iid}"));
-        std::fs::create_dir_all(&profile)
-            .map_err(|e| WseError::Internal(format!("profile: {e}")))?;
-
-        // Which app to run (browser / VS Code / terminal); None if not installed.
-        let (cmdline, flags) = build_command(&app.entry, &profile, &home).ok_or_else(|| {
-            WseError::ResourceUnavailable(format!("app '{}' is not installed", app.entry))
-        })?;
 
         // Which windows already exist on the desktop — so we can spot the new one.
         let before: std::collections::HashSet<isize> =
             windows_on(desktop as Hdesk).into_iter().map(|(_, h, _)| h).collect();
 
-        // Launch on the workspace desktop (lpDesktop), working dir = workspace home.
-        let pid = create_process_flags(&desktop_name, &cmdline, &home.to_string_lossy(), flags)?;
+        // Two launch paths, one instance model:
+        //  - WRM (data-driven): apps with a manifest are projected into a LaunchPlan
+        //    and executed, owned by a Job — no app-specific code (VS Code today).
+        //  - legacy build_command: apps without a manifest yet (browser, terminal).
+        // `cleanup` is the dir removed when the instance stops.
+        let (pid, job, cleanup) = if let Some((manifest, policy)) = wrm_app(&app.entry) {
+            let plan = wse_wrm::project(manifest, policy, &home)
+                .map_err(|e| WseError::ResourceUnavailable(format!("{e:?}")))?;
+            let (pid, job) = execute_plan(&desktop_name, &plan)?;
+            (pid, Some(job), home.join(manifest.id))
+        } else {
+            // A fresh isolated profile per instance, under the workspace's Storage.
+            let profile = home.join("profiles").join(format!("inst-{iid}"));
+            std::fs::create_dir_all(&profile)
+                .map_err(|e| WseError::Internal(format!("profile: {e}")))?;
+            let (cmdline, flags) = build_command(&app.entry, &profile, &home).ok_or_else(|| {
+                WseError::ResourceUnavailable(format!("app '{}' is not installed", app.entry))
+            })?;
+            let pid =
+                create_process_flags(&desktop_name, &cmdline, &home.to_string_lossy(), flags)?;
+            (pid, None, profile)
+        };
 
         // Window service: poll for the new window this instance opened.
         let deadline = Instant::now() + Duration::from_secs(12);
@@ -730,8 +758,11 @@ impl WindowsNativeAdapter {
                 break (h, t);
             }
             if Instant::now() > deadline {
-                kill_tree(pid);
-                let _ = std::fs::remove_dir_all(&profile);
+                match &job {
+                    Some(j) => j.terminate(),
+                    None => kill_tree(pid),
+                }
+                let _ = std::fs::remove_dir_all(&cleanup);
                 return Err(WseError::Internal(format!(
                     "app '{}' opened no window within timeout",
                     app.entry
@@ -755,7 +786,7 @@ impl WindowsNativeAdapter {
             title,
         });
         st.instances.push(instance.clone());
-        st.meta.insert(iid, InstanceMeta { pid, profile });
+        st.meta.insert(iid, InstanceMeta { pid, profile: cleanup, job });
         Ok(instance)
     }
 
@@ -789,7 +820,10 @@ impl WindowsNativeAdapter {
             }
         }
         for (_, m) in st.meta.drain() {
-            kill_tree(m.pid);
+            match m.job {
+                Some(j) => j.terminate(), // WRM app: Job kills the whole tree
+                None => kill_tree(m.pid), // legacy app
+            }
             robust_rmdir(&m.profile);
         }
         // Data-driven launches: terminate each Job (kills its whole process tree)
@@ -1330,7 +1364,10 @@ impl ApplicationsCapability for WindowsNativeAdapter {
         }
         st.windows.retain(|w| !inst.windows.contains(&w.id));
         if let Some(m) = st.meta.remove(instance) {
-            kill_tree(m.pid);
+            match m.job {
+                Some(j) => j.terminate(),
+                None => kill_tree(m.pid),
+            }
             robust_rmdir(&m.profile);
         }
         Ok(())
