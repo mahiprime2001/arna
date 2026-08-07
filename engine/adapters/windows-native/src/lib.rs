@@ -621,6 +621,9 @@ struct WsState {
     instances: Vec<ApplicationInstance>,
     windows: Vec<NativeWindow>,
     meta: HashMap<ApplicationInstanceId, InstanceMeta>,
+    /// Data-driven launches (WRM path): each owns a Job that owns its process
+    /// tree. Torn down (Job terminate + cleanup ledger) on stop/destroy.
+    contexts: Vec<ExecutionContext>,
     /// The workspace's OWN clipboard (Isolated/ControlledSync modes). Private to
     /// the workspace; dropped when the workspace is destroyed.
     clipboard: Option<ClipboardItem>,
@@ -756,6 +759,28 @@ impl WindowsNativeAdapter {
         Ok(instance)
     }
 
+    /// The DATA-DRIVEN launch path (WRM): manifest -> project -> execute ->
+    /// ExecutionContext, stored in the workspace's state. No application-specific
+    /// code — the runtime just executes the plan the projector produced. Native
+    /// applies its honest guarantees (env/working-dir/overlay/process-tree strong;
+    /// registry/network are Docker's job).
+    pub fn launch_plan(
+        &mut self,
+        id: &WorkspaceId,
+        manifest: &wse_wrm::AppManifest,
+        policy: &wse_wrm::Policy,
+    ) -> Result<()> {
+        let (desktop_name, home) = {
+            let st = self.ws(id)?;
+            (st.desktop_name.clone(), st.home.clone())
+        };
+        let plan = wse_wrm::project(manifest, policy, &home)
+            .map_err(|e| WseError::ResourceUnavailable(format!("{e:?}")))?;
+        let cx = execute(&desktop_name, &plan, wse_wrm::runtimes::NATIVE_WINDOWS.guarantees)?;
+        self.state.get_mut(id).unwrap().contexts.push(cx);
+        Ok(())
+    }
+
     /// Tear down every app process + profile on a workspace (used by stop/destroy).
     fn teardown_apps(st: &mut WsState) {
         for w in &st.windows {
@@ -766,6 +791,11 @@ impl WindowsNativeAdapter {
         for (_, m) in st.meta.drain() {
             kill_tree(m.pid);
             robust_rmdir(&m.profile);
+        }
+        // Data-driven launches: terminate each Job (kills its whole process tree)
+        // and release its cleanup ledger. Leak-free by construction.
+        for cx in st.contexts.drain(..) {
+            cx.destroy();
         }
         st.windows.clear();
         st.instances.clear();
@@ -924,6 +954,66 @@ pub fn execute_plan(desktop: &str, plan: &wse_wrm::LaunchPlan) -> Result<(u32, j
     }
     let _ = &env_block; // env_block must outlive CreateProcessW (Windows copies it)
     Ok((pi.dw_process_id, job))
+}
+
+/// The **ExecutionContext** — the output half of the runtime boundary (native).
+/// It is the running workspace instance *and how to clean it up*: the Job that
+/// owns the whole process tree, the observed processes/windows, the staged
+/// resources, the cleanup ledger, and the runtime's honest guarantees. `destroy`
+/// releases everything in the ledger — leak-free teardown is the entire point.
+pub struct ExecutionContext {
+    job: job::Job,
+    pub processes: Vec<u32>,     // observed pids
+    pub windows: Vec<isize>,     // observed hwnds
+    pub home: PathBuf,
+    pub resources: Vec<PathBuf>, // staged workspace resource dirs
+    cleanup: Vec<PathBuf>,       // everything to remove on destroy
+    pub guarantees: wse_wrm::Guarantees,
+}
+
+impl ExecutionContext {
+    /// The honest guarantees of the runtime that produced this context — so the
+    /// UI can render what the running workspace enforces without re-asking.
+    pub fn guarantees(&self) -> wse_wrm::Guarantees {
+        self.guarantees
+    }
+
+    /// Release EVERYTHING. Terminating the Job kills the whole process tree
+    /// (children included); the cleanup ledger removes every staged dir. Consumes
+    /// the context — afterwards nothing it created remains.
+    pub fn destroy(self) {
+        self.job.terminate();
+        std::thread::sleep(Duration::from_millis(200)); // let the tree die + drop locks
+        for p in &self.cleanup {
+            robust_rmdir(p);
+        }
+        // `job` drops here -> its handle is closed.
+    }
+}
+
+/// Run a `LaunchPlan` on a workspace desktop into an `ExecutionContext`: execute
+/// it (owned by a fresh Job), then record the process, staged resources, cleanup
+/// ledger, and the runtime's guarantees. Generic — no application-specific code.
+pub fn execute(
+    desktop: &str,
+    plan: &wse_wrm::LaunchPlan,
+    guarantees: wse_wrm::Guarantees,
+) -> Result<ExecutionContext> {
+    let (pid, job) = execute_plan(desktop, plan)?;
+    let staged: Vec<PathBuf> = plan
+        .resources
+        .iter()
+        .filter_map(|r| r.workspace_path.clone())
+        .collect();
+    Ok(ExecutionContext {
+        job,
+        processes: vec![pid],
+        windows: Vec::new(),
+        home: plan.working_directory.clone(),
+        resources: staged.clone(),
+        cleanup: staged,
+        guarantees,
+    })
 }
 
 impl WorkspaceAdapter for WindowsNativeAdapter {
@@ -1088,6 +1178,77 @@ mod tests {
         assert!(cmd.contains("--user-data-dir="), "user-data arg from the manifest");
         assert!(cmd.contains("vscode"), "resource paths are workspace-scoped under the home");
         assert!(cmd.contains("--new-window"), "manifest base args are preserved");
+    }
+
+    fn process_alive(pid: u32) -> bool {
+        std::process::Command::new("tasklist")
+            .args(["/FI", &format!("PID eq {pid}"), "/NH"])
+            .output()
+            .map(|o| String::from_utf8_lossy(&o.stdout).contains(&pid.to_string()))
+            .unwrap_or(false)
+    }
+
+    #[test]
+    fn context_cleanup_ledger_removes_dirs() {
+        // No process needed: prove destroy() releases every dir in the cleanup
+        // ledger (and closes its Job) — the leak-free teardown contract.
+        let base = std::env::temp_dir().join(format!("wse-ledger-{}", std::process::id()));
+        let (a, b) = (base.join("a"), base.join("b"));
+        std::fs::create_dir_all(&a).unwrap();
+        std::fs::create_dir_all(&b).unwrap();
+        let cx = ExecutionContext {
+            job: job::Job::create().expect("job"),
+            processes: vec![],
+            windows: vec![],
+            home: base.clone(),
+            resources: vec![a.clone(), b.clone()],
+            cleanup: vec![a.clone(), b.clone()],
+            guarantees: wse_wrm::runtimes::NATIVE_WINDOWS.guarantees,
+        };
+        cx.destroy();
+        assert!(!a.exists() && !b.exists(), "cleanup ledger removes all staged dirs");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    #[ignore = "spawns a real (hidden) process on the host"]
+    fn context_execute_and_destroy_leaves_no_leaks() {
+        // The full round trip on a real process (hidden, no GUI): a hand-built
+        // LaunchPlan -> execute -> ExecutionContext -> destroy -> the process is
+        // gone (Job killed it) and the staged dir is cleaned up. Proves lifecycle,
+        // ownership, and cleanup at once, with no application involved.
+        let home = std::env::temp_dir().join(format!("wse-ctx-{}", std::process::id()));
+        let staged = home.join("staged");
+        let plan = wse_wrm::LaunchPlan {
+            executable: PathBuf::from("powershell.exe"),
+            arguments: vec![
+                "-WindowStyle".into(),
+                "Hidden".into(),
+                "-Command".into(),
+                "Start-Sleep 300".into(),
+            ],
+            working_directory: home.clone(),
+            environment: vec![],
+            resources: vec![wse_wrm::StagedResource {
+                name: "staged".into(),
+                class: wse_wrm::ResourceClass::Data,
+                mode: wse_wrm::Mode::Workspace,
+                workspace_path: Some(staged.clone()),
+                host_path: None,
+            }],
+            requirements: Default::default(),
+        };
+        let cx = execute("Default", &plan, wse_wrm::runtimes::NATIVE_WINDOWS.guarantees)
+            .expect("execute");
+        let pid = cx.processes[0];
+        assert!(process_alive(pid), "process is running after execute");
+        assert!(staged.exists(), "staged dir was created");
+
+        cx.destroy();
+        std::thread::sleep(std::time::Duration::from_millis(600));
+        assert!(!process_alive(pid), "process is GONE after destroy (Job terminated it)");
+        assert!(!staged.exists(), "staged dir is cleaned up");
+        let _ = std::fs::remove_dir_all(&home);
     }
 
     #[test]

@@ -107,10 +107,44 @@ pub enum WrmError {
     NotInstalled(&'static str),
 }
 
+// ── projection strength: what a runtime HONESTLY enforces ────────────────────
+/// How strongly a runtime enforces a projection. The policy is identical across
+/// runtimes; only the strength differs. **Rule:** a runtime must never claim a
+/// stronger guarantee than the OS can actually enforce with supported mechanisms.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Guarantee {
+    /// Fully enforced by the runtime (e.g. env vars, a Job Object process tree).
+    Strong,
+    /// A real wall — own filesystem / network / registry (a sandbox).
+    Isolated,
+    /// Shared with the host; not isolated at all.
+    Shared,
+    /// Best-effort / incomplete.
+    Partial,
+    /// The runtime cannot provide this at all.
+    Unsupported,
+}
+
+/// A runtime's honest guarantees, per resource aspect. Carried on the descriptor
+/// AND copied into every `ExecutionContext`, so the UI can render exactly what a
+/// running workspace enforces without ever re-asking the runtime.
+#[derive(Clone, Copy, Debug)]
+pub struct Guarantees {
+    pub environment: Guarantee,
+    pub working_directory: Guarantee,
+    pub overlay: Guarantee,
+    pub process_tree: Guarantee,
+    pub clipboard: Guarantee,
+    pub registry: Guarantee,
+    pub network: Guarantee,
+}
+
 // ── runtime descriptor (capability negotiation, mirror of the plan) ──────────
 pub struct RuntimeDescriptor {
     pub name: &'static str,
     pub supports: &'static [Mode],
+    /// What this runtime honestly enforces (see the non-negotiable rule above).
+    pub guarantees: Guarantees,
 }
 
 impl RuntimeDescriptor {
@@ -293,7 +327,8 @@ pub mod policies {
 pub mod runtimes {
     use super::*;
 
-    /// Native Windows: everything but a real `deny` wall.
+    /// Native Windows: everything but a real `deny` wall. Honest guarantees —
+    /// registry can't be virtualised in the app layer, network is the host's.
     pub static NATIVE_WINDOWS: RuntimeDescriptor = RuntimeDescriptor {
         name: "native-windows",
         supports: &[
@@ -303,9 +338,18 @@ pub mod runtimes {
             Mode::Merge,
             Mode::Temporary,
         ],
+        guarantees: Guarantees {
+            environment: Guarantee::Strong,
+            working_directory: Guarantee::Strong,
+            overlay: Guarantee::Strong,
+            process_tree: Guarantee::Strong, // Job Object
+            clipboard: Guarantee::Strong,
+            registry: Guarantee::Unsupported, // app layer can't virtualise HKCU
+            network: Guarantee::Shared,       // shares the host network stack
+        },
     };
 
-    /// Docker: a real sandbox — including a true `deny`.
+    /// Docker: a real sandbox — including a true `deny`, private registry + network.
     pub static DOCKER: RuntimeDescriptor = RuntimeDescriptor {
         name: "docker",
         supports: &[
@@ -315,6 +359,15 @@ pub mod runtimes {
             Mode::Deny,
             Mode::Host,
         ],
+        guarantees: Guarantees {
+            environment: Guarantee::Strong,
+            working_directory: Guarantee::Strong,
+            overlay: Guarantee::Strong,
+            process_tree: Guarantee::Strong,
+            clipboard: Guarantee::Strong,
+            registry: Guarantee::Isolated, // own OS, own registry
+            network: Guarantee::Isolated,  // own IP / network namespace
+        },
     };
 }
 
