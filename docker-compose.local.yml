@@ -1,0 +1,27 @@
+# Run the FULL Arna app locally in one container — Go API + built React client +
+# chat WebSocket relay, all on http://localhost:8080. No Caddy here: you put a
+# Cloudflare tunnel in front, which provides the public HTTPS URL. This is the
+# same image as the VPS deploy, just published on localhost for the tunnel.
+#
+#   1) docker compose -f docker-compose.local.yml up -d --build
+#   2) cloudflared tunnel --url http://127.0.0.1:8080
+#      (use 127.0.0.1, NOT localhost — avoids the IPv6/502 trap)
+#   3) open the printed https://<name>.trycloudflare.com on your Mac
+#
+# The DB is a fresh named volume, so sign up new accounts on each device.
+services:
+  arna:
+    build: .
+    container_name: arna-local
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      ARNA_WEB_DIR: /app/web
+      ARNA_DB: /data/arna.db
+      PORT: "8080"
+    volumes:
+      - arna_local_data:/data
+
+volumes:
+  arna_local_data:
