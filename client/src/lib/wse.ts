@@ -110,6 +110,30 @@ export const wseDestroy = (id: string) => cmd("ws_destroy", { id });
 export const wseImport = (id: string, chrome: boolean) => cmd("ws_import", { id, chrome });
 export const wseBrowser = (chrome: boolean) => cmd("ws_browser", { chrome });
 
+// ── Overlay Review: the workspace owns its file CHANGES, not your originals ───
+export type OverlayChange = { rel: string; kind: "added" | "modified" | "deleted" };
+
+async function invokeJson<T>(name: string, args: Record<string, unknown>, fallback: T): Promise<T> {
+  try {
+    return JSON.parse(await invoke<string>(name, args)) as T;
+  } catch {
+    return fallback;
+  }
+}
+
+export const overlayShare = (id: string, host: string) =>
+  invokeJson<{ ok: boolean; name?: string }>("ws_overlay_share", { id, host }, { ok: false });
+export const overlayList = (id: string) =>
+  invokeJson<{ overlays: string[] }>("ws_overlay_list", { id }, { overlays: [] }).then((r) => r.overlays);
+export const overlayChanges = (id: string, name: string) =>
+  invokeJson<{ changes: OverlayChange[] }>("ws_overlay_changes", { id, name }, { changes: [] }).then(
+    (r) => r.changes,
+  );
+export const overlayMerge = (id: string, name: string) =>
+  invokeJson<{ merged: number }>("ws_overlay_merge", { id, name }, { merged: 0 }).then((r) => r.merged);
+export const overlayDiscard = (id: string, name: string) =>
+  invokeJson<{ ok: boolean }>("ws_overlay_discard", { id, name }, { ok: false });
+
 const STATE_MAP: Record<string, WorkspaceState> = {
   ready: "created",
   running: "running",

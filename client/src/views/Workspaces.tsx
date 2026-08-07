@@ -14,11 +14,14 @@ import {
   Cube,
   Cloud,
   SignIn,
+  FolderOpen,
 } from "@phosphor-icons/react";
 import { Card } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
 import { PageHeader } from "@/components/PageHeader";
 import { CreateWorkspace } from "@/components/CreateWorkspace";
+import { OverlayReview } from "@/components/OverlayReview";
+import { isTauri } from "@/lib/wse";
 import { cn } from "@/lib/utils";
 import {
   canTransition,
@@ -64,11 +67,13 @@ function WorkspaceCard({
   onTransition,
   onDelete,
   onOpen,
+  onReview,
 }: {
   w: Workspace;
   onTransition: (id: string, to: WorkspaceState) => void;
   onDelete: (w: Workspace) => void;
   onOpen: (w: Workspace) => void;
+  onReview: (w: Workspace) => void;
 }) {
   const [copied, setCopied] = useState(false);
   const copyId = () => {
@@ -183,6 +188,11 @@ function WorkspaceCard({
             <Monitor size={14} weight="fill" /> Open
           </Button>
         )}
+        {isTauri() && (w.runtime === "native" || !w.runtime) && (
+          <Button size="sm" variant="outline" onClick={() => onReview(w)}>
+            <FolderOpen size={14} /> Files
+          </Button>
+        )}
         {can("running") && (
           <Button size="sm" variant={w.state === "created" ? "primary" : "outline"} onClick={() => onTransition(w.id, "running")}>
             <Play size={14} weight="fill" /> {w.state === "created" ? "Start" : "Resume"}
@@ -230,6 +240,7 @@ export function Workspaces({
   const [joining, setJoining] = useState(false);
   const [joinLink, setJoinLink] = useState("");
   const [joinError, setJoinError] = useState<string | null>(null);
+  const [reviewing, setReviewing] = useState<Workspace | null>(null);
 
   const submitJoin = () => {
     const err = onJoin?.(joinLink) ?? "Joining isn't available here.";
@@ -308,6 +319,7 @@ export function Workspaces({
               onTransition={onTransition}
               onDelete={onDelete}
               onOpen={onOpen}
+              onReview={setReviewing}
             />
           ))}
         </div>
@@ -321,6 +333,10 @@ export function Workspaces({
             setCreating(false);
           }}
         />
+      )}
+
+      {reviewing && (
+        <OverlayReview workspace={reviewing} onClose={() => setReviewing(null)} />
       )}
     </div>
   );
