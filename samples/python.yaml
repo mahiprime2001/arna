@@ -1,0 +1,25 @@
+# Python — projection with NO command-line arguments at all. Everything is done
+# through environment variables, proving the projector is generic: same pipeline
+# as VS Code, a completely different mechanism. Mirrors engine/wrm `manifests::PYTHON`.
+id: python
+
+exe_candidates:
+  - "%LOCALAPPDATA%\\Programs\\Python\\Python313\\python.exe"
+
+base_args: []
+
+resources:
+  # Installed packages are a Package resource, handed to Python via PYTHONPATH.
+  # CLEAN profile -> a fresh (empty) dir = a clean interpreter; DEVELOPMENT ->
+  # the host's site-packages = your real environment.
+  - name: packages
+    class: Package
+    host_path: "%LOCALAPPDATA%\\Programs\\Python\\Python313\\Lib\\site-packages"
+    env: PYTHONPATH
+
+  # Bytecode cache — a Cache resource with no host source; a profile typically
+  # sends it to a temporary per-workspace dir via PYTHONPYCACHEPREFIX.
+  - name: cache
+    class: Cache
+    host_path: null
+    env: PYTHONPYCACHEPREFIX

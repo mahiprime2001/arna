@@ -1,0 +1,26 @@
+# Git — shows the two ends of the trust spectrum in one manifest: a Config
+# resource that's safe to share (your global gitconfig) and a Credential resource
+# that a profile denies by default. This is where "capability honesty" bites: the
+# native runtime can project the config, but credentials belong behind a real wall.
+id: git
+
+exe_candidates:
+  - "C:\\Program Files\\Git\\cmd\\git.exe"
+
+base_args: []
+
+resources:
+  # Global config — a Config resource. Git honours GIT_CONFIG_GLOBAL, so the
+  # projector can point Git at a projected copy (Merge profile) or a fresh one.
+  - name: config
+    class: Config
+    host_path: "%USERPROFILE%\\.gitconfig"
+    env: GIT_CONFIG_GLOBAL
+
+  # Stored credentials — a Credential resource. Under CLEAN/DEVELOPMENT profiles
+  # the class defaults to `deny`, so this is NOT projected. On native, `deny` is
+  # "not wired in"; on Docker it's a real wall. Never faked either way.
+  - name: credentials
+    class: Credential
+    host_path: "%USERPROFILE%\\.git-credentials"
+    env: null

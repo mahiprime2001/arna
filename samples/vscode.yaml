@@ -1,0 +1,30 @@
+# Visual Studio Code — the canonical WRM stress test. It touches an executable,
+# arguments, a working directory, a Package resource (extensions) and a Data
+# resource (user data), all projected purely from this manifest + a profile.
+# Mirrors engine/wrm `manifests::VSCODE`.
+id: vscode
+
+exe_candidates:
+  - "%LOCALAPPDATA%\\Programs\\Microsoft VS Code\\Code.exe"
+  - "C:\\Program Files\\Microsoft VS Code\\Code.exe"
+
+# "{workspace}" is replaced with the workspace home — the folder VS Code opens.
+base_args:
+  - "--new-window"
+  - "{workspace}"
+
+resources:
+  # Extensions are a Package: CLEAN profile -> a fresh workspace dir; DEVELOPMENT
+  # profile -> the host's real extensions. The manifest doesn't decide — the
+  # profile does.
+  - name: extensions
+    class: Package
+    host_path: "%USERPROFILE%\\.vscode\\extensions"
+    arg: "--extensions-dir={path}"
+
+  # Settings / state — a Data resource. Kept per-workspace so one workspace's
+  # tweaks never leak into another.
+  - name: userdata
+    class: Data
+    host_path: "%APPDATA%\\Code"
+    arg: "--user-data-dir={path}"

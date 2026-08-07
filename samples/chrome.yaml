@@ -1,0 +1,29 @@
+# Google Chrome — a browser whose entire identity (logins, cookies, history,
+# extensions) is one Data resource: the user-data-dir. Project it to a fresh
+# workspace dir and the browser is clean; project it to the host and it's yours.
+id: chrome
+
+exe_candidates:
+  - "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
+  - "C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe"
+
+# A unique user-data-dir also forces a fresh window instead of redirecting to an
+# already-running Chrome — how the workspace gets its OWN browser instance.
+base_args:
+  - "--no-first-run"
+  - "--no-default-browser-check"
+  - "--new-window"
+
+resources:
+  # The whole profile — the Data resource that IS the browser's identity.
+  - name: profile
+    class: Data
+    host_path: "%LOCALAPPDATA%\\Google\\Chrome\\User Data"
+    arg: "--user-data-dir={path}"
+
+  # Disk cache — a Cache resource, so a profile can default it to a temporary
+  # dir that's wiped on close (no host source needed).
+  - name: cache
+    class: Cache
+    host_path: null
+    arg: "--disk-cache-dir={path}"

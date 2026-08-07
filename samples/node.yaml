@@ -1,0 +1,23 @@
+# Node.js — global packages and a package-manager cache, both via environment.
+# Another all-env app (like Python) but with a real host Cache source, showing a
+# Cache resource that a profile can share (fast installs) or isolate (clean state).
+id: node
+
+exe_candidates:
+  - "C:\\Program Files\\nodejs\\node.exe"
+
+base_args: []
+
+resources:
+  # Globally-installed modules — a Package resource, resolved via NODE_PATH.
+  - name: global_modules
+    class: Package
+    host_path: "%APPDATA%\\npm\\node_modules"
+    env: NODE_PATH
+
+  # The npm download cache — a Cache resource with a real host source, pointed at
+  # via npm_config_cache. Share it (Host/Merge) for speed, or isolate it.
+  - name: npm_cache
+    class: Cache
+    host_path: "%LOCALAPPDATA%\\npm-cache"
+    env: npm_config_cache

@@ -30,3 +30,6 @@ deleting them destroys the history that makes them useful.
 | [005](0005-platform-adapter-architecture.md) | Platform Adapter Architecture | Accepted |
 | [006](0006-windows-adapter-rendering-input.md) | Windows Adapter — Rendering & Input Strategy | Accepted |
 | [007](0007-specification-before-platform-integration.md) | Product Specification Before Platform Integration | Accepted |
+| [008](0008-adapter-discipline.md) | Adapter Discipline | Accepted |
+| [009](0009-isolation-models.md) | Isolation is a named model, not a single "sealed" flag | Accepted |
+| [010](0010-architecture-freeze.md) | The architecture is frozen (WRM runtime complete) | Accepted |

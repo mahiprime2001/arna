@@ -4,10 +4,12 @@
 workspaces, and a workspace is a bundle of *virtualized resources*. Applications
 are data (manifests); runtimes execute plans. This index is the map.
 
-> **Status:** the architecture (v1 contract + v2 WRM) is **complete and stable**.
-> Treat it like a specification — changes should be rare, deliberate, and driven by
-> concrete evidence, not speculation. From here the work is *implementation*
-> (wiring + manifests), not architecture.
+> **Status: FROZEN** (`v2-runtime-complete`). The architecture (v1 contract + v2
+> WRM + the runtime execution model) is complete and frozen — see
+> [ADR-0010](../contract/adr/0010-architecture-freeze.md). The engine may change
+> **only** on proof that the architecture cannot express a required behavior, via
+> an ADR. Everything else belongs in **manifests** ([samples/](../samples/)),
+> profiles, runtime implementations, or the product.
 
 ## Start here (reading path for a new engineer)
 
@@ -87,11 +89,16 @@ Every boundary has both halves — the symmetry that makes it a spec:
   `wrm` (the projector proof) · `adapters/{mock,windows,windows-native}` ·
   `conformance`. The unified app: `client/` (React + Tauri + embedded engine).
 
+## 4b. Manifests — how applications describe themselves
+- [samples/](../samples/) — the five reference WRM manifests (vscode, chrome,
+  python, git, node): the "Hello World" every future manifest copies. Applications
+  are data; supporting a new one is authoring, not engineering.
+
 ## 5. Decisions (ADRs)
 - [contract/adr/README.md](../contract/adr/README.md) — index. 0001 scope · 0002
   audience · 0003 hardware ownership · 0004 identity · 0005 adapter architecture ·
   0006 rendering/input · 0007 spec-before-platform · 0008 adapter discipline ·
-  0009 isolation models.
+  0009 isolation models · **0010 architecture freeze**.
 
 ## 6. Where the risk is now
 Not architecture. The next problems are **manifest problems** — "Chrome ignores
