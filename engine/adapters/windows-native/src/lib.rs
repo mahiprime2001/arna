@@ -29,7 +29,9 @@ use wse_contract::{
 };
 
 mod dock;
+mod job;
 mod overlay;
+pub use job::Job;
 pub use overlay::{
     changes as overlay_changes, discard as overlay_discard, import as overlay_import,
     list as overlay_list, merge as overlay_merge, Change as OverlayChange,
@@ -139,6 +141,7 @@ extern "system" {
         pi: *mut ProcessInformation,
     ) -> i32;
     fn CloseHandle(h: Handle) -> i32;
+    fn ResumeThread(thread: Handle) -> u32;
     fn GlobalAlloc(flags: u32, bytes: usize) -> Handle;
     fn GlobalLock(h: Handle) -> *mut c_void;
     fn GlobalUnlock(h: Handle) -> i32;
@@ -810,6 +813,119 @@ fn create_process_flags(desktop: &str, cmdline: &str, workdir: &str, flags: u32)
     Ok(pi.dw_process_id)
 }
 
+// ── WRM generic executor: run a LaunchPlan, own it with a Job Object ──────────
+// The data-driven launch path (WSE v2). A projected `LaunchPlan` — never
+// app-specific code — becomes a real process on the workspace desktop, assigned
+// to a Windows **Job Object** so the workspace owns its whole process tree
+// (KILL_ON_JOB_CLOSE => zero orphans on teardown). The old `build_command` path
+// stays until this is proven end-to-end for VS Code, then it retires.
+
+const CREATE_SUSPENDED: u32 = 0x0000_0004;
+const CREATE_UNICODE_ENVIRONMENT: u32 = 0x0000_0400;
+
+/// Quote a command-line token if it contains whitespace. Workspace-home paths
+/// usually don't, but be safe.
+fn quote_arg(token: &str) -> String {
+    if !token.is_empty() && !token.bytes().any(|b| b == b' ' || b == b'\t') {
+        token.to_string()
+    } else {
+        format!("\"{}\"", token.replace('"', ""))
+    }
+}
+
+/// The full command line — derived ENTIRELY from the plan (executable +
+/// arguments). No application is named here; that's the whole point.
+fn plan_command_line(plan: &wse_wrm::LaunchPlan) -> String {
+    let mut s = quote_arg(&plan.executable.to_string_lossy());
+    for a in &plan.arguments {
+        s.push(' ');
+        s.push_str(&quote_arg(a));
+    }
+    s
+}
+
+/// The child's environment: the host environment with the plan's projected
+/// variables layered on top, as a UTF-16 double-NUL block. Empty when the plan
+/// sets none (then the child simply inherits ours).
+fn plan_environment_block(plan: &wse_wrm::LaunchPlan) -> Vec<u16> {
+    use std::collections::BTreeMap;
+    let mut vars: BTreeMap<String, String> = std::env::vars().collect();
+    for (k, v) in &plan.environment {
+        vars.insert(k.clone(), v.clone());
+    }
+    let mut block: Vec<u16> = Vec::new();
+    for (k, v) in vars {
+        block.extend(format!("{k}={v}").encode_utf16());
+        block.push(0);
+    }
+    block.push(0);
+    block
+}
+
+/// Create the workspace-scoped directories the plan projects (extensions dir,
+/// user-data dir, …) and the working directory, so the app finds them.
+fn stage_plan_dirs(plan: &wse_wrm::LaunchPlan) {
+    let _ = std::fs::create_dir_all(&plan.working_directory);
+    for r in &plan.resources {
+        if let Some(p) = &r.workspace_path {
+            let _ = std::fs::create_dir_all(p);
+        }
+    }
+}
+
+/// Execute a `LaunchPlan` on a workspace desktop; return the new process id and
+/// the **Job** that owns it (drop or `terminate()` kills the whole tree).
+/// Generic — no application-specific logic; everything comes from the plan.
+pub fn execute_plan(desktop: &str, plan: &wse_wrm::LaunchPlan) -> Result<(u32, job::Job)> {
+    stage_plan_dirs(plan);
+    let job = job::Job::create().ok_or_else(|| WseError::Internal("CreateJobObject failed".into()))?;
+
+    let mut desk = wide(desktop);
+    let mut cmd = wide(&plan_command_line(plan));
+    let dir = wide(&plan.working_directory.to_string_lossy());
+    let mut env_block = plan_environment_block(plan);
+
+    let (env_ptr, flags): (*const c_void, u32) = if plan.environment.is_empty() {
+        (std::ptr::null(), CREATE_SUSPENDED)
+    } else {
+        (
+            env_block.as_mut_ptr() as *const c_void,
+            CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT,
+        )
+    };
+
+    let mut si: StartupInfoW = unsafe { std::mem::zeroed() };
+    si.cb = std::mem::size_of::<StartupInfoW>() as u32;
+    si.lp_desktop = desk.as_mut_ptr();
+    let mut pi: ProcessInformation = unsafe { std::mem::zeroed() };
+    let ok = unsafe {
+        CreateProcessW(
+            std::ptr::null(),
+            cmd.as_mut_ptr(),
+            std::ptr::null(),
+            std::ptr::null(),
+            0,
+            flags,
+            env_ptr,
+            dir.as_ptr(),
+            &si,
+            &mut pi,
+        )
+    };
+    if ok == 0 {
+        return Err(WseError::Internal("CreateProcess (plan) failed".into()));
+    }
+    // Own it before it runs, so processes it spawns at startup join the Job too.
+    job.assign(pi.h_process);
+    unsafe {
+        ResumeThread(pi.h_thread);
+        CloseHandle(pi.h_thread);
+        CloseHandle(pi.h_process);
+    }
+    let _ = &env_block; // env_block must outlive CreateProcessW (Windows copies it)
+    Ok((pi.dw_process_id, job))
+}
+
 impl WorkspaceAdapter for WindowsNativeAdapter {
     fn contract_version(&self) -> ContractVersion {
         CONTRACT_VERSION
@@ -955,6 +1071,36 @@ mod tests {
         assert!(dst.join("Local Storage").join("x").exists(), "nested files must copy");
         assert!(!dst.join("Cache").exists(), "cache dirs must be skipped");
         let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    // ── WRM generic executor ────────────────────────────────────────────────
+    #[test]
+    fn plan_command_is_app_agnostic() {
+        // Project VS Code purely from its manifest + policy, then build the exact
+        // command the native runtime would run. Nothing about VS Code is hard-coded
+        // in this path — it all comes from the data.
+        let home = std::env::temp_dir().join(format!("wse-plan-{}", std::process::id()));
+        let plan = wse_wrm::project(&wse_wrm::manifests::VSCODE, &wse_wrm::policies::CLEAN, &home)
+            .expect("project vscode");
+        let cmd = plan_command_line(&plan);
+        assert!(cmd.contains("Code.exe"), "executable comes from the manifest: {cmd}");
+        assert!(cmd.contains("--extensions-dir="), "extensions arg from the manifest");
+        assert!(cmd.contains("--user-data-dir="), "user-data arg from the manifest");
+        assert!(cmd.contains("vscode"), "resource paths are workspace-scoped under the home");
+        assert!(cmd.contains("--new-window"), "manifest base args are preserved");
+    }
+
+    #[test]
+    #[ignore = "launches VS Code on the current desktop (manual)"]
+    fn launches_vscode_from_manifest_live() {
+        // The end-to-end proof: manifest -> projector -> LaunchPlan -> execute_plan
+        // -> a real VS Code, owned by a Job. No `if app == "vscode"` anywhere.
+        let home = std::env::temp_dir().join(format!("wse-vscode-{}", std::process::id()));
+        let plan = wse_wrm::project(&wse_wrm::manifests::VSCODE, &wse_wrm::policies::CLEAN, &home)
+            .expect("project");
+        let (pid, job) = execute_plan("Default", &plan).expect("launch");
+        assert!(pid > 0, "got a pid back");
+        std::mem::forget(job); // keep the Job open so VS Code stays up to eyeball it
     }
 }
 

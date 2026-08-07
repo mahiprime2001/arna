@@ -12,6 +12,7 @@ license.workspace = true
 [dependencies]
 wse-common = { path = "../../common" }
 wse-contract = { path = "../../contract" }
+wse-wrm = { path = "../../wrm" }
 
 [dev-dependencies]
 wse-conformance = { path = "../../conformance" }
