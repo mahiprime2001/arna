@@ -156,6 +156,22 @@ export interface Workspace {
   /** For Docker workspaces: the LAN URL a second machine on the same network
    *  opens to reach this workspace (this host's IP + the mapped port). */
   lanUrl?: string | null;
+  /** The runtime's honest guarantees per resource aspect (WRM). Rendered as-is;
+   *  the UI never needs to know which runtime produced them. */
+  guarantees?: Guarantees;
+}
+
+/** How strongly a runtime enforces a projection (WRM `Guarantee`). */
+export type GuaranteeStrength = "strong" | "isolated" | "shared" | "partial" | "unsupported";
+
+export interface Guarantees {
+  environment: GuaranteeStrength;
+  workingDirectory: GuaranteeStrength;
+  overlay: GuaranteeStrength;
+  processTree: GuaranteeStrength;
+  clipboard: GuaranteeStrength;
+  registry: GuaranteeStrength;
+  network: GuaranteeStrength;
 }
 
 /**

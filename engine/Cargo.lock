@@ -26,6 +26,7 @@ dependencies = [
  "wse-common",
  "wse-conformance",
  "wse-contract",
+ "wse-wrm",
 ]
 
 [[package]]

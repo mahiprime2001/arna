@@ -107,6 +107,21 @@ fn esc(s: &str) -> String {
     s.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
+/// A runtime's honest guarantees as JSON — the UI renders this straight, without
+/// knowing which runtime produced it. Single source of truth: the WRM descriptors.
+fn guarantees_json(g: &wse_wrm::Guarantees) -> String {
+    format!(
+        "{{\"environment\":\"{}\",\"workingDirectory\":\"{}\",\"overlay\":\"{}\",\"processTree\":\"{}\",\"clipboard\":\"{}\",\"registry\":\"{}\",\"network\":\"{}\"}}",
+        g.environment.label(),
+        g.working_directory.label(),
+        g.overlay.label(),
+        g.process_tree.label(),
+        g.clipboard.label(),
+        g.registry.label(),
+        g.network.label(),
+    )
+}
+
 fn state_json(rt: &mut Rt) -> String {
     let mut items: Vec<String> = Vec::new();
 
@@ -125,8 +140,9 @@ fn state_json(rt: &mut Rt) -> String {
             0
         };
         items.push(format!(
-            "{{\"id\":\"{}\",\"name\":\"{}\",\"runtime\":\"native\",\"state\":\"{}\",\"apps\":{},\"url\":null}}",
-            id, esc(&idy.name), state, apps
+            "{{\"id\":\"{}\",\"name\":\"{}\",\"runtime\":\"native\",\"state\":\"{}\",\"apps\":{},\"url\":null,\"guarantees\":{}}}",
+            id, esc(&idy.name), state, apps,
+            guarantees_json(&wse_wrm::runtimes::NATIVE_WINDOWS.guarantees)
         ));
     }
 
@@ -143,8 +159,9 @@ fn state_json(rt: &mut Rt) -> String {
             _ => "null".into(),
         };
         items.push(format!(
-            "{{\"id\":\"{}\",\"name\":\"{}\",\"runtime\":\"docker\",\"state\":\"{}\",\"apps\":{},\"url\":{},\"lanUrl\":{}}}",
-            id, esc(name), state, if running { 1 } else { 0 }, url, lan
+            "{{\"id\":\"{}\",\"name\":\"{}\",\"runtime\":\"docker\",\"state\":\"{}\",\"apps\":{},\"url\":{},\"lanUrl\":{},\"guarantees\":{}}}",
+            id, esc(name), state, if running { 1 } else { 0 }, url, lan,
+            guarantees_json(&wse_wrm::runtimes::DOCKER.guarantees)
         ));
     }
 

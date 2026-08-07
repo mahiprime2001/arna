@@ -77,6 +77,7 @@ dependencies = [
  "wse-adapter-windows-native",
  "wse-common",
  "wse-engine",
+ "wse-wrm",
 ]
 
 [[package]]
@@ -4384,6 +4385,7 @@ version = "0.1.0"
 dependencies = [
  "wse-common",
  "wse-contract",
+ "wse-wrm",
 ]
 
 [[package]]
@@ -4404,6 +4406,10 @@ dependencies = [
  "wse-common",
  "wse-contract",
 ]
+
+[[package]]
+name = "wse-wrm"
+version = "0.1.0"
 
 [[package]]
 name = "x11"

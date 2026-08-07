@@ -125,6 +125,19 @@ pub enum Guarantee {
     Unsupported,
 }
 
+impl Guarantee {
+    /// A lowercase label for UIs/serialisation ("strong", "isolated", …).
+    pub fn label(self) -> &'static str {
+        match self {
+            Guarantee::Strong => "strong",
+            Guarantee::Isolated => "isolated",
+            Guarantee::Shared => "shared",
+            Guarantee::Partial => "partial",
+            Guarantee::Unsupported => "unsupported",
+        }
+    }
+}
+
 /// A runtime's honest guarantees, per resource aspect. Carried on the descriptor
 /// AND copied into every `ExecutionContext`, so the UI can render exactly what a
 /// running workspace enforces without ever re-asking the runtime.

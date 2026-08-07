@@ -4,7 +4,12 @@
 // workspaces. Every command returns the engine's current workspace list.
 import { invoke } from "@tauri-apps/api/core";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
-import { draftWorkspace, type Workspace, type WorkspaceState } from "@/lib/workspace";
+import {
+  draftWorkspace,
+  type Guarantees,
+  type Workspace,
+  type WorkspaceState,
+} from "@/lib/workspace";
 
 /// Open a Docker workspace's code-server (VS Code) in its own app window. Reuses
 /// the window if it's already open.
@@ -62,6 +67,7 @@ export type EngineWs = {
   apps: number;
   url: string | null;
   lanUrl?: string | null;
+  guarantees?: Guarantees;
 };
 
 export function isTauri(): boolean {
@@ -123,6 +129,7 @@ export function toWorkspace(e: EngineWs): Workspace {
     runtime: e.runtime,
     url: e.url,
     lanUrl: e.lanUrl ?? null,
+    guarantees: e.guarantees,
   } as Workspace;
 }
 

@@ -24,9 +24,29 @@ import {
   canTransition,
   describe,
   STATE_LABEL,
+  type GuaranteeStrength,
   type Workspace,
   type WorkspaceState,
 } from "@/lib/workspace";
+
+// Honest guarantees, rendered straight from the runtime — green when it's a real
+// wall (strong/isolated), amber when it's shared/partial, muted when unsupported.
+const guarTone: Record<GuaranteeStrength, string> = {
+  strong: "text-good",
+  isolated: "text-good",
+  shared: "text-warn",
+  partial: "text-warn",
+  unsupported: "text-muted",
+};
+
+function Guarantee({ label, value }: { label: string; value: GuaranteeStrength }) {
+  return (
+    <span className="flex items-center justify-between gap-2">
+      <span className="text-muted">{label}</span>
+      <span className={cn("font-medium capitalize", guarTone[value])}>{value}</span>
+    </span>
+  );
+}
 
 const stateTone: Record<WorkspaceState, string> = {
   created: "bg-muted/20 text-muted",
@@ -120,6 +140,15 @@ function WorkspaceCard({
               </span>
             )}
           </div>
+
+          {w.guarantees && (
+            <div className="mt-3 grid grid-cols-2 gap-x-4 gap-y-1 rounded-md border border-line bg-elevated/40 px-2.5 py-2 text-[11px]">
+              <Guarantee label="Files" value={w.guarantees.overlay} />
+              <Guarantee label="Network" value={w.guarantees.network} />
+              <Guarantee label="Registry" value={w.guarantees.registry} />
+              <Guarantee label="Clipboard" value={w.guarantees.clipboard} />
+            </div>
+          )}
 
           <button
             onClick={copyId}
