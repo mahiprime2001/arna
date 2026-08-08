@@ -8,6 +8,7 @@ import {
   draftWorkspace,
   type Guarantees,
   type Workspace,
+  type WorkspaceRole,
   type WorkspaceState,
 } from "@/lib/workspace";
 
@@ -41,22 +42,61 @@ export function normalizeInvite(raw: string): string | null {
   }
 }
 
-/// Join a workspace from an invite link. Opens code-server in its own app window
-/// (desktop) or a new tab (browser). Returns an error message, or null on success.
-export function joinByLink(raw: string): string | null {
-  const url = normalizeInvite(raw);
-  if (!url) {
-    return "Paste the invite link your friend sent — an http://… address (or host:port). A bare workspace ID can't be joined on the same network without the backend.";
+// ── Invitations (one-click Join) ─────────────────────────────────────────────
+// An invite identifies an invitation with a ROLE + how to reach the workspace.
+// It is never equivalent to unlimited authority — the workspace decides what a
+// role may do. v1 carries the role; enforcement deepens with Watch & Control.
+export interface Invite {
+  v: 1;
+  id: string;
+  name: string;
+  role: WorkspaceRole;
+  url: string;
+}
+
+/// Encode an invite as a compact shareable token (base64 of JSON).
+export function makeInvite(inv: Invite): string {
+  return btoa(unescape(encodeURIComponent(JSON.stringify(inv))));
+}
+
+/// Decode an invite token; null if it isn't one.
+export function parseInvite(token: string): Invite | null {
+  try {
+    const o = JSON.parse(decodeURIComponent(escape(atob(token.trim()))));
+    if (o && o.v === 1 && typeof o.id === "string" && typeof o.url === "string" && o.role) {
+      return o as Invite;
+    }
+  } catch {
+    /* not a token */
   }
+  return null;
+}
+
+/// Accept either an invite token OR a bare workspace URL. A raw URL becomes a
+/// least-privilege Viewer invite for an otherwise-unknown workspace.
+export function inviteFrom(input: string): Invite | null {
+  const parsed = parseInvite(input);
+  if (parsed) return parsed;
+  const url = normalizeInvite(input);
+  if (!url) return null;
   let h = 0;
   for (let i = 0; i < url.length; i++) h = (h * 31 + url.charCodeAt(i)) | 0;
-  const id = `join-${(h >>> 0).toString(36)}`;
+  return {
+    v: 1,
+    id: `url-${(h >>> 0).toString(36)}`,
+    name: "Shared workspace",
+    role: "viewer",
+    url,
+  };
+}
+
+/// Open a joined workspace (its code-server surface) in its own window / tab.
+export function openJoined(id: string, name: string, url: string) {
   if (isTauri()) {
-    openCodeServerWindow(id, "Joined workspace", url);
+    openCodeServerWindow(id, name, url);
   } else {
     window.open(url, "_blank", "noopener");
   }
-  return null;
 }
 
 export type EngineWs = {

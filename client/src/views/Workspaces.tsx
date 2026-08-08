@@ -14,20 +14,26 @@ import {
   Cube,
   Cloud,
   SignIn,
+  SignOut,
   FolderOpen,
+  UserPlus,
+  Users,
 } from "@phosphor-icons/react";
 import { Card } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
 import { PageHeader } from "@/components/PageHeader";
 import { CreateWorkspace } from "@/components/CreateWorkspace";
 import { OverlayReview } from "@/components/OverlayReview";
-import { isTauri } from "@/lib/wse";
+import { InviteModal } from "@/components/InviteModal";
+import { isTauri, openJoined } from "@/lib/wse";
 import { cn } from "@/lib/utils";
 import {
   canTransition,
   describe,
+  ROLE_LABEL,
   STATE_LABEL,
   type GuaranteeStrength,
+  type JoinedWorkspace,
   type Workspace,
   type WorkspaceState,
 } from "@/lib/workspace";
@@ -68,12 +74,14 @@ function WorkspaceCard({
   onDelete,
   onOpen,
   onReview,
+  onInvite,
 }: {
   w: Workspace;
   onTransition: (id: string, to: WorkspaceState) => void;
   onDelete: (w: Workspace) => void;
   onOpen: (w: Workspace) => void;
   onReview: (w: Workspace) => void;
+  onInvite: (w: Workspace) => void;
 }) {
   const [copied, setCopied] = useState(false);
   const copyId = () => {
@@ -198,6 +206,11 @@ function WorkspaceCard({
             <FolderOpen size={14} /> Files
           </Button>
         )}
+        {w.runtime === "docker" && !!w.url && (
+          <Button size="sm" variant="outline" onClick={() => onInvite(w)}>
+            <UserPlus size={14} /> Invite
+          </Button>
+        )}
         {can("running") && (
           <Button size="sm" variant={w.state === "created" ? "primary" : "outline"} onClick={() => onTransition(w.id, "running")}>
             <Play size={14} weight="fill" /> {w.state === "created" ? "Start" : "Resume"}
@@ -233,6 +246,8 @@ export function Workspaces({
   onDelete,
   onOpen,
   onJoin,
+  joined = [],
+  onLeaveJoined,
 }: {
   workspaces: Workspace[];
   onCreate: (draft: Omit<Workspace, "id" | "state" | "createdAt">) => void;
@@ -240,12 +255,15 @@ export function Workspaces({
   onDelete: (w: Workspace) => void;
   onOpen: (w: Workspace) => void;
   onJoin?: (link: string) => string | null;
+  joined?: JoinedWorkspace[];
+  onLeaveJoined?: (id: string) => void;
 }) {
   const [creating, setCreating] = useState(false);
   const [joining, setJoining] = useState(false);
   const [joinLink, setJoinLink] = useState("");
   const [joinError, setJoinError] = useState<string | null>(null);
   const [reviewing, setReviewing] = useState<Workspace | null>(null);
+  const [inviting, setInviting] = useState<Workspace | null>(null);
 
   const submitJoin = () => {
     const err = onJoin?.(joinLink) ?? "Joining isn't available here.";
@@ -278,7 +296,8 @@ export function Workspaces({
         <Card className="p-4">
           <h3 className="text-sm font-semibold">Join a friend's workspace</h3>
           <p className="mt-1 text-[12.5px] text-muted">
-            Paste the invite link they sent you. You both need to be on the same Wi-Fi.
+            Paste the invite code they sent you (or a workspace link). You must be able to reach
+            it — same Wi-Fi, or a tunnel.
           </p>
           <div className="mt-3 flex flex-col gap-2 sm:flex-row">
             <input
@@ -288,7 +307,7 @@ export function Workspaces({
                 setJoinError(null);
               }}
               onKeyDown={(e) => e.key === "Enter" && submitJoin()}
-              placeholder="http://192.168.1.5:49153"
+              placeholder="Paste invite code or http://…"
               className="flex-1 rounded-md border border-line bg-elevated px-3 py-2 font-mono text-[12.5px] outline-none focus:border-brand"
             />
             <Button onClick={submitJoin}>
@@ -325,8 +344,42 @@ export function Workspaces({
               onDelete={onDelete}
               onOpen={onOpen}
               onReview={setReviewing}
+              onInvite={setInviting}
             />
           ))}
+        </div>
+      )}
+
+      {joined.length > 0 && (
+        <div className="space-y-3">
+          <div className="flex items-center gap-2 text-[13px] font-semibold text-muted">
+            <Users size={16} /> Shared with me
+          </div>
+          <div className="grid gap-3 sm:grid-cols-2">
+            {joined.map((j) => (
+              <Card key={j.id} className="flex items-center justify-between gap-3 p-4">
+                <div className="min-w-0">
+                  <h3 className="truncate text-[14px] font-semibold">{j.name}</h3>
+                  <span className="mt-1 inline-flex items-center rounded-full bg-elevated px-2 py-0.5 text-[11px] font-medium text-muted">
+                    {ROLE_LABEL[j.role]}
+                  </span>
+                </div>
+                <div className="flex shrink-0 gap-2">
+                  <Button size="sm" onClick={() => openJoined(j.id, j.name, j.url)}>
+                    <SignIn size={14} weight="fill" /> Enter
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => onLeaveJoined?.(j.id)}
+                    title="Leave this workspace"
+                  >
+                    <SignOut size={14} /> Leave
+                  </Button>
+                </div>
+              </Card>
+            ))}
+          </div>
         </div>
       )}
 
@@ -343,6 +396,8 @@ export function Workspaces({
       {reviewing && (
         <OverlayReview workspace={reviewing} onClose={() => setReviewing(null)} />
       )}
+
+      {inviting && <InviteModal workspace={inviting} onClose={() => setInviting(null)} />}
     </div>
   );
 }

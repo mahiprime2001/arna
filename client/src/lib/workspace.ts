@@ -209,6 +209,52 @@ export function draftWorkspace(): Omit<Workspace, "id" | "state" | "createdAt"> 
   };
 }
 
+// ── membership: workspaces someone shared with you (NOT ownership) ───────────
+// Ownership ("workspaces I own", above) and membership ("workspaces I may enter")
+// are deliberately separate concepts. An invite grants membership at a role; the
+// workspace — not the link — decides what that role may do (enforcement grows with
+// Watch & Control). SPEC §4 roles map onto the Authorizer already in the engine.
+export type WorkspaceRole = "viewer" | "collaborator" | "controller";
+
+export const ROLE_LABEL: Record<WorkspaceRole, string> = {
+  viewer: "Viewer",
+  collaborator: "Collaborator",
+  controller: "Controller",
+};
+
+export const ROLE_HINT: Record<WorkspaceRole, string> = {
+  viewer: "Can see the workspace",
+  collaborator: "Can work alongside the owner",
+  controller: "Can take control of the workspace",
+};
+
+/** A workspace someone else shared with you (membership, device-local). */
+export interface JoinedWorkspace {
+  id: string;
+  name: string;
+  role: WorkspaceRole;
+  url: string;
+  joinedAt: number;
+}
+
+const JOINED_KEY = (uid: number) => `arna_joined_${uid}`;
+
+export function loadJoined(uid: number): JoinedWorkspace[] {
+  try {
+    return JSON.parse(localStorage.getItem(JOINED_KEY(uid)) || "[]");
+  } catch {
+    return [];
+  }
+}
+
+export function saveJoined(uid: number, list: JoinedWorkspace[]) {
+  try {
+    localStorage.setItem(JOINED_KEY(uid), JSON.stringify(list));
+  } catch {
+    /* quota; ignore */
+  }
+}
+
 // ── device-local store (no server yet) ──────────────────────────────────────
 const KEY = (uid: number) => `arna_workspaces_${uid}`;
 

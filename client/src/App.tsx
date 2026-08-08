@@ -32,7 +32,8 @@ import {
   wseEnter,
   toWorkspaces,
   openCodeServerWindow,
-  joinByLink,
+  inviteFrom,
+  openJoined,
 } from "@/lib/wse";
 import type { AuthUser } from "@/lib/api";
 import { decryptFrom, encryptFor, initCrypto, myPublicKey } from "@/lib/crypto";
@@ -59,9 +60,12 @@ import {
 import { callEngine, type CallKind, type CallState } from "@/lib/webrtc";
 import {
   canTransition,
+  loadJoined,
   loadWorkspaces,
   newWorkspaceId,
+  saveJoined,
   saveWorkspaces,
+  type JoinedWorkspace,
   type Workspace,
   type WorkspaceState,
 } from "@/lib/workspace";
@@ -108,6 +112,29 @@ export default function App({
   useEffect(() => {
     saveWorkspaces(user.id, workspaces);
   }, [workspaces, user.id]);
+
+  // Membership: workspaces others shared with me (separate from ownership above).
+  const [joined, setJoined] = useState<JoinedWorkspace[]>(() => loadJoined(user.id));
+  useEffect(() => {
+    saveJoined(user.id, joined);
+  }, [joined, user.id]);
+
+  // Accept an invite (a role-bearing token, or a bare workspace link): record the
+  // membership at its granted role, then open the workspace.
+  const joinFromInvite = (input: string): string | null => {
+    const inv = inviteFrom(input);
+    if (!inv) {
+      return "That doesn't look like an invite. Paste the invite code your friend sent (or the workspace link).";
+    }
+    setJoined((prev) =>
+      prev.some((j) => j.id === inv.id)
+        ? prev.map((j) => (j.id === inv.id ? { ...j, ...inv, joinedAt: j.joinedAt } : j))
+        : [{ ...inv, joinedAt: Date.now() }, ...prev],
+    );
+    openJoined(inv.id, inv.name, inv.url);
+    return null;
+  };
+  const leaveJoined = (id: string) => setJoined((prev) => prev.filter((j) => j.id !== id));
 
   const openConvRef = useRef<number | null>(null);
   const friendsRef = useRef<Friend[]>(friends);
@@ -611,7 +638,9 @@ export default function App({
                     onTransition={transitionWorkspace}
                     onDelete={deleteWorkspace}
                     onOpen={handleOpenWorkspace}
-                    onJoin={joinByLink}
+                    onJoin={joinFromInvite}
+                    joined={joined}
+                    onLeaveJoined={leaveJoined}
                   />
                 )}
                 {route === "friends" && (
