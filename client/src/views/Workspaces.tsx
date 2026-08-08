@@ -188,6 +188,11 @@ function WorkspaceCard({
             <Monitor size={14} weight="fill" /> Open
           </Button>
         )}
+        {w.state === "saved" && (
+          <Button size="sm" onClick={() => onOpen(w)}>
+            <Play size={14} weight="fill" /> Resume
+          </Button>
+        )}
         {isTauri() && (w.runtime === "native" || !w.runtime) && (
           <Button size="sm" variant="outline" onClick={() => onReview(w)}>
             <FolderOpen size={14} /> Files

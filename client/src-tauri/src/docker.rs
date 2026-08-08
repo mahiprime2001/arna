@@ -91,6 +91,12 @@ pub fn running(id: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// Does the workspace's container still exist (running OR stopped)? Used on
+/// startup to prune persisted entries whose container was removed out-of-band.
+pub fn exists(id: &str) -> bool {
+    docker(&["inspect", "-f", "{{.Id}}", &format!("wse-{id}")]).is_some()
+}
+
 /// The host port code-server is mapped to (Docker picks a random free one).
 fn host_port(id: &str) -> Option<String> {
     let mapping = docker(&["port", &format!("wse-{id}"), "8080"])?;

@@ -8,6 +8,7 @@
 //! call returns the merged workspace state as JSON.
 
 use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
 use std::sync::mpsc::{sync_channel, SyncSender};
 use std::sync::Mutex;
 use std::thread;
@@ -31,6 +32,55 @@ pub enum Cmd {
     Destroy(String),
     Import(String, bool), // id, chrome
     Browser(bool),        // chrome
+}
+
+// ── Docker workspace persistence ─────────────────────────────────────────────
+// Docker workspaces already persist on disk (container + volume); only the in-
+// memory id->name map is lost on close. We persist just that map, so reopening
+// WSE shows the same Docker workspaces (suspended) and Resume = docker start.
+// Native persistence is a separate, still-open design decision (engine has no
+// "restore an existing identity"); nothing native is persisted here yet.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct DockerEntry {
+    id: String,
+    name: String,
+}
+
+fn registry_path() -> PathBuf {
+    let base = std::env::var("USERPROFILE")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| std::env::temp_dir());
+    base.join(".wse").join("dockers.json")
+}
+
+/// Load the persisted Docker workspaces, pruning any whose container no longer
+/// exists (removed out-of-band).
+fn load_dockers() -> HashMap<String, String> {
+    let mut out = HashMap::new();
+    if let Ok(s) = std::fs::read_to_string(registry_path()) {
+        if let Ok(entries) = serde_json::from_str::<Vec<DockerEntry>>(&s) {
+            for e in entries {
+                if docker::exists(&e.id) {
+                    out.insert(e.id, e.name);
+                }
+            }
+        }
+    }
+    out
+}
+
+fn save_dockers(dockers: &HashMap<String, String>) {
+    let entries: Vec<DockerEntry> = dockers
+        .iter()
+        .map(|(id, name)| DockerEntry { id: id.clone(), name: name.clone() })
+        .collect();
+    if let Ok(s) = serde_json::to_string(&entries) {
+        let p = registry_path();
+        if let Some(dir) = p.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        let _ = std::fs::write(p, s);
+    }
 }
 
 fn map_app(ui: &str) -> Option<&'static str> {
@@ -70,7 +120,7 @@ impl Workspaces {
                 docked: HashSet::new(),
                 chrome: HashMap::new(),
                 apps: HashMap::new(),
-                dockers: HashMap::new(),
+                dockers: load_dockers(), // Docker workspaces survive a restart
             };
             while let Ok(req) = rx.recv() {
                 exec(&mut rt, req.cmd);
@@ -181,6 +231,7 @@ fn exec(rt: &mut Rt, cmd: Cmd) {
                 let id = WorkspaceId::new().to_string();
                 if docker::create(&id) {
                     rt.dockers.insert(id, name);
+                    save_dockers(&rt.dockers);
                 }
             } else {
                 let cfg = WorkspaceConfig::new(&name, Persistence::Temporary, catalog());
@@ -211,6 +262,7 @@ fn exec(rt: &mut Rt, cmd: Cmd) {
         Cmd::Destroy(id) if rt.dockers.contains_key(&id) => {
             docker::destroy(&id);
             rt.dockers.remove(&id);
+            save_dockers(&rt.dockers);
         }
         // ── native paths ─────────────────────────────────────────────────────
         Cmd::Start(id) => {
