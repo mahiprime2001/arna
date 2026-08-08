@@ -33,3 +33,4 @@ deleting them destroys the history that makes them useful.
 | [008](0008-adapter-discipline.md) | Adapter Discipline | Accepted |
 | [009](0009-isolation-models.md) | Isolation is a named model, not a single "sealed" flag | Accepted |
 | [010](0010-architecture-freeze.md) | The architecture is frozen (WRM runtime complete) | Accepted |
+| [011](0011-workspace-restore-and-resume.md) | Workspace restore + resume (architecture v3) | Accepted |

@@ -243,8 +243,27 @@ impl<A: WorkspaceAdapter> Engine<A> {
         self.workspaces.keys().cloned().collect()
     }
 
-    /// Create a workspace. It exists (Created) but does not execute yet.
+    /// Create a workspace. It exists (Created) but does not execute yet. Mints a
+    /// fresh id; see `restore` to bring back a persisted one.
     pub fn create_workspace(&mut self, cfg: WorkspaceConfig) -> Result<WorkspaceId> {
+        let id = WorkspaceId::new();
+        self.instantiate(id.clone(), cfg)?;
+        Ok(id)
+    }
+
+    /// Restore a previously-persisted workspace by its **existing** id — the
+    /// counterpart to `create_workspace` (which mints a fresh one). Reconstructs
+    /// the engine record and the adapter's runtime state for the workspace's
+    /// on-disk home, so a workspace survives a process restart with its identity
+    /// (and its files) intact. Comes back in `Created`; Resume is `start`.
+    /// See ADR-0011 (architecture v3).
+    pub fn restore(&mut self, id: WorkspaceId, cfg: WorkspaceConfig) -> Result<()> {
+        self.instantiate(id, cfg)
+    }
+
+    /// The shared create/restore path: version-check, build the runtime shell
+    /// (idempotent on an existing home), record the workspace as `Created`, emit.
+    fn instantiate(&mut self, id: WorkspaceId, cfg: WorkspaceConfig) -> Result<()> {
         // The adapter must speak a compatible contract version (SPEC §18.4).
         let v = self.adapter.contract_version();
         if !v.compatible_with(CONTRACT_VERSION) {
@@ -253,7 +272,6 @@ impl<A: WorkspaceAdapter> Engine<A> {
                 engine: CONTRACT_VERSION.to_string(),
             });
         }
-        let id = WorkspaceId::new();
         let def = WorkspaceDef {
             id: id.clone(),
             name: cfg.name.clone(),
@@ -294,7 +312,7 @@ impl<A: WorkspaceAdapter> Engine<A> {
             },
         );
         self.emit(&id, Actor::System, EventSource::Core, EventKind::WorkspaceCreated);
-        Ok(id)
+        Ok(())
     }
 
     /// Build the event envelope (fresh id, per-workspace monotonic seq,
@@ -356,7 +374,14 @@ impl<A: WorkspaceAdapter> Engine<A> {
     /// marks the workspace running (SPEC §18.3). If the evidence is rejected,
     /// the engine stops it and errors — no partial-isolation tier.
     pub fn start(&mut self, id: &WorkspaceId) -> Result<()> {
-        let from = self.require_state(id)?;
+        let mut from = self.require_state(id)?;
+        // Resume path: a Saved workspace passes through Resuming (SPEC §5.2) on its
+        // way back to Running — this is what makes "close and reopen" continuous
+        // rather than a re-create. See ADR-0011.
+        if from == WorkspaceState::Saved {
+            self.set_state(id, WorkspaceState::Resuming);
+            from = WorkspaceState::Resuming;
+        }
         self.check_transition(from, WorkspaceState::Running)?;
 
         let attestation: IsolationAttestation = self.adapter.start(id)?;

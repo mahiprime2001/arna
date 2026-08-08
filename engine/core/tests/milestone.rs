@@ -4,7 +4,9 @@
 //! reference; every real adapter must pass the equivalent.
 
 use wse_adapter_mock::MockAdapter;
-use wse_common::{ApplicationDescriptor, EventKind, Persistence, WorkspaceState, WseError};
+use wse_common::{
+    ApplicationDescriptor, EventKind, Persistence, WorkspaceId, WorkspaceState, WseError,
+};
 use wse_engine::{Engine, WorkspaceConfig};
 
 fn catalog() -> Vec<ApplicationDescriptor> {
@@ -39,6 +41,40 @@ fn create_start_launch_list() {
     // Only the newest window is focused.
     assert!(windows.last().unwrap().focused);
     assert!(!windows.first().unwrap().focused);
+}
+
+#[test]
+fn suspend_then_resume_returns_to_running() {
+    // ADR-0011: a Saved workspace resumes via `start` (Saved -> Resuming -> Running),
+    // so "close and reopen" is continuous, not a re-create.
+    let mut engine = Engine::new(MockAdapter::new());
+    let ws = engine
+        .create_workspace(WorkspaceConfig::new("w", Persistence::Saved, catalog()))
+        .unwrap();
+    engine.start(&ws).unwrap();
+    engine.stop(&ws).unwrap();
+    assert_eq!(engine.state(&ws), Some(WorkspaceState::Saved));
+
+    engine.start(&ws).unwrap(); // resume
+    assert_eq!(engine.state(&ws), Some(WorkspaceState::Running));
+}
+
+#[test]
+fn restore_adopts_an_existing_id() {
+    // ADR-0011: restore brings a workspace back under its EXISTING id — the basis
+    // of persistence across a process restart.
+    let mut engine = Engine::new(MockAdapter::new());
+    let id = WorkspaceId::new();
+    engine
+        .restore(id.clone(), WorkspaceConfig::new("restored", Persistence::Saved, catalog()))
+        .unwrap();
+    assert_eq!(engine.state(&id), Some(WorkspaceState::Created));
+
+    // It then behaves like any workspace.
+    engine.start(&id).unwrap();
+    assert_eq!(engine.state(&id), Some(WorkspaceState::Running));
+    engine.launch(&id, "editor").unwrap();
+    assert_eq!(engine.app_instances(&id).unwrap().len(), 1);
 }
 
 #[test]

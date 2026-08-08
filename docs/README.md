@@ -4,12 +4,14 @@
 workspaces, and a workspace is a bundle of *virtualized resources*. Applications
 are data (manifests); runtimes execute plans. This index is the map.
 
-> **Status: FROZEN** (`v2-runtime-complete`). The architecture (v1 contract + v2
-> WRM + the runtime execution model) is complete and frozen — see
-> [ADR-0010](../contract/adr/0010-architecture-freeze.md). The engine may change
-> **only** on proof that the architecture cannot express a required behavior, via
-> an ADR. Everything else belongs in **manifests** ([samples/](../samples/)),
-> profiles, runtime implementations, or the product.
+> **Status: FROZEN** (architecture **v3**). v1 (contract) + v2 (WRM + runtime
+> execution model) are frozen — see
+> [ADR-0010](../contract/adr/0010-architecture-freeze.md). v3 added only the two
+> lifecycle completions persistence proved necessary (workspace restore + resume)
+> via [ADR-0011](../contract/adr/0011-workspace-restore-and-resume.md) — the freeze
+> rule working as designed. The engine changes **only** on proof (an ADR) that the
+> architecture cannot express a behavior; everything else belongs in **manifests**
+> ([samples/](../samples/)), profiles, runtime implementations, or the product.
 
 ## Start here (reading path for a new engineer)
 
