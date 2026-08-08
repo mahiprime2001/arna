@@ -34,52 +34,124 @@ pub enum Cmd {
     Browser(bool),        // chrome
 }
 
-// ── Docker workspace persistence ─────────────────────────────────────────────
-// Docker workspaces already persist on disk (container + volume); only the in-
-// memory id->name map is lost on close. We persist just that map, so reopening
-// WSE shows the same Docker workspaces (suspended) and Resume = docker start.
-// Native persistence is a separate, still-open design decision (engine has no
-// "restore an existing identity"); nothing native is persisted here yet.
+// ── Workspace persistence (close WSE -> reopen -> resume) ─────────────────────
+// One registry records every workspace's identity + how to reconstruct it.
+//  - Docker: state is on disk (container + volume); we persist id->name and, on
+//    reopen, docker start resumes it.
+//  - Native: state (home/profiles/overlay) is on disk keyed by id; we persist the
+//    metadata and, on Resume, `engine.restore(id, ..)` re-adopts the SAME id
+//    (ADR-0011) so files match, then start + launch reconstruct the runtime.
 #[derive(serde::Serialize, serde::Deserialize)]
-struct DockerEntry {
+struct RegEntry {
     id: String,
     name: String,
+    runtime: String, // "native" | "docker"
+    #[serde(default)]
+    apps: Vec<String>,
+    #[serde(default)]
+    chrome: bool,
+}
+
+/// A persisted native workspace not yet resumed this session (suspended).
+struct SavedWs {
+    name: String,
+    apps: Vec<String>,
+    chrome: bool,
+}
+
+fn wse_dir() -> PathBuf {
+    std::env::var("USERPROFILE")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| std::env::temp_dir())
+        .join(".wse")
 }
 
 fn registry_path() -> PathBuf {
-    let base = std::env::var("USERPROFILE")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| std::env::temp_dir());
-    base.join(".wse").join("dockers.json")
+    wse_dir().join("registry.json")
 }
 
-/// Load the persisted Docker workspaces, pruning any whose container no longer
-/// exists (removed out-of-band).
-fn load_dockers() -> HashMap<String, String> {
-    let mut out = HashMap::new();
+fn native_home(id: &str) -> PathBuf {
+    wse_dir().join("workspaces").join(format!("wse-{id}"))
+}
+
+/// Load persisted workspaces, pruning ghosts (docker container removed, or native
+/// home deleted). Returns (docker id->name, saved native id->SavedWs).
+fn load_registry() -> (HashMap<String, String>, HashMap<String, SavedWs>) {
+    let mut dockers = HashMap::new();
+    let mut saved = HashMap::new();
     if let Ok(s) = std::fs::read_to_string(registry_path()) {
-        if let Ok(entries) = serde_json::from_str::<Vec<DockerEntry>>(&s) {
+        if let Ok(entries) = serde_json::from_str::<Vec<RegEntry>>(&s) {
             for e in entries {
-                if docker::exists(&e.id) {
-                    out.insert(e.id, e.name);
+                if e.runtime == "docker" {
+                    if docker::exists(&e.id) {
+                        dockers.insert(e.id, e.name);
+                    }
+                } else if native_home(&e.id).exists() {
+                    saved.insert(e.id, SavedWs { name: e.name, apps: e.apps, chrome: e.chrome });
                 }
             }
         }
     }
-    out
+    (dockers, saved)
 }
 
-fn save_dockers(dockers: &HashMap<String, String>) {
-    let entries: Vec<DockerEntry> = dockers
-        .iter()
-        .map(|(id, name)| DockerEntry { id: id.clone(), name: name.clone() })
-        .collect();
+/// Write the current workspace set to the registry (full rewrite; a destroyed
+/// workspace simply isn't included).
+fn persist(rt: &Rt) {
+    let mut entries: Vec<RegEntry> = Vec::new();
+    // Live native workspaces (engine-tracked).
+    for id in rt.engine.workspace_ids() {
+        if let Some(idy) = rt.engine.identity(&id) {
+            entries.push(RegEntry {
+                id: id.to_string(),
+                name: idy.name,
+                runtime: "native".into(),
+                apps: rt.apps.get(&id).cloned().unwrap_or_default(),
+                chrome: rt.chrome.get(&id).copied().unwrap_or(false),
+            });
+        }
+    }
+    // Suspended natives not yet resumed this session.
+    for (id, sv) in &rt.saved {
+        entries.push(RegEntry {
+            id: id.clone(),
+            name: sv.name.clone(),
+            runtime: "native".into(),
+            apps: sv.apps.clone(),
+            chrome: sv.chrome,
+        });
+    }
+    // Docker workspaces.
+    for (id, name) in &rt.dockers {
+        entries.push(RegEntry {
+            id: id.clone(),
+            name: name.clone(),
+            runtime: "docker".into(),
+            apps: Vec::new(),
+            chrome: false,
+        });
+    }
     if let Ok(s) = serde_json::to_string(&entries) {
         let p = registry_path();
         if let Some(dir) = p.parent() {
             let _ = std::fs::create_dir_all(dir);
         }
         let _ = std::fs::write(p, s);
+    }
+}
+
+/// Bring a persisted native workspace back into the engine under its EXISTING id
+/// (ADR-0011), so its on-disk home/profiles/overlay match. No-op if not saved.
+fn ensure_restored(rt: &mut Rt, id: &str) {
+    if let Some(sv) = rt.saved.remove(id) {
+        let wid = WorkspaceId::from_raw(id.to_string());
+        let cfg = WorkspaceConfig::new(&sv.name, Persistence::Temporary, catalog());
+        if rt.engine.restore(wid.clone(), cfg).is_ok() {
+            rt.chrome.insert(wid.clone(), sv.chrome);
+            rt.apps.insert(wid, sv.apps);
+        } else {
+            rt.saved.insert(id.to_string(), sv); // restore failed; don't lose it
+        }
     }
 }
 
@@ -109,21 +181,31 @@ struct Rt {
     apps: HashMap<WorkspaceId, Vec<String>>,
     /// Docker workspaces: id -> display name.
     dockers: HashMap<String, String>,
+    /// Persisted native workspaces not yet resumed this session (suspended).
+    saved: HashMap<String, SavedWs>,
 }
 
 impl Workspaces {
     pub fn new() -> Self {
         let (tx, rx) = sync_channel::<Req>(64);
         thread::spawn(move || {
+            // Persisted workspaces survive a restart (ADR-0011): Docker via its
+            // container/volume, native via engine.restore on resume.
+            let (dockers, saved) = load_registry();
             let mut rt = Rt {
                 engine: Engine::new(WindowsNativeAdapter::new()),
                 docked: HashSet::new(),
                 chrome: HashMap::new(),
                 apps: HashMap::new(),
-                dockers: load_dockers(), // Docker workspaces survive a restart
+                dockers,
+                saved,
             };
             while let Ok(req) = rx.recv() {
+                let persist_after = !matches!(req.cmd, Cmd::List);
                 exec(&mut rt, req.cmd);
+                if persist_after {
+                    persist(&rt);
+                }
                 let _ = req.reply.send(state_json(&mut rt));
             }
         });
@@ -196,6 +278,16 @@ fn state_json(rt: &mut Rt) -> String {
         ));
     }
 
+    // Suspended native workspaces: persisted, not yet resumed this session.
+    for (id, sv) in &rt.saved {
+        items.push(format!(
+            "{{\"id\":\"{}\",\"name\":\"{}\",\"runtime\":\"native\",\"state\":\"suspended\",\"apps\":0,\"url\":null,\"guarantees\":{}}}",
+            id,
+            esc(&sv.name),
+            guarantees_json(&wse_wrm::runtimes::NATIVE_WINDOWS.guarantees)
+        ));
+    }
+
     // Docker workspaces.
     for (id, name) in &rt.dockers {
         let running = docker::running(id);
@@ -231,7 +323,6 @@ fn exec(rt: &mut Rt, cmd: Cmd) {
                 let id = WorkspaceId::new().to_string();
                 if docker::create(&id) {
                     rt.dockers.insert(id, name);
-                    save_dockers(&rt.dockers);
                 }
             } else {
                 let cfg = WorkspaceConfig::new(&name, Persistence::Temporary, catalog());
@@ -262,13 +353,19 @@ fn exec(rt: &mut Rt, cmd: Cmd) {
         Cmd::Destroy(id) if rt.dockers.contains_key(&id) => {
             docker::destroy(&id);
             rt.dockers.remove(&id);
-            save_dockers(&rt.dockers);
+        }
+        // Destroy a suspended (persisted, not-yet-resumed) native workspace.
+        Cmd::Destroy(id) if rt.saved.contains_key(&id) => {
+            rt.saved.remove(&id);
+            let _ = std::fs::remove_dir_all(native_home(&id));
         }
         // ── native paths ─────────────────────────────────────────────────────
         Cmd::Start(id) => {
+            ensure_restored(rt, &id); // resume a persisted workspace if needed
             let _ = rt.engine.start(&WorkspaceId::from_raw(id));
         }
         Cmd::Launch(id) => {
+            ensure_restored(rt, &id);
             let id = WorkspaceId::from_raw(id);
             set_preferred_browser(rt.chrome.get(&id).copied().unwrap_or(false));
             if rt.engine.state(&id) != Some(WorkspaceState::Running) {
@@ -277,6 +374,7 @@ fn exec(rt: &mut Rt, cmd: Cmd) {
             let _ = rt.engine.launch(&id, "browser");
         }
         Cmd::Enter(id) => {
+            ensure_restored(rt, &id); // resume a persisted workspace if needed
             let id = WorkspaceId::from_raw(id);
             set_preferred_browser(rt.chrome.get(&id).copied().unwrap_or(false));
             if rt.engine.state(&id) != Some(WorkspaceState::Running) {
