@@ -1,7 +1,40 @@
 mod docker;
+mod remote;
 mod workspaces;
 use std::path::Path;
 use workspaces::{Cmd, Workspaces};
+
+// ── Watch & Control: host-side remote session enforcement ────────────────────
+#[tauri::command]
+fn remote_join(workspace: String, guest: String, name: String) -> String {
+    remote::join(&workspace, &guest, &name);
+    remote::state_json(&workspace)
+}
+#[tauri::command]
+fn remote_grant(workspace: String, guest: String) -> String {
+    remote::grant(&workspace, &guest);
+    remote::state_json(&workspace)
+}
+#[tauri::command]
+fn remote_revoke(workspace: String) -> String {
+    remote::revoke(&workspace);
+    remote::state_json(&workspace)
+}
+#[tauri::command]
+fn remote_disconnect(workspace: String, guest: String) -> String {
+    remote::disconnect(&workspace, &guest);
+    remote::state_json(&workspace)
+}
+/// Gated: injects into the OS only if the guest is the Controller. Returns
+/// whether it was injected (false = rejected at the enforcement point).
+#[tauri::command]
+fn remote_input(workspace: String, guest: String, event: String) -> bool {
+    remote::input(&workspace, &guest, &event)
+}
+#[tauri::command]
+fn remote_session(workspace: String) -> String {
+    remote::state_json(&workspace)
+}
 
 use wse_adapter_windows_native::{
     overlay_changes, overlay_discard, overlay_import, overlay_list, overlay_merge,
@@ -110,7 +143,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             ws_list, ws_create, ws_start, ws_launch, ws_enter, ws_suspend, ws_destroy, ws_import,
             ws_browser, ws_overlay_share, ws_overlay_list, ws_overlay_changes, ws_overlay_merge,
-            ws_overlay_discard
+            ws_overlay_discard, remote_join, remote_grant, remote_revoke, remote_disconnect,
+            remote_input, remote_session
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
