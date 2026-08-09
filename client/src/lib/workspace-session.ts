@@ -51,7 +51,7 @@ const ICE: RTCIceServer[] = [
 export type SessionSignal = {
   ns: "wss";
   workspace: string;
-  t: "offer" | "answer" | "ice";
+  t: "offer" | "answer" | "ice" | "end";
   sdp?: RTCSessionDescriptionInit;
   candidate?: RTCIceCandidateInit;
 };
@@ -252,3 +252,122 @@ export function attachInputCapture(el: HTMLElement, guest: GuestSession): () => 
     el.removeEventListener("keyup", onKeyUp);
   };
 }
+
+// ── session hub: one host + one guest session, wired to the relay ────────────
+// Routes namespaced ("wss") signals to the right side, and exposes the small set
+// of host controls. Every control goes through the backend gate — the UI never
+// injects input or bypasses can_send_input().
+class SessionHub {
+  private host: HostSession | null = null;
+  private hostGuestUid: number | null = null;
+  private hostGuestId = "";
+  private hostWorkspace = "";
+  private guest: GuestSession | null = null;
+  private guestHostUid: number | null = null;
+  private send: Signaler = () => {};
+  private onStream: (s: MediaStream | null) => void = () => {};
+
+  setSignaler(fn: Signaler) {
+    this.send = fn;
+  }
+  setStreamListener(fn: (s: MediaStream | null) => void) {
+    this.onStream = fn;
+  }
+  guestSession() {
+    return this.guest;
+  }
+  sharing() {
+    return !!this.host;
+  }
+
+  async startShare(
+    workspace: string,
+    guestUid: number,
+    guestId: string,
+    guestName: string,
+    surface: SurfaceProvider,
+  ) {
+    this.stopHost();
+    // Register the guest in the gate (as Viewer) BEFORE any input can arrive.
+    try {
+      await invoke("remote_join", { workspace, guest: guestId, name: guestName });
+    } catch {
+      /* backend unavailable */
+    }
+    this.host = new HostSession(workspace, guestUid, guestId, this.send);
+    this.hostGuestUid = guestUid;
+    this.hostGuestId = guestId;
+    this.hostWorkspace = workspace;
+    await this.host.share(surface);
+  }
+
+  async grant() {
+    if (this.hostWorkspace) {
+      await invoke("remote_grant", { workspace: this.hostWorkspace, guest: this.hostGuestId }).catch(
+        () => {},
+      );
+    }
+  }
+  async revoke() {
+    if (this.hostWorkspace) {
+      await invoke("remote_revoke", { workspace: this.hostWorkspace }).catch(() => {});
+    }
+  }
+  async sessionState(): Promise<string> {
+    if (!this.hostWorkspace) return "{}";
+    return invoke<string>("remote_session", { workspace: this.hostWorkspace }).catch(() => "{}");
+  }
+
+  disconnectHost() {
+    const { hostWorkspace: ws, hostGuestId: guest, hostGuestUid: uid } = this;
+    if (ws) invoke("remote_disconnect", { workspace: ws, guest }).catch(() => {});
+    if (uid != null) this.send(uid, { ns: "wss", workspace: ws, t: "end" });
+    this.stopHost();
+  }
+  private stopHost() {
+    this.host?.stop();
+    this.host = null;
+    this.hostGuestUid = null;
+    this.hostGuestId = "";
+    this.hostWorkspace = "";
+  }
+
+  leaveGuest() {
+    if (this.guestHostUid != null) {
+      this.send(this.guestHostUid, { ns: "wss", workspace: "", t: "end" });
+    }
+    this.stopGuest();
+  }
+  private stopGuest() {
+    this.guest?.stop();
+    this.guest = null;
+    this.guestHostUid = null;
+    this.onStream(null);
+  }
+
+  async onSignal(from: number, sig: SessionSignal) {
+    if (sig.t === "end") {
+      if (this.guestHostUid === from) this.stopGuest();
+      if (this.hostGuestUid === from) {
+        invoke("remote_disconnect", {
+          workspace: this.hostWorkspace,
+          guest: this.hostGuestId,
+        }).catch(() => {});
+        this.stopHost();
+      }
+      return;
+    }
+    if (sig.t === "offer") {
+      // A host is sharing a workspace with me -> guest.
+      this.stopGuest();
+      this.guest = new GuestSession(sig.workspace, from, this.send, (s) => this.onStream(s));
+      this.guestHostUid = from;
+      await this.guest.onSignal(sig);
+      return;
+    }
+    if (this.host && this.hostGuestUid === from) await this.host.onSignal(sig);
+    if (this.guest && this.guestHostUid === from) await this.guest.onSignal(sig);
+  }
+}
+
+export const sessionHub = new SessionHub();

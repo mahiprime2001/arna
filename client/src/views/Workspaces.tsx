@@ -18,6 +18,7 @@ import {
   FolderOpen,
   UserPlus,
   Users,
+  Broadcast,
 } from "@phosphor-icons/react";
 import { Card } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
@@ -25,6 +26,7 @@ import { PageHeader } from "@/components/PageHeader";
 import { CreateWorkspace } from "@/components/CreateWorkspace";
 import { OverlayReview } from "@/components/OverlayReview";
 import { InviteModal } from "@/components/InviteModal";
+import { ShareSession } from "@/components/ShareSession";
 import { isTauri, openJoined } from "@/lib/wse";
 import { cn } from "@/lib/utils";
 import {
@@ -75,6 +77,7 @@ function WorkspaceCard({
   onOpen,
   onReview,
   onInvite,
+  onShare,
 }: {
   w: Workspace;
   onTransition: (id: string, to: WorkspaceState) => void;
@@ -82,6 +85,7 @@ function WorkspaceCard({
   onOpen: (w: Workspace) => void;
   onReview: (w: Workspace) => void;
   onInvite: (w: Workspace) => void;
+  onShare: (w: Workspace) => void;
 }) {
   const [copied, setCopied] = useState(false);
   const copyId = () => {
@@ -211,6 +215,11 @@ function WorkspaceCard({
             <UserPlus size={14} /> Invite
           </Button>
         )}
+        {isTauri() && w.runtime === "docker" && !!w.url && (
+          <Button size="sm" variant="outline" onClick={() => onShare(w)}>
+            <Broadcast size={14} /> Share
+          </Button>
+        )}
         {can("running") && (
           <Button size="sm" variant={w.state === "created" ? "primary" : "outline"} onClick={() => onTransition(w.id, "running")}>
             <Play size={14} weight="fill" /> {w.state === "created" ? "Start" : "Resume"}
@@ -248,6 +257,7 @@ export function Workspaces({
   onJoin,
   joined = [],
   onLeaveJoined,
+  friends = [],
 }: {
   workspaces: Workspace[];
   onCreate: (draft: Omit<Workspace, "id" | "state" | "createdAt">) => void;
@@ -257,6 +267,7 @@ export function Workspaces({
   onJoin?: (link: string) => string | null;
   joined?: JoinedWorkspace[];
   onLeaveJoined?: (id: string) => void;
+  friends?: { id: number; name: string }[];
 }) {
   const [creating, setCreating] = useState(false);
   const [joining, setJoining] = useState(false);
@@ -264,6 +275,7 @@ export function Workspaces({
   const [joinError, setJoinError] = useState<string | null>(null);
   const [reviewing, setReviewing] = useState<Workspace | null>(null);
   const [inviting, setInviting] = useState<Workspace | null>(null);
+  const [sharingWs, setSharingWs] = useState<Workspace | null>(null);
 
   const submitJoin = () => {
     const err = onJoin?.(joinLink) ?? "Joining isn't available here.";
@@ -345,6 +357,7 @@ export function Workspaces({
               onOpen={onOpen}
               onReview={setReviewing}
               onInvite={setInviting}
+              onShare={setSharingWs}
             />
           ))}
         </div>
@@ -398,6 +411,14 @@ export function Workspaces({
       )}
 
       {inviting && <InviteModal workspace={inviting} onClose={() => setInviting(null)} />}
+
+      {sharingWs && (
+        <ShareSession
+          workspace={sharingWs}
+          friends={friends}
+          onClose={() => setSharingWs(null)}
+        />
+      )}
     </div>
   );
 }

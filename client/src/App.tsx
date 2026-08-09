@@ -2,6 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { TitleBar } from "@/components/TitleBar";
 import { Sidebar } from "@/components/Sidebar";
 import { CallOverlay } from "@/components/CallOverlay";
+import { RemoteView } from "@/components/RemoteView";
+import { sessionHub } from "@/lib/workspace-session";
 import { Dashboard } from "@/views/Dashboard";
 import { Workspaces } from "@/views/Workspaces";
 import { WorkspaceStage } from "@/components/WorkspaceStage";
@@ -190,6 +192,11 @@ export default function App({
         if (plain != null) applyOp(e.from, JSON.parse(plain) as WirePayload);
         return;
       }
+      // Watch & Control session signaling shares the relay, namespaced.
+      if (e.signal?.ns === "wss") {
+        sessionHub.onSignal(e.from, e.signal);
+        return;
+      }
       callEngine.onSignal(e.from, e.signal);
       return;
     }
@@ -322,6 +329,14 @@ export default function App({
     callEngine.setResolveName(
       (id) => friendsRef.current.find((f) => f.id === id)?.name ?? "Unknown",
     );
+  }, []);
+
+  // Wire the Watch & Control session hub to the same relay; a received surface
+  // (guest side) shows the RemoteView overlay.
+  const [remoteSurface, setRemoteSurface] = useState<MediaStream | null>(null);
+  useEffect(() => {
+    sessionHub.setSignaler(sendSignal);
+    sessionHub.setStreamListener(setRemoteSurface);
   }, []);
 
   // Persist chat locally.
@@ -641,6 +656,7 @@ export default function App({
                     onJoin={joinFromInvite}
                     joined={joined}
                     onLeaveJoined={leaveJoined}
+                    friends={friends.map((f) => ({ id: f.id, name: f.name }))}
                   />
                 )}
                 {route === "friends" && (
@@ -669,6 +685,9 @@ export default function App({
       </div>
 
       <CallOverlay state={callState} />
+      {remoteSurface && (
+        <RemoteView stream={remoteSurface} onLeave={() => sessionHub.leaveGuest()} />
+      )}
 
       {openWorkspace && (
         <WorkspaceStage
