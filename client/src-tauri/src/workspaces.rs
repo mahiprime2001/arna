@@ -380,15 +380,15 @@ fn exec(rt: &mut Rt, cmd: Cmd) {
             if rt.engine.state(&id) != Some(WorkspaceState::Running) {
                 let _ = rt.engine.start(&id);
             }
+            let entries = rt.apps.get(&id).cloned().unwrap_or_else(|| vec!["browser".into()]);
             let empty = rt.engine.app_instances(&id).map(|v| v.is_empty()).unwrap_or(true);
             if empty {
-                let want = rt.apps.get(&id).cloned().unwrap_or_else(|| vec!["browser".into()]);
-                for entry in want {
-                    let _ = rt.engine.launch(&id, &entry);
+                for entry in &entries {
+                    let _ = rt.engine.launch(&id, entry);
                 }
             }
             if rt.docked.insert(id.clone()) {
-                spawn_workspace_dock(&id);
+                spawn_workspace_dock(&id, &entries);
             }
             enter_workspace_desktop(&id);
         }

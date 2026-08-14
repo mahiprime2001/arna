@@ -210,13 +210,42 @@ pub(crate) fn workspace_home(id: &WorkspaceId) -> PathBuf {
 /// Spawn the workspace dock on a workspace's desktop — a little shell (launch a
 /// browser, Focus/Minimize/Close/Leave windows) so the desktop is usable without
 /// a taskbar. Safe to call once per workspace.
-pub fn spawn_workspace_dock(id: &WorkspaceId) {
+pub fn spawn_workspace_dock(id: &WorkspaceId, entries: &[String]) {
     let name = desktop_name(id);
     let home = workspace_home(id);
     let profiles = home.join("profiles");
     let _ = std::fs::create_dir_all(&profiles);
-    let Some(browser) = find_browser() else { return };
-    dock::spawn_dock(name, browser, profiles, home.to_string_lossy().into_owned());
+    let pinned = dock_pinned(entries, &home);
+    dock::spawn_dock(name, profiles, home.to_string_lossy().into_owned(), pinned);
+}
+
+/// Resolve the workspace's chosen apps into persistent dock tiles: each app's
+/// label, exe (for the icon), and launch command. Uses a STABLE per-app profile
+/// (`profiles/pin-<entry>`) so relaunching from the dock resumes that app's state.
+fn dock_pinned(entries: &[String], home: &Path) -> Vec<dock::PinnedApp> {
+    let mut out = Vec::new();
+    for entry in entries {
+        let profile = home.join("profiles").join(format!("pin-{entry}"));
+        let _ = std::fs::create_dir_all(&profile);
+        let (label, exe) = match entry.as_str() {
+            "browser" => ("Browser", find_browser()),
+            "editor" => ("Editor", find_vscode()),
+            "terminal" => (
+                "Terminal",
+                first_existing(&[r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe"]),
+            ),
+            _ => continue,
+        };
+        if let Some((cmdline, flags)) = build_command(entry, &profile, home) {
+            out.push(dock::PinnedApp {
+                label: label.to_string(),
+                exe: exe.map(|p| p.to_string_lossy().into_owned()).unwrap_or_default(),
+                cmdline,
+                flags,
+            });
+        }
+    }
+    out
 }
 
 /// Import your real Edge (or Chrome) profile into a workspace, so its browser has
@@ -849,7 +878,7 @@ pub(crate) fn create_process_on_desktop(desktop: &str, cmdline: &str, workdir: &
 /// New console window for console apps (terminals).
 const CREATE_NEW_CONSOLE: u32 = 0x0000_0010;
 
-fn create_process_flags(desktop: &str, cmdline: &str, workdir: &str, flags: u32) -> Result<u32> {
+pub(crate) fn create_process_flags(desktop: &str, cmdline: &str, workdir: &str, flags: u32) -> Result<u32> {
     let mut desk = wide(desktop);
     let mut cmd = wide(cmdline);
     let dir = wide(workdir);

@@ -1,11 +1,13 @@
 //! The **workspace dock** — a small, floating, Mac-style bar at the bottom of a
-//! workspace desktop. A fresh Windows desktop has no taskbar/Start, so without
-//! this a minimized or closed window is lost. The dock is a rounded translucent
-//! strip of app icons: click an icon to focus/restore that window (this is how
-//! you bring a minimized app back), right-click to close. Plus a "+" launcher, a
-//! "My" (imported profile) tile, and an accent "Leave" tile (set apart) that
-//! switches back to your real desktop — the always-visible way out.
-//! It floats (doesn't reserve screen space) and is owner-drawn (raw GDI).
+//! workspace desktop. A fresh Windows desktop has no taskbar/Start, so the dock
+//! is how you (re)open the workspace's apps.
+//!
+//! It shows the workspace's chosen apps as **persistent pinned tiles** (with each
+//! app's real icon): the tile stays whether the app is open or closed, so closing
+//! an app never makes it vanish — click the tile to (re)launch it. Plus a "+"
+//! extra-browser launcher, a "My" (imported profile) tile, and an accent "Leave"
+//! tile (set apart) that switches back to your real desktop — the way out. It
+//! floats (reserves no screen space) and is owner-drawn (raw GDI).
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -14,13 +16,12 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Mutex;
 
-use super::{create_process_on_desktop, wide};
+use super::{create_process_flags, create_process_on_desktop, wide};
 
 type Hwnd = *mut c_void;
 type Hdesk = *mut c_void;
 type Handle = *mut c_void;
 type WndProc = extern "system" fn(Hwnd, u32, usize, isize) -> isize;
-type EnumProc = extern "system" fn(Hwnd, isize) -> i32;
 
 const GENERIC_ALL: u32 = 0x1000_0000;
 const WS_POPUP: u32 = 0x8000_0000;
@@ -29,7 +30,6 @@ const WS_EX_TOPMOST: u32 = 0x0000_0008;
 const WS_EX_TOOLWINDOW: u32 = 0x0000_0080;
 const WS_EX_LAYERED: u32 = 0x0008_0000;
 const LWA_ALPHA: u32 = 2;
-const SW_RESTORE: i32 = 9;
 const SM_CXSCREEN: i32 = 0;
 const SM_CYSCREEN: i32 = 1;
 const WM_PAINT: u32 = 0x000F;
@@ -37,8 +37,6 @@ const WM_TIMER: u32 = 0x0113;
 const WM_DESTROY: u32 = 0x0002;
 const WM_CLOSE: u32 = 0x0010;
 const WM_LBUTTONDOWN: u32 = 0x0201;
-const WM_RBUTTONDOWN: u32 = 0x0204;
-const WM_GETICON: u32 = 0x007F;
 const IDC_ARROW: u32 = 32512;
 const DI_NORMAL: u32 = 0x0003;
 const NULL_PEN: i32 = 8;
@@ -46,7 +44,6 @@ const TRANSPARENT: i32 = 1;
 const DT_CENTER: u32 = 0x0000_0001;
 const DT_VCENTER: u32 = 0x0000_0004;
 const DT_SINGLELINE: u32 = 0x0000_0020;
-const GCLP_HICON: i32 = -14;
 const SWP_NOACTIVATE: u32 = 0x0010;
 const HWND_TOPMOST: isize = -1;
 const TIMER_ID: usize = 1;
@@ -58,12 +55,20 @@ const GAP: i32 = 8;
 const ICON: i32 = 36;
 const HEIGHT: i32 = TILE + 20;
 
+/// A workspace app pinned to the dock: always shown, (re)launched on click.
+pub(crate) struct PinnedApp {
+    pub label: String,
+    pub exe: String, // for the tile icon
+    pub cmdline: String,
+    pub flags: u32,
+}
+
 #[derive(Clone)]
 enum TileKind {
+    Pinned(usize),
     NewBrowser,
     MyBrowser,
     Exit,
-    App(isize),
 }
 
 struct Tile {
@@ -128,15 +133,11 @@ extern "system" {
     fn DispatchMessageW(m: *const Msg) -> isize;
     fn PostQuitMessage(code: i32);
     fn GetMessageW(m: *mut Msg, h: Hwnd, min: u32, max: u32) -> i32;
-    fn SendMessageW(h: Hwnd, m: u32, w: usize, l: isize) -> isize;
     fn PostMessageW(h: Hwnd, m: u32, w: usize, l: isize) -> i32;
     fn SetTimer(h: Hwnd, id: usize, ms: u32, p: *const c_void) -> usize;
     fn KillTimer(h: Hwnd, id: usize) -> i32;
     fn GetSystemMetrics(i: i32) -> i32;
     fn LoadCursorW(inst: Handle, name: u32) -> Handle;
-    fn ShowWindow(h: Hwnd, cmd: i32) -> i32;
-    fn SetForegroundWindow(h: Hwnd) -> i32;
-    fn BringWindowToTop(h: Hwnd) -> i32;
     fn SetWindowPos(h: Hwnd, after: isize, x: i32, y: i32, w: i32, ht: i32, flags: u32) -> i32;
     fn SetWindowRgn(h: Hwnd, rgn: Handle, redraw: i32) -> i32;
     fn InvalidateRect(h: Hwnd, r: *const Rect, erase: i32) -> i32;
@@ -147,14 +148,16 @@ extern "system" {
     fn FillRect(hdc: Handle, r: *const Rect, brush: Handle) -> i32;
     fn DrawTextW(hdc: Handle, text: *const u16, count: i32, r: *mut Rect, fmt: u32) -> i32;
     fn DrawIconEx(hdc: Handle, x: i32, y: i32, icon: Handle, cx: i32, cy: i32, step: u32, brush: Handle, flags: u32) -> i32;
-    fn GetClassLongPtrW(h: Hwnd, index: i32) -> usize;
-    fn EnumDesktopWindows(d: Hdesk, cb: EnumProc, l: isize) -> i32;
-    fn IsWindowVisible(h: Hwnd) -> i32;
-    fn GetWindowTextLengthW(h: Hwnd) -> i32;
+    fn DestroyIcon(icon: Handle) -> i32;
     fn OpenDesktopW(name: *const u16, flags: u32, inherit: i32, access: u32) -> Hdesk;
     fn SwitchDesktop(d: Hdesk) -> i32;
     fn SetThreadDesktop(d: Hdesk) -> i32;
     fn CloseDesktop(d: Hdesk) -> i32;
+}
+
+#[link(name = "shell32")]
+extern "system" {
+    fn ExtractIconW(inst: Handle, path: *const u16, index: u32) -> Handle;
 }
 
 #[link(name = "gdi32")]
@@ -179,11 +182,10 @@ fn rgb(r: u8, g: u8, b: u8) -> u32 {
 }
 
 struct DockCtx {
-    browser: PathBuf,
     profiles: PathBuf,
     home: String,
     desktop_name: String,
-    self_hwnd: isize,
+    pinned: Vec<PinnedApp>,
     tiles: Vec<Tile>,
     counter: u32,
 }
@@ -205,48 +207,24 @@ pub(crate) fn close(desktop_name: &str) {
     }
 }
 
-/// Visible, titled top-level windows on the current thread's desktop.
-fn windows_here() -> Vec<isize> {
-    extern "system" fn cb(h: Hwnd, l: isize) -> i32 {
-        unsafe {
-            let out = &mut *(l as *mut Vec<isize>);
-            if IsWindowVisible(h) == 0 {
-                return 1;
-            }
-            if GetWindowTextLengthW(h) <= 0 {
-                return 1;
-            }
-            out.push(h as isize);
-        }
-        1
-    }
-    let mut out: Vec<isize> = Vec::new();
-    unsafe { EnumDesktopWindows(std::ptr::null_mut(), cb, &mut out as *mut _ as isize); }
-    out
-}
-
-/// Rebuild the tile list from the current windows and re-lay-out / resize.
+/// Rebuild the tile list (pinned apps + launchers + Leave) and re-lay-out / resize.
 fn refresh(hwnd: Hwnd) {
     CTX.with(|c| {
         let mut b = c.borrow_mut();
         let Some(ctx) = &mut *b else { return };
-        let mut kinds: Vec<TileKind> = vec![TileKind::NewBrowser];
+
+        let mut kinds: Vec<TileKind> = (0..ctx.pinned.len()).map(TileKind::Pinned).collect();
+        kinds.push(TileKind::NewBrowser);
         if ctx.profiles.join("imported").exists() {
             kinds.push(TileKind::MyBrowser);
-        }
-        for h in windows_here() {
-            if h != ctx.self_hwnd {
-                kinds.push(TileKind::App(h));
-            }
         }
         kinds.push(TileKind::Exit);
 
         let mut tiles = Vec::new();
         let mut x = PAD;
         for k in kinds {
-            // Set the Leave button apart from the app tiles with a wider gap.
             if matches!(k, TileKind::Exit) {
-                x += GAP * 2;
+                x += GAP * 2; // set the Leave button apart
             }
             tiles.push(Tile { kind: k, x, w: TILE });
             x += TILE + GAP;
@@ -267,25 +245,31 @@ fn refresh(hwnd: Hwnd) {
     });
 }
 
-fn app_icon(hwnd: Hwnd) -> Handle {
-    unsafe {
-        let mut h = SendMessageW(hwnd, WM_GETICON, 1, 0); // ICON_BIG
-        if h == 0 {
-            h = SendMessageW(hwnd, WM_GETICON, 2, 0); // ICON_SMALL2
-        }
-        if h == 0 {
-            h = GetClassLongPtrW(hwnd, GCLP_HICON) as isize;
-        }
-        h as Handle
-    }
-}
-
 fn draw_glyph(hdc: Handle, x: i32, text: &str) {
     let mut r = Rect { left: x, top: 0, right: x + TILE, bottom: HEIGHT };
     let w = wide(text);
     unsafe {
         SetTextColor(hdc, rgb(235, 235, 240));
         DrawTextW(hdc, w.as_ptr(), -1, &mut r, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    }
+}
+
+/// Draw a pinned app's exe icon (or its label if the icon can't be extracted).
+fn draw_pinned(hdc: Handle, x: i32, app: &PinnedApp) {
+    let icon_off = (TILE - ICON) / 2;
+    unsafe {
+        let icon = if app.exe.is_empty() {
+            std::ptr::null_mut()
+        } else {
+            ExtractIconW(std::ptr::null_mut(), wide(&app.exe).as_ptr(), 0)
+        };
+        // ExtractIcon returns 1 (as a handle) when the file has no icons.
+        if !icon.is_null() && icon as isize != 1 {
+            DrawIconEx(hdc, x + icon_off, 10 + icon_off, icon, ICON, ICON, 0, std::ptr::null_mut(), DI_NORMAL);
+            DestroyIcon(icon);
+        } else {
+            draw_glyph(hdc, x, &app.label);
+        }
     }
 }
 
@@ -311,23 +295,14 @@ fn paint(hwnd: Hwnd) {
             SelectObject(hdc, null_pen);
             let old_brush = SelectObject(hdc, tile_brush);
 
-            let icon_off = (TILE - ICON) / 2;
             for t in &ctx.tiles {
-                // rounded tile background — accent for Leave, normal otherwise
                 SelectObject(hdc, if matches!(t.kind, TileKind::Exit) { leave_brush } else { tile_brush });
                 RoundRect(hdc, t.x, 10, t.x + TILE, 10 + TILE, 14, 14);
                 match &t.kind {
+                    TileKind::Pinned(i) => draw_pinned(hdc, t.x, &ctx.pinned[*i]),
                     TileKind::NewBrowser => draw_glyph(hdc, t.x, "+"),
                     TileKind::MyBrowser => draw_glyph(hdc, t.x, "My"),
                     TileKind::Exit => draw_glyph(hdc, t.x, "Leave"),
-                    TileKind::App(h) => {
-                        let icon = app_icon(*h as Hwnd);
-                        if !icon.is_null() {
-                            DrawIconEx(hdc, t.x + icon_off, 10 + icon_off, icon, ICON, ICON, 0, std::ptr::null_mut(), DI_NORMAL);
-                        } else {
-                            draw_glyph(hdc, t.x, "App");
-                        }
-                    }
                 }
             }
             SelectObject(hdc, old_brush);
@@ -338,11 +313,10 @@ fn paint(hwnd: Hwnd) {
     });
 }
 
-fn on_click(x: i32, right: bool) {
+fn on_click(x: i32) {
     CTX.with(|c| {
         let mut b = c.borrow_mut();
         let Some(ctx) = &mut *b else { return };
-        // Clone the clicked tile's kind so the borrow of `ctx.tiles` ends here.
         let hit = ctx
             .tiles
             .iter()
@@ -350,44 +324,43 @@ fn on_click(x: i32, right: bool) {
             .map(|t| t.kind.clone());
         let Some(tile) = hit else { return };
         match tile {
-            TileKind::NewBrowser if !right => {
+            TileKind::Pinned(i) => {
+                let app = &ctx.pinned[i];
+                let _ = create_process_flags(&ctx.desktop_name, &app.cmdline, &ctx.home, app.flags);
+            }
+            TileKind::NewBrowser => {
                 let profile = ctx.profiles.join(format!("dock-{}", ctx.counter));
                 ctx.counter += 1;
                 let _ = std::fs::create_dir_all(&profile);
-                let cmd = format!(
-                    "\"{}\" --user-data-dir=\"{}\" --no-first-run --no-default-browser-check --new-window about:blank",
-                    ctx.browser.display(), profile.display()
-                );
-                let _ = create_process_on_desktop(&ctx.desktop_name, &cmd, &ctx.home);
-            }
-            TileKind::MyBrowser if !right => {
-                let imported = ctx.profiles.join("imported");
-                if imported.exists() {
+                // A fresh extra browser reuses the workspace's first pinned browser
+                // exe if there is one; else the label falls back.
+                if let Some(exe) = ctx.pinned.iter().find(|a| a.label == "Browser").map(|a| a.exe.clone()) {
                     let cmd = format!(
-                        "\"{}\" --user-data-dir=\"{}\" --no-first-run --no-default-browser-check --new-window",
-                        ctx.browser.display(), imported.display()
+                        "\"{}\" --user-data-dir=\"{}\" --no-first-run --no-default-browser-check --new-window about:blank",
+                        exe, profile.display()
                     );
                     let _ = create_process_on_desktop(&ctx.desktop_name, &cmd, &ctx.home);
                 }
             }
-            TileKind::Exit if !right => unsafe {
+            TileKind::MyBrowser => {
+                let imported = ctx.profiles.join("imported");
+                if imported.exists() {
+                    if let Some(exe) = ctx.pinned.iter().find(|a| a.label == "Browser").map(|a| a.exe.clone()) {
+                        let cmd = format!(
+                            "\"{}\" --user-data-dir=\"{}\" --no-first-run --no-default-browser-check --new-window",
+                            exe, imported.display()
+                        );
+                        let _ = create_process_on_desktop(&ctx.desktop_name, &cmd, &ctx.home);
+                    }
+                }
+            }
+            TileKind::Exit => unsafe {
                 let def = OpenDesktopW(wide("Default").as_ptr(), 0, 0, GENERIC_ALL);
                 if !def.is_null() {
                     SwitchDesktop(def);
                     CloseDesktop(def);
                 }
             },
-            TileKind::App(h) => unsafe {
-                let hw = h as Hwnd;
-                if right {
-                    PostMessageW(hw, WM_CLOSE, 0, 0); // right-click closes
-                } else {
-                    ShowWindow(hw, SW_RESTORE); // <- brings a minimized window back
-                    BringWindowToTop(hw);
-                    SetForegroundWindow(hw);
-                }
-            },
-            _ => {}
         }
     });
 }
@@ -399,11 +372,7 @@ extern "system" fn wnd_proc(hwnd: Hwnd, msg: u32, w: usize, l: isize) -> isize {
             0
         }
         WM_LBUTTONDOWN => {
-            on_click((l & 0xFFFF) as i16 as i32, false);
-            0
-        }
-        WM_RBUTTONDOWN => {
-            on_click((l & 0xFFFF) as i16 as i32, true);
+            on_click((l & 0xFFFF) as i16 as i32);
             0
         }
         WM_TIMER => {
@@ -428,9 +397,14 @@ extern "system" fn wnd_proc(hwnd: Hwnd, msg: u32, w: usize, l: isize) -> isize {
     }
 }
 
-/// Launch the dock on `desktop_name`. Non-blocking: own thread + message loop
-/// until the workspace is destroyed.
-pub(crate) fn spawn_dock(desktop_name: String, browser: PathBuf, profiles: PathBuf, home: String) {
+/// Launch the dock on `desktop_name`, pinning `pinned` apps. Non-blocking: own
+/// thread + message loop until the workspace is destroyed.
+pub(crate) fn spawn_dock(
+    desktop_name: String,
+    profiles: PathBuf,
+    home: String,
+    pinned: Vec<PinnedApp>,
+) {
     std::thread::spawn(move || unsafe {
         let hdesk = OpenDesktopW(wide(&desktop_name).as_ptr(), 0, 0, GENERIC_ALL);
         if hdesk.is_null() {
@@ -473,11 +447,10 @@ pub(crate) fn spawn_dock(desktop_name: String, browser: PathBuf, profiles: PathB
 
         CTX.with(|c| {
             *c.borrow_mut() = Some(DockCtx {
-                browser,
                 profiles,
                 home,
                 desktop_name: desktop_name.clone(),
-                self_hwnd: main as isize,
+                pinned,
                 tiles: Vec::new(),
                 counter: 0,
             });
@@ -488,7 +461,7 @@ pub(crate) fn spawn_dock(desktop_name: String, browser: PathBuf, profiles: PathB
                 .insert(desktop_name.clone(), main as isize);
         }
         refresh(main);
-        SetTimer(main, TIMER_ID, 1000, std::ptr::null());
+        SetTimer(main, TIMER_ID, 1500, std::ptr::null());
 
         let mut msg: Msg = std::mem::zeroed();
         while GetMessageW(&mut msg, std::ptr::null_mut(), 0, 0) > 0 {
