@@ -28,6 +28,8 @@ use wse_contract::{
     StorageCapability, WindowsCapability, WorkspaceAdapter, WorkspaceDef, CONTRACT_VERSION,
 };
 
+#[cfg(test)]
+mod capture_spike;
 mod dock;
 mod job;
 mod overlay;
