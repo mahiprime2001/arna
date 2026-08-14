@@ -84,6 +84,65 @@ function Choice({
   );
 }
 
+function RuntimeCard({
+  active,
+  onClick,
+  disabled = false,
+  icon,
+  title,
+  badge,
+  points,
+}: {
+  active: boolean;
+  onClick: () => void;
+  disabled?: boolean;
+  icon: React.ReactNode;
+  title: string;
+  badge: string;
+  points: [boolean, string][];
+}) {
+  return (
+    <button
+      onClick={disabled ? undefined : onClick}
+      disabled={disabled}
+      aria-pressed={active}
+      className={cn(
+        "w-full rounded-lg border p-3 text-left transition-colors",
+        disabled
+          ? "cursor-not-allowed border-line opacity-50"
+          : active
+            ? "border-brand bg-brand-soft"
+            : "border-line hover:bg-elevated",
+      )}
+    >
+      <div className="flex items-center gap-2.5">
+        <span className={cn("shrink-0", active && !disabled ? "text-brand" : "text-muted")}>
+          {icon}
+        </span>
+        <span className="text-[13.5px] font-medium">{title}</span>
+        <span
+          className={cn(
+            "ml-auto rounded-full px-2 py-0.5 text-[10.5px] font-medium",
+            badge === "Recommended" ? "bg-good/15 text-good" : "bg-elevated text-muted",
+          )}
+        >
+          {badge}
+        </span>
+      </div>
+      <ul className="mt-2 space-y-1">
+        {points.map(([ok, text], i) => (
+          <li key={i} className="flex items-start gap-1.5 text-[12px] text-muted">
+            <span className={cn("mt-px shrink-0 font-semibold", ok ? "text-good" : "text-warn")}>
+              {ok ? "✓" : "⚠"}
+            </span>
+            <span>{text}</span>
+          </li>
+        ))}
+      </ul>
+    </button>
+  );
+}
+
 function Row({
   label,
   hint,
@@ -147,8 +206,8 @@ export function CreateWorkspace({
           <div>
             <h2 className="text-base font-semibold">New workspace</h2>
             <p className="text-[12.5px] text-muted">
-              An isolated place on this machine. It can't see your screen, files, or
-              other apps.
+              A separate workspace on this machine. How sealed-off it is depends on the
+              runtime you pick below.
             </p>
           </div>
           <button
@@ -172,27 +231,38 @@ export function CreateWorkspace({
 
           <Section
             title="Runtime"
-            hint="How the workspace runs — the same UI, a different engine underneath."
+            hint="Native is the fast, real-apps default. Choose the sandbox only when you need strong isolation."
           >
-            <div className="flex gap-2.5">
-              <Choice
+            <div className="space-y-2.5">
+              <RuntimeCard
                 active={d.runtime !== "docker"}
                 onClick={() => set("runtime", "native")}
                 icon={<WindowsLogo size={18} />}
                 title="Native Windows"
-                hint="Real Windows apps (Chrome, VS Code, Office) on a separate desktop. Shares your files and network."
+                badge="Recommended"
+                points={[
+                  [true, "Your real Windows apps (Chrome, VS Code, Office)"],
+                  [true, "Lightweight — nothing extra to launch"],
+                  [false, "Shares your files & network — a separate desktop, not a sealed sandbox"],
+                ]}
               />
-              <Choice
+              <RuntimeCard
                 active={d.runtime === "docker"}
                 onClick={() => set("runtime", "docker")}
                 disabled={isTauri() && !dockerAvailable()}
                 icon={<Cube size={18} />}
                 title="Docker sandbox"
-                hint={
-                  isTauri() && !dockerAvailable()
-                    ? "Unavailable — start Docker Desktop to use this runtime."
-                    : "Own filesystem + own network (own IP/ports). VS Code in the browser."
-                }
+                badge="Optional"
+                points={[
+                  [true, "Sealed: its own filesystem & its own network"],
+                  [true, "Disposable — safe for untrusted work"],
+                  [
+                    false,
+                    isTauri() && !dockerAvailable()
+                      ? "Unavailable — start Docker Desktop to use this"
+                      : "Docker required · Linux apps, not your Windows ones · heavier",
+                  ],
+                ]}
               />
             </div>
           </Section>
@@ -349,9 +419,10 @@ export function CreateWorkspace({
           <div className="mx-6 mb-5 flex gap-2.5 rounded-lg bg-elevated p-3">
             <ShieldCheck size={17} className="mt-0.5 shrink-0 text-good" />
             <p className="text-[12px] leading-relaxed text-muted">
-              Whatever you pick, the workspace can never see your screen, your keyboard,
-              your clipboard, your other apps, or any folder you didn't share. That part
-              isn't a setting.
+              <span className="font-medium text-ink">Native</span> runs on its own desktop with
+              per-app profiles and a file overlay — fast, but it shares your files and network.
+              Choose the <span className="font-medium text-ink">Docker sandbox</span> when you need
+              a sealed filesystem and network. Either way, the card shows exactly what it enforces.
             </p>
           </div>
         </div>
