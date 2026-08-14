@@ -607,9 +607,12 @@ fn build_command(entry: &str, profile: &Path, home: &Path) -> Option<(String, u3
         }
         "editor" => {
             let code = find_vscode()?;
+            // --disable-workspace-trust: the workspace is the user's own machine and
+            // files, so open in normal mode rather than Restricted Mode.
             Some((
                 format!(
-                    "\"{}\" --new-window --user-data-dir=\"{}\" --extensions-dir=\"{}\" \"{}\"",
+                    "\"{}\" --new-window --disable-workspace-trust --user-data-dir=\"{}\" \
+                     --extensions-dir=\"{}\" \"{}\"",
                     code.display(),
                     profile.display(),
                     profile.join("ext").display(),
