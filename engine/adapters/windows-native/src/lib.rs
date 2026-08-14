@@ -29,6 +29,8 @@ use wse_contract::{
 };
 
 #[cfg(test)]
+mod appcontainer_spike;
+#[cfg(test)]
 mod capture_spike;
 mod dock;
 mod job;
