@@ -3,7 +3,8 @@
 //! this a minimized or closed window is lost. The dock is a rounded translucent
 //! strip of app icons: click an icon to focus/restore that window (this is how
 //! you bring a minimized app back), right-click to close. Plus a "+" launcher, a
-//! "My" (imported profile) tile, and an "Exit" tile back to your real desktop.
+//! "My" (imported profile) tile, and an accent "Leave" tile (set apart) that
+//! switches back to your real desktop — the always-visible way out.
 //! It floats (doesn't reserve screen space) and is owner-drawn (raw GDI).
 
 use std::cell::RefCell;
@@ -243,6 +244,10 @@ fn refresh(hwnd: Hwnd) {
         let mut tiles = Vec::new();
         let mut x = PAD;
         for k in kinds {
+            // Set the Leave button apart from the app tiles with a wider gap.
+            if matches!(k, TileKind::Exit) {
+                x += GAP * 2;
+            }
             tiles.push(Tile { kind: k, x, w: TILE });
             x += TILE + GAP;
         }
@@ -300,18 +305,21 @@ fn paint(hwnd: Hwnd) {
 
             SetBkMode(hdc, TRANSPARENT);
             let tile_brush = CreateSolidBrush(rgb(54, 54, 64));
+            // The Leave button gets an accent colour so it's obviously the way out.
+            let leave_brush = CreateSolidBrush(rgb(64, 120, 205));
             let null_pen = GetStockObject(NULL_PEN);
             SelectObject(hdc, null_pen);
             let old_brush = SelectObject(hdc, tile_brush);
 
             let icon_off = (TILE - ICON) / 2;
             for t in &ctx.tiles {
-                // rounded tile background
+                // rounded tile background — accent for Leave, normal otherwise
+                SelectObject(hdc, if matches!(t.kind, TileKind::Exit) { leave_brush } else { tile_brush });
                 RoundRect(hdc, t.x, 10, t.x + TILE, 10 + TILE, 14, 14);
                 match &t.kind {
                     TileKind::NewBrowser => draw_glyph(hdc, t.x, "+"),
                     TileKind::MyBrowser => draw_glyph(hdc, t.x, "My"),
-                    TileKind::Exit => draw_glyph(hdc, t.x, "Exit"),
+                    TileKind::Exit => draw_glyph(hdc, t.x, "Leave"),
                     TileKind::App(h) => {
                         let icon = app_icon(*h as Hwnd);
                         if !icon.is_null() {
@@ -324,6 +332,7 @@ fn paint(hwnd: Hwnd) {
             }
             SelectObject(hdc, old_brush);
             DeleteObject(tile_brush);
+            DeleteObject(leave_brush);
             EndPaint(hwnd, &ps);
         }
     });
