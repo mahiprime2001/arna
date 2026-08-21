@@ -225,7 +225,9 @@ pub fn spawn_workspace_dock(id: &WorkspaceId, entries: &[String]) {
 fn dock_pinned(entries: &[String], home: &Path) -> Vec<dock::PinnedApp> {
     let mut out = Vec::new();
     for entry in entries {
-        let profile = home.join("profiles").join(format!("pin-{entry}"));
+        // Same stable profile the live launch uses, so the dock and the auto-launch
+        // share ONE profile per app (no split state).
+        let profile = home.join("profiles").join(entry);
         let _ = std::fs::create_dir_all(&profile);
         let (label, exe) = match entry.as_str() {
             "browser" => ("Browser", find_browser()),
@@ -640,12 +642,13 @@ fn build_command(entry: &str, profile: &Path, home: &Path) -> Option<(String, u3
 /// projection policy). This is the ONLY place an entry maps to a manifest — no
 /// application logic reaches the executor. Apps not listed here still use the
 /// legacy `build_command` path until they get a manifest (browser, terminal).
-fn wrm_app(entry: &str) -> Option<(&'static wse_wrm::AppManifest, &'static wse_wrm::Policy)> {
-    match entry {
-        // VS Code: fresh, workspace-scoped extensions + user data (CLEAN).
-        "editor" => Some((&wse_wrm::manifests::VSCODE, &wse_wrm::policies::CLEAN)),
-        _ => None,
-    }
+#[allow(dead_code)]
+fn wrm_app(_entry: &str) -> Option<(&'static wse_wrm::AppManifest, &'static wse_wrm::Policy)> {
+    // Live launch currently uses build_command with STABLE per-workspace profiles
+    // (reliable, and it persists app state across close/reopen). WRM stays proven
+    // in tests; re-wire it here once the manifests carry everything the live launch
+    // needs (workspace-trust flag, stable profiles).
+    None
 }
 
 // ── per-workspace state ──────────────────────────────────────────────────────
@@ -772,8 +775,10 @@ impl WindowsNativeAdapter {
             let (pid, job) = execute_plan(&desktop_name, &plan)?;
             (pid, Some(job), home.join(manifest.id))
         } else {
-            // A fresh isolated profile per instance, under the workspace's Storage.
-            let profile = home.join("profiles").join(format!("inst-{iid}"));
+            // A STABLE per-app profile per workspace (profiles/<entry>), so the app's
+            // state — browser history/logins/tabs, editor settings — survives close
+            // and reopen. Kept on stop; removed only when the workspace is destroyed.
+            let profile = home.join("profiles").join(&app.entry);
             std::fs::create_dir_all(&profile)
                 .map_err(|e| WseError::Internal(format!("profile: {e}")))?;
             let (cmdline, flags) = build_command(&app.entry, &profile, &home).ok_or_else(|| {
@@ -798,7 +803,7 @@ impl WindowsNativeAdapter {
                     Some(j) => j.terminate(),
                     None => kill_tree(pid),
                 }
-                let _ = std::fs::remove_dir_all(&cleanup);
+                // Keep the stable profile — a slow launch shouldn't wipe app state.
                 return Err(WseError::Internal(format!(
                     "app '{}' opened no window within timeout",
                     app.entry
@@ -848,8 +853,10 @@ impl WindowsNativeAdapter {
         Ok(())
     }
 
-    /// Tear down every app process + profile on a workspace (used by stop/destroy).
-    fn teardown_apps(st: &mut WsState) {
+    /// Tear down a workspace's running apps. `keep_state = true` (suspend) stops
+    /// the processes but PRESERVES every profile/dir, so resume comes back where it
+    /// left off. `keep_state = false` (destroy) also releases them.
+    fn teardown_apps(st: &mut WsState, keep_state: bool) {
         for w in &st.windows {
             unsafe {
                 PostMessageW(w.hwnd as Hwnd, WM_CLOSE, 0, 0);
@@ -860,12 +867,16 @@ impl WindowsNativeAdapter {
                 Some(j) => j.terminate(), // WRM app: Job kills the whole tree
                 None => kill_tree(m.pid), // legacy app
             }
-            robust_rmdir(&m.profile);
+            if !keep_state {
+                robust_rmdir(&m.profile);
+            }
         }
-        // Data-driven launches: terminate each Job (kills its whole process tree)
-        // and release its cleanup ledger. Leak-free by construction.
         for cx in st.contexts.drain(..) {
-            cx.destroy();
+            if keep_state {
+                cx.stop(); // kill processes, keep the staged dirs
+            } else {
+                cx.destroy(); // kill + release the cleanup ledger
+            }
         }
         st.windows.clear();
         st.instances.clear();
@@ -1048,6 +1059,13 @@ impl ExecutionContext {
         self.guarantees
     }
 
+    /// Suspend: stop the process tree (Job terminate) but KEEP the staged dirs, so
+    /// a resume comes back with state intact. Consumes the context.
+    pub fn stop(self) {
+        self.job.terminate();
+        // `job` drops here -> handle closed; staged dirs are intentionally kept.
+    }
+
     /// Release EVERYTHING. Terminating the Job kills the whole process tree
     /// (children included); the cleanup ledger removes every staged dir. Consumes
     /// the context — afterwards nothing it created remains.
@@ -1165,7 +1183,7 @@ impl WorkspaceAdapter for WindowsNativeAdapter {
 
     fn stop(&mut self, id: &WorkspaceId) -> Result<()> {
         if let Some(st) = self.state.get_mut(id) {
-            Self::teardown_apps(st);
+            Self::teardown_apps(st, true); // suspend: keep state for resume
         }
         Ok(())
     }
@@ -1176,7 +1194,7 @@ impl WorkspaceAdapter for WindowsNativeAdapter {
             .remove(id)
             .ok_or_else(|| WseError::NotFound(format!("workspace {id}")))?;
         dock::close(&st.desktop_name); // ask the dock thread to exit first
-        Self::teardown_apps(&mut st);
+        Self::teardown_apps(&mut st, false); // destroy: release everything
         std::thread::sleep(Duration::from_millis(300)); // let windows/threads exit
         unsafe {
             CloseDesktop(st.desktop as Hdesk);
@@ -1404,7 +1422,7 @@ impl ApplicationsCapability for WindowsNativeAdapter {
                 Some(j) => j.terminate(),
                 None => kill_tree(m.pid),
             }
-            robust_rmdir(&m.profile);
+            // Keep the app's profile so relaunching it resumes its state.
         }
         Ok(())
     }

@@ -23,7 +23,7 @@ fn dock_appears_on_the_workspace_desktop() {
     };
     adapter.create(&def).unwrap();
 
-    spawn_workspace_dock(&id);
+    spawn_workspace_dock(&id, &["browser".to_string(), "editor".to_string()]);
     std::thread::sleep(std::time::Duration::from_secs(2));
 
     let titles = desktop_window_titles(&id);
