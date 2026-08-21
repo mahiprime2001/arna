@@ -215,7 +215,7 @@ function WorkspaceCard({
             <UserPlus size={14} /> Invite
           </Button>
         )}
-        {isTauri() && w.runtime === "docker" && !!w.url && (
+        {isTauri() && (
           <Button size="sm" variant="outline" onClick={() => onShare(w)}>
             <Broadcast size={14} /> Share
           </Button>
