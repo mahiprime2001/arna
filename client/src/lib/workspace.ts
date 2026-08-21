@@ -128,8 +128,18 @@ export const CATALOG: CatalogApp[] = [
   { id: "vscode", name: "VS Code", hint: "Editor, terminal, extensions" },
   { id: "chrome", name: "Chrome", hint: "Browser with its own profile" },
   { id: "terminal", name: "Terminal", hint: "A shell inside the workspace" },
-  { id: "files", name: "Files", hint: "Browse the workspace's own filesystem" },
+  { id: "files", name: "Files", hint: "File Explorer at the workspace folder" },
+  { id: "notepad", name: "Notepad", hint: "A quick text editor" },
 ];
+
+// A friendly random name so creating a workspace needs no typing (adjective-noun,
+// like "swift-otter"). The user can still rename it.
+const NAME_ADJ = ["swift", "calm", "brave", "bright", "keen", "bold", "quiet", "lucky", "clever", "cosmic"];
+const NAME_NOUN = ["otter", "falcon", "cedar", "harbor", "comet", "willow", "ember", "delta", "atlas", "pine"];
+export function randomWorkspaceName(): string {
+  const pick = (a: string[]) => a[Math.floor(Math.random() * a.length)];
+  return `${pick(NAME_ADJ)}-${pick(NAME_NOUN)}`;
+}
 
 // ── the workspace ──────────────────────────────────────────────────────────
 export interface Workspace {
@@ -190,7 +200,7 @@ export function newWorkspaceId(): string {
  *  says otherwise: internet on (§13.1), view-display allowed (§4.6). */
 export function draftWorkspace(): Omit<Workspace, "id" | "state" | "createdAt"> {
   return {
-    name: "",
+    name: randomWorkspaceName(),
     runtime: "native",
     persistence: "saved",
     apps: ["vscode", "chrome"],

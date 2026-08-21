@@ -236,6 +236,8 @@ fn dock_pinned(entries: &[String], home: &Path) -> Vec<dock::PinnedApp> {
                 "Terminal",
                 first_existing(&[r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe"]),
             ),
+            "files" => ("Files", first_existing(&[r"C:\Windows\explorer.exe"])),
+            "notepad" => ("Notepad", first_existing(&[r"C:\Windows\System32\notepad.exe"])),
             _ => continue,
         };
         if let Some((cmdline, flags)) = build_command(entry, &profile, home) {
@@ -535,6 +537,8 @@ fn catalog(entry: &str) -> Option<CatalogEntry> {
         "browser" => Some(CatalogEntry { level: SupportLevel::Certified }),
         "editor" => Some(CatalogEntry { level: SupportLevel::Compatible }),
         "terminal" => Some(CatalogEntry { level: SupportLevel::Compatible }),
+        "files" => Some(CatalogEntry { level: SupportLevel::Compatible }),
+        "notepad" => Some(CatalogEntry { level: SupportLevel::Compatible }),
         _ => None,
     }
 }
@@ -634,6 +638,10 @@ fn build_command(entry: &str, profile: &Path, home: &Path) -> Option<(String, u3
                 CREATE_NEW_CONSOLE,
             ))
         }
+        // File Explorer opened at the workspace home.
+        "files" => Some((format!("explorer.exe \"{}\"", home.display()), 0)),
+        // Notepad (always present on Windows).
+        "notepad" => Some(("notepad.exe".to_string(), 0)),
         _ => None,
     }
 }

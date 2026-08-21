@@ -22,6 +22,7 @@ import {
   CAPABILITY_LABEL,
   DEFAULT_CAPABILITIES,
   draftWorkspace,
+  randomWorkspaceName,
   type Capability,
   type Workspace,
 } from "@/lib/workspace";
@@ -220,9 +221,8 @@ export function CreateWorkspace({
         </header>
 
         <div className="max-h-[65vh] overflow-y-auto">
-          <Section title="Name">
+          <Section title="Name" hint="Auto-named for you — change it or just leave it.">
             <Input
-              autoFocus
               value={d.name}
               onChange={(e) => set("name", e.target.value)}
               placeholder="Design review, Pair session, Client sandbox…"
@@ -436,7 +436,10 @@ export function CreateWorkspace({
             <Button variant="ghost" onClick={onClose}>
               Cancel
             </Button>
-            <Button disabled={!d.name.trim() || d.apps.length === 0} onClick={() => onCreate(d)}>
+            <Button
+              disabled={d.apps.length === 0}
+              onClick={() => onCreate({ ...d, name: d.name.trim() || randomWorkspaceName() })}
+            >
               Create
             </Button>
           </div>

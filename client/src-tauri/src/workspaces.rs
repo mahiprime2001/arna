@@ -160,6 +160,8 @@ fn map_app(ui: &str) -> Option<&'static str> {
         "chrome" | "edge" | "browser" => Some("browser"),
         "vscode" | "code" | "editor" => Some("editor"),
         "terminal" | "term" => Some("terminal"),
+        "files" | "explorer" => Some("files"),
+        "notepad" => Some("notepad"),
         _ => None,
     }
 }
