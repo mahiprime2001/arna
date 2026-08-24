@@ -3,6 +3,8 @@ import { TitleBar } from "@/components/TitleBar";
 import { Sidebar } from "@/components/Sidebar";
 import { CallOverlay } from "@/components/CallOverlay";
 import { RemoteView } from "@/components/RemoteView";
+import { JoinRequestPrompt } from "@/components/JoinRequestPrompt";
+import { ShareSession } from "@/components/ShareSession";
 import { sessionHub } from "@/lib/workspace-session";
 import { Dashboard } from "@/views/Dashboard";
 import { Workspaces } from "@/views/Workspaces";
@@ -34,8 +36,7 @@ import {
   wseEnter,
   toWorkspaces,
   openCodeServerWindow,
-  inviteFrom,
-  openJoined,
+  parseInvite,
 } from "@/lib/wse";
 import type { AuthUser } from "@/lib/api";
 import { decryptFrom, encryptFor, initCrypto, myPublicKey } from "@/lib/crypto";
@@ -69,6 +70,7 @@ import {
   saveWorkspaces,
   type JoinedWorkspace,
   type Workspace,
+  type WorkspaceRole,
   type WorkspaceState,
 } from "@/lib/workspace";
 
@@ -121,22 +123,56 @@ export default function App({
     saveJoined(user.id, joined);
   }, [joined, user.id]);
 
-  // Accept an invite (a role-bearing token, or a bare workspace link): record the
-  // membership at its granted role, then open the workspace.
+  const leaveJoined = (id: string) => setJoined((prev) => prev.filter((j) => j.id !== id));
+
+  // ── request-to-join (paste code -> request -> host approves -> Watch & Control)
+  // The invite only IDENTIFIES the workspace + host; pasting it sends a request,
+  // and the host's approval is what creates access.
+  const [joinStatus, setJoinStatus] = useState<string | null>(null);
+  const [incomingJoin, setIncomingJoin] = useState<{
+    from: number;
+    guestName: string;
+    workspaceId: string;
+    workspaceName: string;
+    role: WorkspaceRole;
+  } | null>(null);
+  const [hostSession, setHostSession] = useState<{
+    workspace: Workspace;
+    guest: { id: number; name: string };
+  } | null>(null);
+
   const joinFromInvite = (input: string): string | null => {
-    const inv = inviteFrom(input);
+    const inv = parseInvite(input);
     if (!inv) {
-      return "That doesn't look like an invite. Paste the invite code your friend sent (or the workspace link).";
+      return "That doesn't look like an invite code. Paste the code your host sent you.";
     }
-    setJoined((prev) =>
-      prev.some((j) => j.id === inv.id)
-        ? prev.map((j) => (j.id === inv.id ? { ...j, ...inv, joinedAt: j.joinedAt } : j))
-        : [{ ...inv, joinedAt: Date.now() }, ...prev],
-    );
-    openJoined(inv.id, inv.name, inv.url);
+    sendSignal(inv.hostId, {
+      ns: "wsj",
+      t: "request",
+      invitationId: inv.invitationId,
+      workspaceId: inv.workspaceId,
+      workspaceName: inv.workspaceName,
+      role: inv.role,
+      guestName: user.name,
+    });
+    setJoinStatus(`Request sent for "${inv.workspaceName}". Waiting for the host to approve…`);
     return null;
   };
-  const leaveJoined = (id: string) => setJoined((prev) => prev.filter((j) => j.id !== id));
+
+  const approveJoin = () => {
+    if (!incomingJoin) return;
+    const w = workspaces.find((x) => x.id === incomingJoin.workspaceId);
+    if (w) {
+      setHostSession({ workspace: w, guest: { id: incomingJoin.from, name: incomingJoin.guestName } });
+    }
+    setIncomingJoin(null);
+  };
+  const declineJoin = () => {
+    if (incomingJoin) {
+      sendSignal(incomingJoin.from, { ns: "wsj", t: "decline", workspaceId: incomingJoin.workspaceId });
+    }
+    setIncomingJoin(null);
+  };
 
   const openConvRef = useRef<number | null>(null);
   const friendsRef = useRef<Friend[]>(friends);
@@ -190,6 +226,21 @@ export default function App({
         if (!fr?.pubkey) return;
         const plain = decryptFrom(fr.pubkey, e.signal.nonce, e.signal.ciphertext);
         if (plain != null) applyOp(e.from, JSON.parse(plain) as WirePayload);
+        return;
+      }
+      // Request-to-join: a guest asks the host, the host approves/declines.
+      if (e.signal?.ns === "wsj") {
+        if (e.signal.t === "request") {
+          setIncomingJoin({
+            from: e.from,
+            guestName: e.signal.guestName,
+            workspaceId: e.signal.workspaceId,
+            workspaceName: e.signal.workspaceName,
+            role: e.signal.role,
+          });
+        } else if (e.signal.t === "decline") {
+          setJoinStatus("The host declined your request.");
+        }
         return;
       }
       // Watch & Control session signaling shares the relay, namespaced.
@@ -657,6 +708,7 @@ export default function App({
                     joined={joined}
                     onLeaveJoined={leaveJoined}
                     friends={friends.map((f) => ({ id: f.id, name: f.name }))}
+                    hostId={user.id}
                   />
                 )}
                 {route === "friends" && (
@@ -687,6 +739,33 @@ export default function App({
       <CallOverlay state={callState} />
       {remoteSurface && (
         <RemoteView stream={remoteSurface} onLeave={() => sessionHub.leaveGuest()} />
+      )}
+      {incomingJoin && (
+        <JoinRequestPrompt
+          guestName={incomingJoin.guestName}
+          workspaceName={incomingJoin.workspaceName}
+          role={incomingJoin.role}
+          onApprove={approveJoin}
+          onDecline={declineJoin}
+        />
+      )}
+      {hostSession && (
+        <ShareSession
+          workspace={hostSession.workspace}
+          initialGuest={hostSession.guest}
+          onClose={() => setHostSession(null)}
+        />
+      )}
+      {joinStatus && (
+        <div className="fixed bottom-4 left-1/2 z-[70] flex -translate-x-1/2 items-center gap-3 rounded-lg border border-line bg-canvas px-4 py-2 text-[13px] shadow-2xl">
+          <span>{joinStatus}</span>
+          <button
+            className="text-muted transition-colors hover:text-ink"
+            onClick={() => setJoinStatus(null)}
+          >
+            ✕
+          </button>
+        </div>
       )}
 
       {openWorkspace && (

@@ -12,11 +12,14 @@ type Friend = { id: number; name: string };
 
 export function ShareSession({
   workspace,
-  friends,
+  friends = [],
+  initialGuest,
   onClose,
 }: {
   workspace: Workspace;
-  friends: Friend[];
+  friends?: Friend[];
+  /** When set (approved a join request), share straight to this guest — no picker. */
+  initialGuest?: Friend;
   onClose: () => void;
 }) {
   const [sharing, setSharing] = useState(false);
@@ -77,19 +80,34 @@ export function ShareSession({
         <div className="px-5 py-4">
           {!sharing ? (
             <>
-              <p className="mb-2 text-[12px] font-medium text-muted">Share with</p>
-              {friends.length === 0 ? (
-                <p className="text-[13px] text-muted">
-                  Add a friend first to share a workspace with them.
-                </p>
+              {initialGuest ? (
+                <>
+                  <p className="mb-3 text-[13px] text-muted">
+                    Share <span className="font-medium text-ink">{workspace.name}</span> with{" "}
+                    <span className="font-medium text-ink">{initialGuest.name}</span>. You'll pick
+                    which window to show.
+                  </p>
+                  <Button className="w-full" onClick={() => start(initialGuest)}>
+                    Start sharing
+                  </Button>
+                </>
               ) : (
-                <div className="grid gap-2">
-                  {friends.map((f) => (
-                    <Button key={f.id} variant="outline" onClick={() => start(f)}>
-                      {f.name}
-                    </Button>
-                  ))}
-                </div>
+                <>
+                  <p className="mb-2 text-[12px] font-medium text-muted">Share with</p>
+                  {friends.length === 0 ? (
+                    <p className="text-[13px] text-muted">
+                      Add a friend first to share a workspace with them.
+                    </p>
+                  ) : (
+                    <div className="grid gap-2">
+                      {friends.map((f) => (
+                        <Button key={f.id} variant="outline" onClick={() => start(f)}>
+                          {f.name}
+                        </Button>
+                      ))}
+                    </div>
+                  )}
+                </>
               )}
               {error && <p className="mt-3 text-[12px] text-danger">{error}</p>}
             </>

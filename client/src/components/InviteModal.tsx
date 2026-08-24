@@ -11,17 +11,21 @@ import { ROLE_HINT, ROLE_LABEL, type Workspace, type WorkspaceRole } from "@/lib
 
 const ROLES: WorkspaceRole[] = ["viewer", "collaborator", "controller"];
 
-export function InviteModal({ workspace, onClose }: { workspace: Workspace; onClose: () => void }) {
+export function InviteModal({
+  workspace,
+  hostId,
+  onClose,
+}: {
+  workspace: Workspace;
+  hostId: number;
+  onClose: () => void;
+}) {
   const [role, setRole] = useState<WorkspaceRole>("viewer");
   const [copied, setCopied] = useState(false);
 
-  const url = workspace.lanUrl ?? workspace.url ?? "";
-  const token = url
-    ? makeInvite({ v: 1, id: workspace.id, name: workspace.name, role, url })
-    : "";
+  const token = makeInvite(hostId, workspace.id, workspace.name, role);
 
   const copy = () => {
-    if (!token) return;
     navigator.clipboard?.writeText(token);
     setCopied(true);
     setTimeout(() => setCopied(false), 1600);
@@ -68,25 +72,17 @@ export function InviteModal({ workspace, onClose }: { workspace: Workspace; onCl
           </div>
 
           <p className="mb-2 mt-4 text-[12px] font-medium text-muted">Invite code</p>
-          {token ? (
-            <button
-              onClick={copy}
-              title="Copy the invite code"
-              className="flex w-full items-center gap-2 rounded-md border border-line bg-elevated px-3 py-2 text-left font-mono text-[11.5px] transition-colors hover:text-muted"
-            >
-              <Copy size={13} className="shrink-0" />
-              <span className="truncate">
-                {copied ? "Copied — send this to a friend" : token}
-              </span>
-            </button>
-          ) : (
-            <p className="rounded-md border border-line bg-elevated px-3 py-2 text-[12px] text-muted">
-              Start the workspace first — an invite needs a reachable address.
-            </p>
-          )}
+          <button
+            onClick={copy}
+            title="Copy the invite code"
+            className="flex w-full items-center gap-2 rounded-md border border-line bg-elevated px-3 py-2 text-left font-mono text-[11.5px] transition-colors hover:text-muted"
+          >
+            <Copy size={13} className="shrink-0" />
+            <span className="truncate">{copied ? "Copied — send this to a friend" : token}</span>
+          </button>
           <p className="mt-3 text-[11.5px] text-muted">
-            Your friend pastes this into <span className="font-medium text-ink">Join</span>. They
-            must be able to reach this workspace (same Wi-Fi, or a tunnel).
+            Your friend pastes this into <span className="font-medium text-ink">Join</span>. It
+            sends you a request to approve — the code itself grants nothing.
           </p>
         </div>
       </div>

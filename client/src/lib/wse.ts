@@ -42,20 +42,35 @@ export function normalizeInvite(raw: string): string | null {
   }
 }
 
-// ── Invitations (one-click Join) ─────────────────────────────────────────────
-// An invite identifies an invitation with a ROLE + how to reach the workspace.
-// It is never equivalent to unlimited authority — the workspace decides what a
-// role may do. v1 carries the role; enforcement deepens with Watch & Control.
+// ── Invitations (request-to-join) ────────────────────────────────────────────
+// An invite IDENTIFIES a workspace + host + requested role. It is NOT access:
+// pasting it sends a join REQUEST to the host, and only the host's approval
+// creates a session (Watch & Control). No URL, no runtime detail — the guest
+// never learns whether the workspace is Native, Docker, or anything else.
 export interface Invite {
   v: 1;
-  id: string;
-  name: string;
+  invitationId: string;
+  hostId: number;
+  workspaceId: string;
+  workspaceName: string;
   role: WorkspaceRole;
-  url: string;
 }
 
-/// Encode an invite as a compact shareable token (base64 of JSON).
-export function makeInvite(inv: Invite): string {
+/// Mint an invite for a workspace at a requested role.
+export function makeInvite(
+  hostId: number,
+  workspaceId: string,
+  workspaceName: string,
+  role: WorkspaceRole,
+): string {
+  const inv: Invite = {
+    v: 1,
+    invitationId: crypto.randomUUID(),
+    hostId,
+    workspaceId,
+    workspaceName,
+    role,
+  };
   return btoa(unescape(encodeURIComponent(JSON.stringify(inv))));
 }
 
@@ -63,7 +78,13 @@ export function makeInvite(inv: Invite): string {
 export function parseInvite(token: string): Invite | null {
   try {
     const o = JSON.parse(decodeURIComponent(escape(atob(token.trim()))));
-    if (o && o.v === 1 && typeof o.id === "string" && typeof o.url === "string" && o.role) {
+    if (
+      o &&
+      o.v === 1 &&
+      typeof o.hostId === "number" &&
+      typeof o.workspaceId === "string" &&
+      o.role
+    ) {
       return o as Invite;
     }
   } catch {
@@ -72,25 +93,20 @@ export function parseInvite(token: string): Invite | null {
   return null;
 }
 
-/// Accept either an invite token OR a bare workspace URL. A raw URL becomes a
-/// least-privilege Viewer invite for an otherwise-unknown workspace.
-export function inviteFrom(input: string): Invite | null {
-  const parsed = parseInvite(input);
-  if (parsed) return parsed;
-  const url = normalizeInvite(input);
-  if (!url) return null;
-  let h = 0;
-  for (let i = 0; i < url.length; i++) h = (h * 31 + url.charCodeAt(i)) | 0;
-  return {
-    v: 1,
-    id: `url-${(h >>> 0).toString(36)}`,
-    name: "Shared workspace",
-    role: "viewer",
-    url,
-  };
-}
+/// A join request the guest sends to the host over the relay ("wsj" namespace).
+export type JoinSignal =
+  | {
+      ns: "wsj";
+      t: "request";
+      invitationId: string;
+      workspaceId: string;
+      workspaceName: string;
+      role: WorkspaceRole;
+      guestName: string;
+    }
+  | { ns: "wsj"; t: "decline"; workspaceId: string };
 
-/// Open a joined workspace (its code-server surface) in its own window / tab.
+/// (legacy) Open a code-server URL in its own window / tab.
 export function openJoined(id: string, name: string, url: string) {
   if (isTauri()) {
     openCodeServerWindow(id, name, url);

@@ -210,11 +210,9 @@ function WorkspaceCard({
             <FolderOpen size={14} /> Files
           </Button>
         )}
-        {w.runtime === "docker" && !!w.url && (
-          <Button size="sm" variant="outline" onClick={() => onInvite(w)}>
-            <UserPlus size={14} /> Invite
-          </Button>
-        )}
+        <Button size="sm" variant="outline" onClick={() => onInvite(w)}>
+          <UserPlus size={14} /> Invite
+        </Button>
         {isTauri() && (
           <Button size="sm" variant="outline" onClick={() => onShare(w)}>
             <Broadcast size={14} /> Share
@@ -258,6 +256,7 @@ export function Workspaces({
   joined = [],
   onLeaveJoined,
   friends = [],
+  hostId,
 }: {
   workspaces: Workspace[];
   onCreate: (draft: Omit<Workspace, "id" | "state" | "createdAt">) => void;
@@ -268,6 +267,7 @@ export function Workspaces({
   joined?: JoinedWorkspace[];
   onLeaveJoined?: (id: string) => void;
   friends?: { id: number; name: string }[];
+  hostId: number;
 }) {
   const [creating, setCreating] = useState(false);
   const [joining, setJoining] = useState(false);
@@ -410,7 +410,9 @@ export function Workspaces({
         <OverlayReview workspace={reviewing} onClose={() => setReviewing(null)} />
       )}
 
-      {inviting && <InviteModal workspace={inviting} onClose={() => setInviting(null)} />}
+      {inviting && (
+        <InviteModal workspace={inviting} hostId={hostId} onClose={() => setInviting(null)} />
+      )}
 
       {sharingWs && (
         <ShareSession
