@@ -278,7 +278,11 @@ export function Workspaces({
   const [sharingWs, setSharingWs] = useState<Workspace | null>(null);
 
   const submitJoin = () => {
-    const err = onJoin?.(joinLink) ?? "Joining isn't available here.";
+    if (!onJoin) {
+      setJoinError("Joining isn't available here.");
+      return;
+    }
+    const err = onJoin(joinLink); // null = success (request sent)
     if (err) {
       setJoinError(err);
     } else {
