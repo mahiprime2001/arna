@@ -23,6 +23,23 @@ GPU path with the same reach — the production choice.
 real pixels of Chrome/VS Code per window (and, by extension, the workspace's
 window set).
 
+## Follow-up: background-desktop capture ALSO works
+
+The foreground probe left one question: can we capture a window on a **separate
+(background) `CreateDesktopW` desktop** — a WSE workspace — while the host stays on
+their own desktop? Second probe (`probe_background_desktop_capture`): create a
+desktop, launch the browser on it (never shown), find its window, PrintWindow it.
+
+```
+background-desktop window 1292x519  PrintWindow_ok=1  non-black=100.0%
+=> CAPTURE WORKS on a background desktop
+```
+
+So a **native workspace SurfaceProvider is feasible**: we can stream the workspace's
+own app windows without the host viewing them. (Notepad returned "no window" — a
+WinUI quirk, not a desktop-capture failure; Chrome/VS Code enumerate + capture
+fine, as the live launcher already proves.)
+
 ## The remaining wall — input independence, not capture
 
 Two things this spike did **not** clear, and one is a genuine OS limit:
