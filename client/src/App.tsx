@@ -3,7 +3,7 @@ import { TitleBar } from "@/components/TitleBar";
 import { Sidebar } from "@/components/Sidebar";
 import { CallOverlay } from "@/components/CallOverlay";
 import { RemoteView } from "@/components/RemoteView";
-import { JoinRequestPrompt } from "@/components/JoinRequestPrompt";
+import { JoinRequestPrompt, type ConnectionMode } from "@/components/JoinRequestPrompt";
 import { ShareSession } from "@/components/ShareSession";
 import { sessionHub } from "@/lib/workspace-session";
 import { Dashboard } from "@/views/Dashboard";
@@ -37,6 +37,7 @@ import {
   toWorkspaces,
   openCodeServerWindow,
   parseInvite,
+  openJoined,
 } from "@/lib/wse";
 import type { AuthUser } from "@/lib/api";
 import { decryptFrom, encryptFor, initCrypto, myPublicKey } from "@/lib/crypto";
@@ -163,10 +164,15 @@ export default function App({
     return null;
   };
 
-  const approveJoin = () => {
+  const approveJoin = (mode: ConnectionMode) => {
     if (!incomingJoin) return;
     const w = workspaces.find((x) => x.id === incomingJoin.workspaceId);
-    if (w) {
+    if (mode === "enter") {
+      // Deliver the workspace surface (Docker's code-server) to the guest.
+      const url = w?.lanUrl ?? w?.url;
+      if (url) sendSignal(incomingJoin.from, { ns: "wsj", t: "enter", url });
+    } else if (w) {
+      // Watch & Control: host streams a view, gate enforces the role.
       setHostSession({ workspace: w, guest: { id: incomingJoin.from, name: incomingJoin.guestName } });
     }
     setIncomingJoin(null);
@@ -244,6 +250,10 @@ export default function App({
           });
         } else if (e.signal.t === "decline") {
           setJoinStatus("The host declined your request.");
+        } else if (e.signal.t === "enter") {
+          // Host approved "Enter workspace" — open the workspace surface.
+          setJoinStatus(null);
+          openJoined("joined", "Workspace", e.signal.url);
         }
         return;
       }
@@ -744,15 +754,24 @@ export default function App({
       {remoteSurface && (
         <RemoteView stream={remoteSurface} onLeave={() => sessionHub.leaveGuest()} />
       )}
-      {incomingJoin && (
-        <JoinRequestPrompt
-          guestName={incomingJoin.guestName}
-          workspaceName={incomingJoin.workspaceName}
-          role={incomingJoin.role}
-          onApprove={approveJoin}
-          onDecline={declineJoin}
-        />
-      )}
+      {incomingJoin &&
+        (() => {
+          const jw = workspaces.find((x) => x.id === incomingJoin.workspaceId);
+          // Capability-driven: "Enter" needs a workspace surface to hand over
+          // (Docker's code-server today); "Watch" is always available (streaming).
+          const canEnter = !!(jw && jw.runtime === "docker" && (jw.url || jw.lanUrl));
+          return (
+            <JoinRequestPrompt
+              guestName={incomingJoin.guestName}
+              workspaceName={incomingJoin.workspaceName}
+              role={incomingJoin.role}
+              canEnter={canEnter}
+              canWatch={true}
+              onApprove={approveJoin}
+              onDecline={declineJoin}
+            />
+          );
+        })()}
       {hostSession && (
         <ShareSession
           workspace={hostSession.workspace}

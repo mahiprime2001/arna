@@ -104,7 +104,10 @@ export type JoinSignal =
       role: WorkspaceRole;
       guestName: string;
     }
-  | { ns: "wsj"; t: "decline"; workspaceId: string };
+  | { ns: "wsj"; t: "decline"; workspaceId: string }
+  // Host approved "Enter workspace" — deliver the workspace surface (Docker's
+  // code-server URL) AFTER approval. The invite never carried this.
+  | { ns: "wsj"; t: "enter"; url: string };
 
 /// (legacy) Open a code-server URL in its own window / tab.
 export function openJoined(id: string, name: string, url: string) {
