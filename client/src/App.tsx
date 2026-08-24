@@ -5,7 +5,7 @@ import { CallOverlay } from "@/components/CallOverlay";
 import { RemoteView } from "@/components/RemoteView";
 import { JoinRequestPrompt, type ConnectionMode } from "@/components/JoinRequestPrompt";
 import { ShareSession } from "@/components/ShareSession";
-import { sessionHub } from "@/lib/workspace-session";
+import { sessionHub, nativeWorkspaceSurface, type SurfaceProvider } from "@/lib/workspace-session";
 import { Dashboard } from "@/views/Dashboard";
 import { Workspaces } from "@/views/Workspaces";
 import { WorkspaceStage } from "@/components/WorkspaceStage";
@@ -140,6 +140,7 @@ export default function App({
   const [hostSession, setHostSession] = useState<{
     workspace: Workspace;
     guest: { id: number; name: string };
+    surface?: SurfaceProvider;
   } | null>(null);
 
   const joinFromInvite = (input: string): string | null => {
@@ -167,13 +168,18 @@ export default function App({
   const approveJoin = (mode: ConnectionMode) => {
     if (!incomingJoin) return;
     const w = workspaces.find((x) => x.id === incomingJoin.workspaceId);
+    const guest = { id: incomingJoin.from, name: incomingJoin.guestName };
     if (mode === "enter") {
-      // Deliver the workspace surface (Docker's code-server) to the guest.
-      const url = w?.lanUrl ?? w?.url;
-      if (url) sendSignal(incomingJoin.from, { ns: "wsj", t: "enter", url });
+      if (w && w.runtime === "docker" && (w.url || w.lanUrl)) {
+        // Docker: deliver the code-server surface (URL) to the guest.
+        sendSignal(incomingJoin.from, { ns: "wsj", t: "enter", url: w.lanUrl ?? w.url });
+      } else if (w) {
+        // Native: auto-capture the workspace surface (no window picker).
+        setHostSession({ workspace: w, guest, surface: nativeWorkspaceSurface(w.id) });
+      }
     } else if (w) {
-      // Watch & Control: host streams a view, gate enforces the role.
-      setHostSession({ workspace: w, guest: { id: incomingJoin.from, name: incomingJoin.guestName } });
+      // Watch & Control: host picks a window; the gate enforces the role.
+      setHostSession({ workspace: w, guest });
     }
     setIncomingJoin(null);
   };
@@ -757,9 +763,9 @@ export default function App({
       {incomingJoin &&
         (() => {
           const jw = workspaces.find((x) => x.id === incomingJoin.workspaceId);
-          // Capability-driven: "Enter" needs a workspace surface to hand over
-          // (Docker's code-server today); "Watch" is always available (streaming).
-          const canEnter = !!(jw && jw.runtime === "docker" && (jw.url || jw.lanUrl));
+          // Capability-driven: Docker "Enter" needs a code-server URL; native
+          // "Enter" needs the Tauri backend (to capture the workspace surface).
+          const canEnter = !!jw && (jw.runtime === "docker" ? !!(jw.url || jw.lanUrl) : isTauri());
           return (
             <JoinRequestPrompt
               guestName={incomingJoin.guestName}
@@ -776,6 +782,7 @@ export default function App({
         <ShareSession
           workspace={hostSession.workspace}
           initialGuest={hostSession.guest}
+          surface={hostSession.surface}
           onClose={() => setHostSession(null)}
         />
       )}

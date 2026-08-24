@@ -5,7 +5,7 @@ import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { X } from "@phosphor-icons/react";
 import { Button } from "@/components/ui/Button";
-import { DockerSurface, sessionHub } from "@/lib/workspace-session";
+import { DockerSurface, sessionHub, type SurfaceProvider } from "@/lib/workspace-session";
 import type { Workspace } from "@/lib/workspace";
 
 type Friend = { id: number; name: string };
@@ -14,12 +14,16 @@ export function ShareSession({
   workspace,
   friends = [],
   initialGuest,
+  surface,
   onClose,
 }: {
   workspace: Workspace;
   friends?: Friend[];
   /** When set (approved a join request), share straight to this guest — no picker. */
   initialGuest?: Friend;
+  /** Which surface to capture. Defaults to the window picker (Docker/Watch); a
+   *  native workspace surface auto-captures the workspace instead. */
+  surface?: SurfaceProvider;
   onClose: () => void;
 }) {
   const [sharing, setSharing] = useState(false);
@@ -44,7 +48,7 @@ export function ShareSession({
   const start = async (f: Friend) => {
     setError(null);
     try {
-      await sessionHub.startShare(workspace.id, f.id, String(f.id), f.name, DockerSurface);
+      await sessionHub.startShare(workspace.id, f.id, String(f.id), f.name, surface ?? DockerSurface);
       setSharing(true);
     } catch {
       setError("Couldn't start sharing — pick the workspace window when prompted, and try again.");
@@ -84,8 +88,8 @@ export function ShareSession({
                 <>
                   <p className="mb-3 text-[13px] text-muted">
                     Share <span className="font-medium text-ink">{workspace.name}</span> with{" "}
-                    <span className="font-medium text-ink">{initialGuest.name}</span>. You'll pick
-                    which window to show.
+                    <span className="font-medium text-ink">{initialGuest.name}</span>.{" "}
+                    {surface ? "The workspace is captured directly." : "You'll pick which window to show."}
                   </p>
                   <Button className="w-full" onClick={() => start(initialGuest)}>
                     Start sharing

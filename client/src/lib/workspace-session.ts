@@ -34,14 +34,56 @@ export const DockerSurface: SurfaceProvider = {
   },
 };
 
-/** Native Windows surface — capture the workspace desktop. A later slice; the
- *  session/transport/gate above it are identical. */
-export const NativeWindowsSurface: SurfaceProvider = {
-  label: "native desktop",
-  async capture(): Promise<MediaStream> {
-    throw new Error("Native surface capture isn't implemented yet.");
-  },
-};
+/** Native workspace surface: the host's Rust backend captures the workspace's
+ *  window (never the host desktop) and hands us JPEG frames; we poll them into a
+ *  canvas and captureStream() it, so it feeds the same WebRTC path as Docker.
+ *  Only the workspace is captured — the host's other apps are never in frame. */
+export function nativeWorkspaceSurface(workspaceId: string): SurfaceProvider {
+  return {
+    label: "native workspace",
+    async capture(): Promise<MediaStream> {
+      const canvas = document.createElement("canvas");
+      canvas.width = 1280;
+      canvas.height = 720;
+      const ctx = canvas.getContext("2d");
+      const stream = canvas.captureStream(10); // ~10 fps
+      const img = new Image();
+      let stopped = false;
+
+      const draw = (url: string) =>
+        new Promise<void>((res) => {
+          img.onload = () => {
+            if (canvas.width !== img.width || canvas.height !== img.height) {
+              canvas.width = img.width;
+              canvas.height = img.height;
+            }
+            ctx?.drawImage(img, 0, 0);
+            res();
+          };
+          img.onerror = () => res();
+          img.src = url;
+        });
+
+      const loop = async () => {
+        while (!stopped) {
+          try {
+            const url = await invoke<string>("remote_capture_frame", { workspace: workspaceId });
+            if (url) await draw(url);
+          } catch {
+            /* backend gone */
+          }
+          await new Promise((r) => setTimeout(r, 100));
+        }
+      };
+      void loop();
+      // Stop polling when the stream is torn down (HostSession.stop()).
+      stream.getVideoTracks()[0]?.addEventListener("ended", () => {
+        stopped = true;
+      });
+      return stream;
+    },
+  };
+}
 
 const ICE: RTCIceServer[] = [
   { urls: "stun:stun.l.google.com:19302" },
