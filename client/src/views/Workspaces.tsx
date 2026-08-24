@@ -169,11 +169,11 @@ function WorkspaceCard({
 
           <button
             onClick={copyId}
-            title="Copy the invite ID"
-            className="mt-3 inline-flex items-center gap-1.5 rounded-md bg-elevated px-2 py-1 font-mono text-[11px] text-muted transition-colors hover:text-ink"
+            title="Copy the workspace ID (this is NOT a join code — use Invite for that)"
+            className="mt-3 inline-flex max-w-full items-center gap-1.5 rounded-md bg-elevated px-2 py-1 font-mono text-[11px] text-muted transition-colors hover:text-ink"
           >
-            <Copy size={12} />
-            {copied ? "Copied" : w.id}
+            <Copy size={12} className="shrink-0" />
+            <span className="truncate">{copied ? "Copied ID" : `ID ${w.id}`}</span>
           </button>
 
           {w.lanUrl && (

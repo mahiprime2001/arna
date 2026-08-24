@@ -144,7 +144,11 @@ export default function App({
   const joinFromInvite = (input: string): string | null => {
     const inv = parseInvite(input);
     if (!inv) {
-      return "That doesn't look like an invite code. Paste the code your host sent you.";
+      const t = input.trim();
+      if (/^[0-9a-f-]{16,}$/i.test(t)) {
+        return "That's a workspace ID, not a join code. On the host, click the Invite button (not the ID chip) and copy the long code.";
+      }
+      return "That doesn't look like an invite code. On the host, click Invite and copy the long code (it starts with 'eyJ').";
     }
     sendSignal(inv.hostId, {
       ns: "wsj",
