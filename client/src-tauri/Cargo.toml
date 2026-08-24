@@ -29,3 +29,5 @@ wse-common = { path = "../../engine/common" }
 wse-engine = { path = "../../engine/core" }
 wse-adapter-windows-native = { path = "../../engine/adapters/windows-native" }
 wse-wrm = { path = "../../engine/wrm" }
+image = { version = "0.25", default-features = false, features = ["jpeg"] }
+base64 = "0.22"

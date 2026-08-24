@@ -30,11 +30,13 @@ use wse_contract::{
 
 #[cfg(test)]
 mod appcontainer_spike;
+mod capture;
 #[cfg(test)]
 mod capture_spike;
 mod dock;
 mod job;
 mod overlay;
+pub use capture::capture_workspace_frame;
 pub use job::Job;
 pub use overlay::{
     changes as overlay_changes, discard as overlay_discard, import as overlay_import,

@@ -36,6 +36,32 @@ fn remote_session(workspace: String) -> String {
     remote::state_json(&workspace)
 }
 
+/// One captured frame of a NATIVE workspace's surface as a JPEG data URL (empty
+/// string if nothing to capture yet). The frontend polls this into a <canvas> and
+/// streams it over WebRTC — the native counterpart to Docker's code-server.
+#[tauri::command]
+fn remote_capture_frame(workspace: String) -> String {
+    use base64::Engine;
+    let wid = WorkspaceId::from_raw(workspace);
+    let Some((w, h, rgb)) = wse_adapter_windows_native::capture_workspace_frame(&wid) else {
+        return String::new();
+    };
+    let Some(img) = image::RgbImage::from_raw(w, h, rgb) else {
+        return String::new();
+    };
+    let mut buf = Vec::new();
+    if image::DynamicImage::ImageRgb8(img)
+        .write_to(&mut std::io::Cursor::new(&mut buf), image::ImageFormat::Jpeg)
+        .is_err()
+    {
+        return String::new();
+    }
+    format!(
+        "data:image/jpeg;base64,{}",
+        base64::engine::general_purpose::STANDARD.encode(&buf)
+    )
+}
+
 use wse_adapter_windows_native::{
     overlay_changes, overlay_discard, overlay_import, overlay_list, overlay_merge,
 };
@@ -144,7 +170,7 @@ pub fn run() {
             ws_list, ws_create, ws_start, ws_launch, ws_enter, ws_suspend, ws_destroy, ws_import,
             ws_browser, ws_overlay_share, ws_overlay_list, ws_overlay_changes, ws_overlay_merge,
             ws_overlay_discard, remote_join, remote_grant, remote_revoke, remote_disconnect,
-            remote_input, remote_session
+            remote_input, remote_session, remote_capture_frame
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
